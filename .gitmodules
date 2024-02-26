@@ -1,0 +1,3 @@
+[submodule "YAKL"]
+	path = YAKL
+	url = https://github.com/mrnorman/YAKL.git

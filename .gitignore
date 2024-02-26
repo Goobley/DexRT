@@ -1,0 +1,10 @@
+pnetcdf/*
+!pnetcdf/setup.sh
+!pnetcdf/docker_setup.sh
+
+build/*
+!build/cmake_basic.sh
+!build/cmake_clean.sh
+!build/cmake_docker.sh
+
+.vscode
