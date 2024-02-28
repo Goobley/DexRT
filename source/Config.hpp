@@ -21,7 +21,8 @@ constexpr int CASCADE_BRANCHING_FACTOR = 2;
 constexpr bool BRANCH_RAYS = false;
 constexpr bool BILINEAR_FIX = false;
 constexpr int MAX_LEVEL = 7;
-constexpr int NUM_COMPONENTS = 4;
+constexpr int NUM_WAVELENGTHS = 3;
+constexpr int NUM_COMPONENTS = 2 * NUM_WAVELENGTHS;
 
 // #define OLD_RAYMARCH 1
 

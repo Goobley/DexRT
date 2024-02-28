@@ -53,7 +53,7 @@ YAKL_INLINE void draw_disk(
     Fp3d emission,
     vec2 centre, 
     fp_t radius, 
-    yakl::SArray<fp_t, 1, NUM_COMPONENTS-1> color,
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color,
     int x,
     int y
 ) {
@@ -61,7 +61,7 @@ YAKL_INLINE void draw_disk(
     fp_t dy = fp_t(y) - centre(1);
 
     if ((dx * dx + dy * dy) <= (radius * radius)) {
-        for (int i = 0; i < NUM_COMPONENTS-1; ++i) {
+        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             emission(x, y, i) = color(i);
         }
     }
@@ -267,7 +267,7 @@ void init_state (State* state) {
         );
     }
 
-    state->emission = Fp3d("emission_map", CANVAS_X, CANVAS_Y, NUM_COMPONENTS - 1);
+    state->emission = Fp3d("emission_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
 
     {
         auto emission = state->emission;
@@ -299,7 +299,7 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> dodgy_raymarch(const Fp3d& dom
     pos(1) = ray_start(1);
 
     ivec2 sample_coord;
-    yakl::SArray<fp_t, 1, NUM_COMPONENTS-1> sample;
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> sample;
     yakl::SArray<fp_t, 1, NUM_COMPONENTS> result;
     for (int i = 0; i < steps; ++i) {
         sample_coord(0) = int(std::round(pos(0)));
@@ -313,12 +313,12 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> dodgy_raymarch(const Fp3d& dom
             return result;
         }
 
-        for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             sample(i) = domain(sample_coord(0), sample_coord(1), i);
         }
 
         bool hits = false;
-        for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             hits |= bool(sample(i) != FP(0.0));
             if (hits) {
                 break;
@@ -326,7 +326,7 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> dodgy_raymarch(const Fp3d& dom
         }
 
         if (hits) {
-            for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+            for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
                 result(i) = sample(i);
             }
             result(NUM_COMPONENTS - 1) = FP(0.0);
@@ -351,7 +351,7 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(const Fp3d& domain
     domain_size(1) = domain_dims(1);
     RayMarchState s = RayMarch_new(ray_start, ray_end, domain_size);
 
-    yakl::SArray<fp_t, 1, NUM_COMPONENTS-1> sample;
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> sample;
     yakl::SArray<fp_t, 1, NUM_COMPONENTS> result;
     while (next_intersection(&s)) {
         auto sample_coord = s.p;
@@ -362,12 +362,12 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(const Fp3d& domain
             break;
         }
 
-        for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             sample(i) = domain(sample_coord(0), sample_coord(1), i);
         }
 
         bool hits = false;
-        for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             hits |= bool(sample(i) != FP(0.0));
             if (hits) {
                 break;
@@ -375,7 +375,7 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(const Fp3d& domain
         }
 
         if (hits) {
-            for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+            for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
                 result(i) = sample(i);
             }
             result(NUM_COMPONENTS - 1) = FP(0.0);
@@ -519,11 +519,11 @@ void compute_cascade_i (
 void save_results(Fp4d final_cascade) {
     printf("Writing\n");
     auto dims = final_cascade.get_dimensions();
-    yakl::Array<double, 4, yakl::memDevice> fp64_copy("fp64_copy", dims(0), dims(1), dims(2), dims(3) - 1);
+    yakl::Array<double, 4, yakl::memDevice> fp64_copy("fp64_copy", dims(0), dims(1), dims(2), NUM_WAVELENGTHS);
     parallel_for(
         SimpleBounds<3>(dims(0), dims(1), dims(2)),
         YAKL_LAMBDA (int x, int y, int ray_idx) {
-            for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+            for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
                 fp64_copy(x, y, ray_idx, i)  = final_cascade(x, y, ray_idx, i);
             }
         }
@@ -532,7 +532,6 @@ void save_results(Fp4d final_cascade) {
     auto host_copy = fp64_copy.createHostCopy();
 
 
-    //Error reporting routine for the PNetCDF I/O
     auto ncwrap = []( int ierr , int line ) {
         if (ierr != NC_NOERR) {
             printf("NetCDF Error at line: %d\n", line);
