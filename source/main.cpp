@@ -135,6 +135,113 @@ YAKL_INLINE void model_B(Fp3d emission, int x, int y) {
     draw_disk(emission, c, 40, color, x, y);
 }
 
+template <typename T>
+YAKL_INLINE T sign(T t) {
+    return std::copysign(T(1.0), t);
+}
+
+template <typename T>
+YAKL_INLINE constexpr T square(T t) {
+    return t * t;
+}
+
+template <typename T>
+YAKL_INLINE constexpr T cube(T t) {
+    return t * t * t;
+}
+
+YAKL_INLINE RayMarchState RayMarch_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
+    RayMarchState r{};
+    // NOTE(cmo): Clamp into position
+    // start_pos(0) = yakl::min(yakl::max(start_pos(0), FP(0.0)), fp_t(domain_size(0)-1));
+    // start_pos(1) = yakl::min(yakl::max(start_pos(1), FP(0.0)), fp_t(domain_size(1)-1));
+    // end_pos(0) = yakl::min(yakl::max(end_pos(0), FP(0.0)), fp_t(domain_size(0)-1));
+    // end_pos(1) = yakl::min(yakl::max(end_pos(1), FP(0.0)), fp_t(domain_size(1)-1));
+    r.p0 = start_pos;
+    r.p1 = end_pos;
+    r.p(0) = int(std::floor(start_pos(0)));
+    r.p(1) = int(std::floor(start_pos(1)));
+
+    r.step(0) = sign(end_pos(0) - start_pos(0));
+    r.step(1) = sign(end_pos(1) - start_pos(1));
+
+    r.end(0) = int(std::floor(end_pos(0))) + r.step(0);
+    r.end(1) = int(std::floor(end_pos(1))) + r.step(1);
+
+    fp_t dx = end_pos(0) - start_pos(0);
+    fp_t dy = end_pos(1) - start_pos(1);
+    fp_t length = FP(1.0) / std::sqrt(dx*dx + dy*dy);
+    dx *= length;
+    dy *= length;
+    r.d(0) = dx;
+    r.d(1) = dy;
+
+    r.tm(0) = (start_pos(0) - r.p(0)) / dx * r.step(0);
+    r.td(0) = r.step(0) / dx;
+    if (dx == FP(0.0)) {
+        r.tm(0) = FP(1e8);
+        r.td(0) = FP(0.0);
+    }
+
+    r.tm(1) = (start_pos(1) - r.p(1)) / dy * r.step(1);
+    r.td(1) = r.step(1) / dy;
+    if (dy == FP(0.0)) {
+        r.tm(1) = FP(1e8);
+        r.td(1) = FP(0.0);
+    }
+
+    return r;
+}
+
+YAKL_INLINE bool next_intersection(RayMarchState* state) {
+    bool stop = false;
+    auto& s = *state;
+    fp_t tmx = s.tm(0);
+    fp_t tmy = s.tm(1);
+    // TODO(cmo): Set a small tolerance on this comparison.
+    if (tmx <= tmy) {
+        fp_t t = tmx;
+        s.hit(0) = s.p0(0) + t * s.d(0);
+        s.hit(1) = s.p0(1) + t * s.d(1);
+        s.ds = t - s.prev_t;
+        s.prev_t = t;
+        s.tm(0) += s.td(0);
+        s.p(0) += s.step(0);
+
+        stop = (s.p(0) == s.end(0));
+    } else {
+        fp_t t = tmy;
+        s.hit(0) = s.p0(0) + t * s.d(0);
+        s.hit(1) = s.p0(1) + t * s.d(1);
+        s.ds = t - s.prev_t;
+        s.prev_t = t;
+        s.tm(1) += s.td(1);
+        s.p(1) += s.step(1);
+
+        stop = (s.p(1) == s.end(1));
+    } 
+
+    // TODO(cmo): Tol.
+    if (tmx == tmy) {
+        // NOTE(cmo): If the two min steps are equal (e.g. traversing on a
+        // diagonal), increment the position on both axes -- this is literally a
+        // corner case :D
+        // Stop condition should be consistent for either.
+        s.tm(1) += s.td(1);
+        s.p(1) += s.step(1);
+    }
+
+    if (stop) {
+        // NOTE(cmo): Handle the (common) case where the final step isn't to the
+        // next grid intersection, but to an arbitrary point in the cell.
+        s.ds = std::sqrt(square(s.p1(0) - s.hit(0)) + square(s.p1(1) - s.hit(1)));
+        s.hit(0) = s.p1(0);
+        s.hit(1) = s.p1(1);
+    }
+
+    return !stop;
+}
+
 void init_state (State* state) {
     for (int l = 0; l < MAX_LEVEL + 1; ++l) {
         state->cascades.push_back(
@@ -181,7 +288,7 @@ void init_state (State* state) {
     yakl::fence();
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> raymarch(const Fp3d& domain, vec2 ray_start, vec2 direction, fp_t distance) {
+YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> dodgy_raymarch(const Fp3d& domain, vec2 ray_start, vec2 direction, fp_t distance) {
     int steps = distance * yakl::max(yakl::abs(direction(0)), yakl::abs(direction(1)));
     vec2 step;
     step(0) = distance * direction(0) / steps;
@@ -235,6 +342,63 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> raymarch(const Fp3d& domain, v
     }
     result(NUM_COMPONENTS-1) = FP(1.0);
     return result;
+}
+
+YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(const Fp3d& domain, vec2 ray_start, vec2 ray_end) {
+    auto domain_dims = domain.get_dimensions();
+    ivec2 domain_size;
+    domain_size(0) = domain_dims(0);
+    domain_size(1) = domain_dims(1);
+    RayMarchState s = RayMarch_new(ray_start, ray_end, domain_size);
+
+    yakl::SArray<fp_t, 1, NUM_COMPONENTS-1> sample;
+    yakl::SArray<fp_t, 1, NUM_COMPONENTS> result;
+    while (next_intersection(&s)) {
+        auto sample_coord = s.p;
+        if (sample_coord(0) < 0 || sample_coord(0) >= CANVAS_X) {
+            break;
+        }
+        if (sample_coord(1) < 0 || sample_coord(1) >= CANVAS_Y) {
+            break;
+        }
+
+        for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+            sample(i) = domain(sample_coord(0), sample_coord(1), i);
+        }
+
+        bool hits = false;
+        for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+            hits |= bool(sample(i) != FP(0.0));
+            if (hits) {
+                break;
+            }
+        }
+
+        if (hits) {
+            for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+                result(i) = sample(i);
+            }
+            result(NUM_COMPONENTS - 1) = FP(0.0);
+            return result;
+        }
+    }
+
+    for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
+        result(i) = FP(0.0);
+    }
+    result(NUM_COMPONENTS-1) = FP(1.0);
+    return result;
+}
+
+YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> raymarch(const Fp3d& domain, vec2 ray_start, vec2 direction, fp_t distance) {
+#ifdef OLD_RAYMARCH
+    return dodgy_raymarch(domain, ray_start, direction, distance);
+#else
+    vec2 ray_end;
+    ray_end(0) = ray_start(0) + direction(0) * distance;
+    ray_end(1) = ray_start(1) + direction(1) * distance;
+    return aw_raymarch(domain, ray_start, ray_end);
+#endif
 }
 
 YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> merge_intervals(yakl::SArray<fp_t, 1, NUM_COMPONENTS> closer, yakl::SArray<fp_t, 1, NUM_COMPONENTS> further) {
@@ -336,9 +500,9 @@ void compute_cascade_i (
                                 v_uc_weight * (u_bc_weight * u_12 + u_uc_weight * u_22)
                             );
                             upper_sample(i) += ray_weight * term;
-                            if (u == 50 && v == 120) {
-                                printf("<[%f, %f, %f, %f]>\n", upper_sample(i));
-                            }
+                            // if (u == 50 && v == 120) {
+                            //     printf("<[%f, %f, %f, %f]>\n", upper_sample(i));
+                            // }
                         }
                     }
                 }

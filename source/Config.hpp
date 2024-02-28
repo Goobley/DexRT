@@ -23,5 +23,7 @@ constexpr bool BILINEAR_FIX = false;
 constexpr int MAX_LEVEL = 7;
 constexpr int NUM_COMPONENTS = 4;
 
+// #define OLD_RAYMARCH 1
+
 #else
 #endif
