@@ -1,13 +1,14 @@
 #include <math.h>
 #include <limits>
-#include "YAKL.h"
 #include "Config.hpp"
 #include "Types.hpp"
+#include "Utils.hpp"
 #include <stdio.h>
 #ifdef HAVE_MPI
-#include "YAKL_pnetcdf.h"
+    #include "YAKL_pnetcdf.h"
 #endif
 #include <vector>
+#include <optional>
 
 using yakl::c::parallel_for;
 using yakl::c::Bounds;
@@ -150,13 +151,91 @@ YAKL_INLINE constexpr T cube(T t) {
     return t * t * t;
 }
 
-YAKL_INLINE RayMarchState RayMarch_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
+YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box) {
+    RayStartEnd result(ray);
+    yakl::SArray<fp_t, 1, NUM_DIM> length;
+    fp_t clip_t_start = FP(-1.0);
+    fp_t clip_t_end = FP(-1.0);
+    for (int d = 0; d < NUM_DIM; ++d) {
+        length(d) = ray.end(d) - ray.start(d);
+        int clip_idx = -1;
+        if (ray.start(d) < box.dims[d](0)) {
+            clip_idx = 0;
+        } else if (ray.start(d) > box.dims[d](1)) {
+            clip_idx = 1;
+        }
+        if (clip_idx != -1) {
+            fp_t clip_t = (box.dims[d](clip_idx) - ray.start(d)) / length(d);
+            if (clip_t > clip_t_start) {
+                clip_t_start = clip_t;
+            }
+        }
+
+        clip_idx = -1;
+        if (ray.end(d) < box.dims[d](0)) {
+            clip_idx = 0;
+        } else if (ray.end(d) > box.dims[d](1)) {
+            clip_idx = 1;
+        }
+        if (clip_idx != -1) {
+            fp_t clip_t = (box.dims[d](clip_idx) - ray.end(d)) / -length(d);
+            if (clip_t > clip_t_end) {
+                clip_t_end = clip_t;
+            }
+        }
+    }
+
+    if (clip_t_start + clip_t_end >= 1) {
+        // NOTE(cmo): We've moved forwards from start enough, and back from end
+        // enough that there's none of the original ray actually intersecting
+        // the clip planes!
+        return std::nullopt;
+    }
+
+    if (clip_t_start >= FP(0.0)) {
+        for (int d = 0; d < NUM_DIM; ++d) {
+            result.start(d) += clip_t_start * length(d); 
+        }
+    }
+    if (clip_t_end >= FP(0.0)) {
+        for (int d = 0; d < NUM_DIM; ++d) {
+            result.end(d) -= clip_t_end * length(d); 
+        }
+    }
+    // NOTE(cmo): Catch precision errors with a clamp -- without this we will
+    // stop the ray at the edge of the box to floating point precision, but it's
+    // better for these to line up perfectly.
+    for (int d = 0; d < NUM_DIM; ++d) {
+        if (result.start(d) < box.dims[d](0)) {
+            result.start(d) = box.dims[d](0);
+        } else if (result.start(d) > box.dims[d](1)) {
+            result.start(d) = box.dims[d](1);
+        }
+        if (result.end(d) < box.dims[d](0)) {
+            result.end(d) = box.dims[d](0);
+        } else if (result.end(d) > box.dims[d](1)) {
+            result.end(d) = box.dims[d](1);
+        }
+    }
+
+    return result;
+}
+
+YAKL_INLINE std::optional<RayMarchState> RayMarch_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
+    Box box;
+    for (int d = 0; d < NUM_DIM; ++d) {
+        box.dims[d](0) = FP(0.0);
+        box.dims[d](1) = domain_size(d) - 1;
+    }
+    auto clipped = clip_ray_to_box({start_pos, end_pos}, box);
+    if (!clipped) {
+        return std::nullopt;
+    }
+
+    start_pos = clipped->start;
+    end_pos = clipped->end;
+    
     RayMarchState r{};
-    // NOTE(cmo): Clamp into position
-    // start_pos(0) = yakl::min(yakl::max(start_pos(0), FP(0.0)), fp_t(domain_size(0)-1));
-    // start_pos(1) = yakl::min(yakl::max(start_pos(1), FP(0.0)), fp_t(domain_size(1)-1));
-    // end_pos(0) = yakl::min(yakl::max(end_pos(0), FP(0.0)), fp_t(domain_size(0)-1));
-    // end_pos(1) = yakl::min(yakl::max(end_pos(1), FP(0.0)), fp_t(domain_size(1)-1));
     r.p0 = start_pos;
     r.p1 = end_pos;
     r.p(0) = int(std::floor(start_pos(0)));
@@ -179,14 +258,14 @@ YAKL_INLINE RayMarchState RayMarch_new(vec2 start_pos, vec2 end_pos, ivec2 domai
     r.tm(0) = (start_pos(0) - r.p(0)) / dx * r.step(0);
     r.td(0) = r.step(0) / dx;
     if (dx == FP(0.0)) {
-        r.tm(0) = FP(1e8);
+        r.tm(0) = FP(1e10);
         r.td(0) = FP(0.0);
     }
 
     r.tm(1) = (start_pos(1) - r.p(1)) / dy * r.step(1);
     r.td(1) = r.step(1) / dy;
     if (dy == FP(0.0)) {
-        r.tm(1) = FP(1e8);
+        r.tm(1) = FP(1e10);
         r.td(1) = FP(0.0);
     }
 
@@ -198,8 +277,8 @@ YAKL_INLINE bool next_intersection(RayMarchState* state) {
     auto& s = *state;
     fp_t tmx = s.tm(0);
     fp_t tmy = s.tm(1);
-    // TODO(cmo): Set a small tolerance on this comparison.
-    if (tmx <= tmy) {
+    const bool equal = approx_equal(tmx, tmy, FP(1e-6));
+    if ((tmx < tmy) || equal) {
         fp_t t = tmx;
         s.hit(0) = s.p0(0) + t * s.d(0);
         s.hit(1) = s.p0(1) + t * s.d(1);
@@ -221,14 +300,14 @@ YAKL_INLINE bool next_intersection(RayMarchState* state) {
         stop = (s.p(1) == s.end(1));
     } 
 
-    // TODO(cmo): Tol.
-    if (tmx == tmy) {
+    if (equal) {
         // NOTE(cmo): If the two min steps are equal (e.g. traversing on a
         // diagonal), increment the position on both axes -- this is literally a
         // corner case :D
         // Stop condition should be consistent for either.
         s.tm(1) += s.td(1);
         s.p(1) += s.step(1);
+        stop = stop || (s.p(1) == s.end(1));
     }
 
     if (stop) {
@@ -271,20 +350,42 @@ void init_state (State* state) {
 
     {
         auto emission = state->emission;
-        fp_t intensity_scale = FP(3.0);
         parallel_for(
             SimpleBounds<2>(CANVAS_X, CANVAS_Y),
             YAKL_LAMBDA (int x, int y) {
-                emission(x, y, 0) = FP(0.0);
-                emission(x, y, 1) = FP(0.0);
-                emission(x, y, 2) = FP(0.0);
+                for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+                    emission(x, y, i) = FP(0.0);
+                }
 
                 // model_original(emission, x, y);
-                model_A(emission, x, y);
+                // model_A(emission, x, y);
                 // model_B(emission, x, y);
+                LIGHT_MODEL(emission, x, y);
             }
         );
     }
+
+#ifndef TRACE_OPAQUE_LIGHTS
+    state->absorption = Fp3d("absorption_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
+    {
+        auto chi = state->absorption;
+        parallel_for(
+            SimpleBounds<2>(CANVAS_X, CANVAS_Y),
+            YAKL_LAMBDA (int x, int y) {
+                LIGHT_MODEL(chi, x, y);
+                for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+                    if (chi(x, y, i) == FP(0.0)) {
+                        chi(x, y, i) = FP(1e-10);
+                    } else if (chi(x, y, i) == FP(1e-6)) {
+                        chi(x, y, i) = FP(3.0);
+                    }
+                }
+            }
+        );
+
+    }
+#endif
+
     yakl::fence();
 }
 
@@ -344,28 +445,65 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> dodgy_raymarch(const Fp3d& dom
     return result;
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(const Fp3d& domain, vec2 ray_start, vec2 ray_end) {
+YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> empty_hit() {
+    yakl::SArray<fp_t, 1, NUM_COMPONENTS> result;
+#ifdef TRACE_OPAQUE_LIGHTS
+    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+        result(i) = FP(0.0);
+        result(NUM_WAVELENGTHS + i) = FP(1.0);
+    }
+#else
+    for (int i = 0; i < NUM_COMPONENTS; ++i) {
+        result(i) = FP(0.0);
+    }
+#endif
+    return result;
+
+}
+
+YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(
+    const Fp3d& domain, // eta in volumetric
+    const Fp3d& chi,
+    vec2 ray_start, 
+    vec2 ray_end
+) {
     auto domain_dims = domain.get_dimensions();
     ivec2 domain_size;
     domain_size(0) = domain_dims(0);
     domain_size(1) = domain_dims(1);
-    RayMarchState s = RayMarch_new(ray_start, ray_end, domain_size);
+    auto marcher = RayMarch_new(ray_start, ray_end, domain_size);
+    if (!marcher) {
+        return empty_hit();
+    }
 
+    RayMarchState s = *marcher;
+
+    yakl::SArray<fp_t, 1, NUM_COMPONENTS> result = empty_hit();
     yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> sample;
-    yakl::SArray<fp_t, 1, NUM_COMPONENTS> result;
+#ifndef TRACE_OPAQUE_LIGHTS
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> chi_sample;
+#endif
     while (next_intersection(&s)) {
         auto sample_coord = s.p;
         if (sample_coord(0) < 0 || sample_coord(0) >= CANVAS_X) {
+            printf("out x <%d, %d>, (%f, %f), [%f,%f] -> [%f,%f]\n", 
+            sample_coord(0), sample_coord(1), s.hit(0), s.hit(1),
+            s.p0(0), s.p0(1), s.p1(0), s.p1(1)
+            );
             break;
         }
         if (sample_coord(1) < 0 || sample_coord(1) >= CANVAS_Y) {
+            printf("out y <%d, %d>, (%f, %g), [%f,%f] -> [%f,%f]\n", 
+            sample_coord(0), sample_coord(1), s.hit(0), s.hit(1),
+            s.p0(0), s.p0(1), s.p1(0), s.p1(1)
+            );
             break;
         }
 
         for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             sample(i) = domain(sample_coord(0), sample_coord(1), i);
         }
-
+#ifdef TRACE_OPAQUE_LIGHTS
         bool hits = false;
         for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             hits |= bool(sample(i) != FP(0.0));
@@ -381,27 +519,50 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(const Fp3d& domain
             result(NUM_COMPONENTS - 1) = FP(0.0);
             return result;
         }
+#else
+        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+            chi_sample(i) = chi(sample_coord(0), sample_coord(1), i);
+        }
+
+        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+            fp_t tau = chi_sample(i) * s.ds;
+            result(2*i+1) += tau;
+            fp_t edt = std::exp(-tau);
+            fp_t source_fn = sample(i) / chi_sample(i);
+            result(2*i) = result(2*i) * edt + source_fn * (FP(1.0) - edt);
+        }
+#endif
     }
 
-    for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
-        result(i) = FP(0.0);
-    }
-    result(NUM_COMPONENTS-1) = FP(1.0);
     return result;
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> raymarch(const Fp3d& domain, vec2 ray_start, vec2 direction, fp_t distance) {
+YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> raymarch(
+    const Fp3d& domain, 
+    const Fp3d& chi, 
+    vec2 ray_start, 
+    vec2 direction, 
+    fp_t distance
+) {
 #ifdef OLD_RAYMARCH
     return dodgy_raymarch(domain, ray_start, direction, distance);
 #else
     vec2 ray_end;
     ray_end(0) = ray_start(0) + direction(0) * distance;
     ray_end(1) = ray_start(1) + direction(1) * distance;
-    return aw_raymarch(domain, ray_start, ray_end);
+#ifdef TRACE_OPAQUE_LIGHTS
+    return aw_raymarch(domain, chi, ray_start, ray_end);
+#else
+    // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe
+    // and go the other way, dropping out of the march early if we have
+    // traversed sufficient optical depth.
+    return aw_raymarch(domain, chi, ray_end, ray_start);
+#endif
 #endif
 }
 
 YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> merge_intervals(yakl::SArray<fp_t, 1, NUM_COMPONENTS> closer, yakl::SArray<fp_t, 1, NUM_COMPONENTS> further) {
+#ifdef TRACE_OPAQUE_LIGHTS
     fp_t transmission = closer(NUM_COMPONENTS-1);
     if (transmission == FP(0.0)) {
         return closer;
@@ -412,13 +573,23 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> merge_intervals(yakl::SArray<f
     }
     closer(NUM_COMPONENTS-1) = closer(NUM_COMPONENTS-1) * further(NUM_COMPONENTS-1);
     return closer;
+#else
+    // NOTE(cmo): Storage is interleaved [intensity_1, tau_1, intensity_2...]
+    for (int i = 0; i < NUM_COMPONENTS; i += 2) {
+        fp_t transmission = std::exp(-closer(i+1));
+        closer(i) += transmission * further(i);
+        closer(i+1) += further(i+1);
+    }
+    return closer;
+#endif
 }
 
 void compute_cascade_i (
     State* state,
     int cascade_idx
 ) {
-    auto& emission = state->emission;
+    const auto& emission = state->emission;
+    const auto& chi = state->absorption;
     printf("Cascade idx: %d, vec size: %d\n", cascade_idx, state->cascades.size());
     auto& cascade_i = state->cascades[cascade_idx];
     auto cascade_ip = cascade_i;
@@ -450,8 +621,8 @@ void compute_cascade_i (
                 prev_radius = PROBE0_LENGTH * (1 << ((cascade_idx-1) * CASCADE_BRANCHING_FACTOR));
             }
 
-            int cx = int((u + FP(0.5)) * spacing);
-            int cy = int((v + FP(0.5)) * spacing);
+            fp_t cx = (u + FP(0.5)) * spacing;
+            fp_t cy = (v + FP(0.5)) * spacing;
             fp_t distance = radius - prev_radius;
 
             // NOTE(cmo): bc: bottom corner of 2x2 used for bilinear interp on next cascade
@@ -481,7 +652,7 @@ void compute_cascade_i (
 
             if (BILINEAR_FIX) {
             } else {
-                auto sample = raymarch(emission, start, direction, distance);
+                auto sample = raymarch(emission, chi, start, direction, distance);
                 decltype(sample) upper_sample(FP(0.0));
                 // NOTE(cmo): Sample upper cascade.
                 if (cascade_idx != MAX_LEVEL && sample(NUM_COMPONENTS-1) > FP(0.0)) {
@@ -524,7 +695,11 @@ void save_results(Fp4d final_cascade) {
         SimpleBounds<3>(dims(0), dims(1), dims(2)),
         YAKL_LAMBDA (int x, int y, int ray_idx) {
             for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+#ifdef TRACE_OPAQUE_LIGHTS
                 fp64_copy(x, y, ray_idx, i)  = final_cascade(x, y, ray_idx, i);
+#else
+                fp64_copy(x, y, ray_idx, i)  = final_cascade(x, y, ray_idx, 2*i);
+#endif
             }
         }
     );

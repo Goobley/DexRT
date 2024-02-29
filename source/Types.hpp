@@ -26,6 +26,7 @@ typedef yakl::SArray<int32_t, 1, 2> ivec2;
 struct State {
     std::vector<Fp4d> cascades;
     Fp3d emission;
+    Fp3d absorption;
 };
 
 struct RayMarchState {
@@ -54,6 +55,15 @@ struct RayMarchState {
     fp_t prev_t = FP(0.0);
     // length of step
     fp_t ds = FP(0.0);
+};
+
+struct RayStartEnd {
+    vec2 start;
+    vec2 end;
+};
+
+struct Box {
+    vec2 dims[NUM_DIM];
 };
 
 #else

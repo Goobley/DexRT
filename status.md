@@ -6,6 +6,7 @@ Features
 - [ ] Reformulate for flatland participating media
 - [ ] Convert to 2.5D
 - [ ] Compare with Lightweaver on simple case (FS only)
+- [ ] Add branching/bilinear fix and compare
 - [ ] CRTAF parsing
 - [ ] LTE populations
 - [ ] Line absorption profile
