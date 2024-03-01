@@ -136,6 +136,136 @@ YAKL_INLINE void model_B(Fp3d emission, int x, int y) {
     draw_disk(emission, c, 40, color, x, y);
 }
 
+YAKL_INLINE void model_D_emission(Fp3d emission, int x, int y) {
+    int centre = int(CANVAS_X / 2);
+    vec2 c;
+    yakl::SArray<fp_t, 1, 3> color;
+    c(0) = centre + 400;
+    c(1) = centre;
+    color(0) = FP(0.0);
+    color(1) = FP(0.0);
+    color(2) = FP(2.0);
+    draw_disk(emission, c, 40, color, x, y);
+
+    c(0) = centre - 400;
+    c(1) = centre;
+    color(0) = FP(2.0);
+    color(1) = FP(0.0);
+    color(2) = FP(0.0);
+    draw_disk(emission, c, 40, color, x, y);
+
+    c(0) = centre;
+    c(1) = centre - 400;
+    color(0) = FP(0.0);
+    color(1) = FP(0.0);
+    color(2) = FP(0.5);
+    draw_disk(emission, c, 40, color, x, y);
+
+    c(0) = centre;
+    c(1) = centre + 400;
+    color(0) = FP(0.5);
+    color(1) = FP(0.0);
+    color(2) = FP(0.0);
+    draw_disk(emission, c, 40, color, x, y);
+
+    c(0) = 200;
+    c(1) = 200;
+    color(0) = FP(0.0);
+    color(1) = FP(3.0);
+    color(2) = FP(0.0);
+    draw_disk(emission, c, 40, color, x, y);
+
+    c(0) = CANVAS_X - 200;
+    c(1) = 200;
+    color(0) = FP(0.0);
+    color(1) = FP(0.0);
+    color(2) = FP(3.0);
+    draw_disk(emission, c, 40, color, x, y);
+
+    c(0) = 400;
+    c(1) = 700;
+    color(0) = FP(3.0);
+    color(1) = FP(0.0);
+    color(2) = FP(3.0);
+    draw_disk(emission, c, 40, color, x, y);
+}
+
+YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
+    int centre = int(CANVAS_X / 2);
+    vec2 c;
+    yakl::SArray<fp_t, 1, 3> color;
+    fp_t bg = FP(1e-10);
+    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+        chi(x, y, i) = bg;
+    }
+    c(0) = centre + 400;
+    c(1) = centre;
+    color(0) = bg;
+    color(1) = bg;
+    color(2) = FP(0.5);
+    draw_disk(chi, c, 40, color, x, y);
+
+    c(0) = centre - 400;
+    c(1) = centre;
+    color(0) = FP(0.5);
+    color(1) = bg;
+    color(2) = bg;
+    draw_disk(chi, c, 40, color, x, y);
+
+    c(0) = centre;
+    c(1) = centre - 400;
+    color(0) = bg;
+    color(1) = bg;
+    color(2) = FP(0.5);
+    draw_disk(chi, c, 40, color, x, y);
+
+    c(0) = centre;
+    c(1) = centre + 400;
+    color(0) = FP(0.5);
+    color(1) = bg;
+    color(2) = bg;
+    draw_disk(chi, c, 40, color, x, y);
+
+    c(0) = centre + 340;
+    c(1) = centre;
+    color(0) = FP(0.2);
+    color(1) = FP(0.2);
+    color(2) = FP(0.2);
+    draw_disk(chi, c, 6, color, x, y);
+    c(0) = centre - 340;
+    c(1) = centre;
+    draw_disk(chi, c, 6, color, x, y);
+
+    int box_size = 250;
+    if (x >= centre - box_size && x < centre + box_size && y >= centre - box_size && y < centre + box_size) {
+        fp_t chi_r = FP(1e-4);
+        chi(x, y, 0) = chi_r;
+        chi(x, y, 1) = FP(1e2) * chi_r;
+        chi(x, y, 2) = FP(1e2) * chi_r;
+    }
+
+    c(0) = 200;
+    c(1) = 200;
+    color(0) = bg;
+    color(1) = FP(1.0);
+    color(2) = bg;
+    draw_disk(chi, c, 40, color, x, y);
+
+    c(0) = CANVAS_X - 200;
+    c(1) = 200;
+    color(0) = bg;
+    color(1) = bg;
+    color(2) = FP(1.0);
+    draw_disk(chi, c, 40, color, x, y);
+
+    c(0) = 400;
+    c(1) = 700;
+    color(0) = FP(1.0);
+    color(1) = bg;
+    color(2) = FP(1.0);
+    draw_disk(chi, c, 40, color, x, y);
+}
+
 template <typename T>
 YAKL_INLINE T sign(T t) {
     return std::copysign(T(1.0), t);
@@ -149,6 +279,22 @@ YAKL_INLINE constexpr T square(T t) {
 template <typename T>
 YAKL_INLINE constexpr T cube(T t) {
     return t * t * t;
+}
+
+yakl::SArray<fp_t, 1, NUM_AZ> get_az_rays() {
+    yakl::SArray<fp_t, 1, NUM_AZ> az_rays;
+    for (int r = 0; r < NUM_AZ; ++r) {
+        az_rays(r) = AZ_RAYS[r];
+    }
+    return az_rays;
+}
+
+yakl::SArray<fp_t, 1, NUM_AZ> get_az_weights() {
+    yakl::SArray<fp_t, 1, NUM_AZ> az_weights;
+    for (int r = 0; r < NUM_AZ; ++r) {
+        az_weights(r) = AZ_WEIGHTS[r];
+    }
+    return az_weights;
 }
 
 YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box) {
@@ -324,12 +470,13 @@ YAKL_INLINE bool next_intersection(RayMarchState* state) {
 void init_state (State* state) {
     for (int l = 0; l < MAX_LEVEL + 1; ++l) {
         state->cascades.push_back(
-            Fp4d(
+            Fp5d(
                 "cascade",
                 PROBES_IN_CASCADE_0 / (1 << l),
                 PROBES_IN_CASCADE_0 / (1 << l),
                 PROBE0_NUM_RAYS * (1 << (l * CASCADE_BRANCHING_FACTOR)),
-                NUM_COMPONENTS
+                NUM_COMPONENTS,
+                NUM_AZ
             )
         );
 
@@ -340,7 +487,9 @@ void init_state (State* state) {
             SimpleBounds<3>(dims(0), dims(1), dims(2)),
             YAKL_LAMBDA (int i, int j, int k) {
                 for (int m = 0; m < NUM_COMPONENTS; ++m) {
-                    casc(i, j, k, m) = FP(0.0);
+                    for (int p = 0; p < NUM_AZ; ++p) {
+                        casc(i, j, k, m, p) = FP(0.0);
+                    }
                 }
             }
         );
@@ -372,14 +521,20 @@ void init_state (State* state) {
         parallel_for(
             SimpleBounds<2>(CANVAS_X, CANVAS_Y),
             YAKL_LAMBDA (int x, int y) {
+#ifndef ABSORPTION_MODEL
                 LIGHT_MODEL(chi, x, y);
                 for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
                     if (chi(x, y, i) == FP(0.0)) {
                         chi(x, y, i) = FP(1e-10);
                     } else if (chi(x, y, i) == FP(1e-6)) {
                         chi(x, y, i) = FP(3.0);
+                    } else {
+                        chi(x, y, i) /= FP(2.0);
                     }
                 }
+#else
+                ABSORPTION_MODEL(chi, x, y);
+#endif
             }
         );
 
@@ -445,27 +600,26 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> dodgy_raymarch(const Fp3d& dom
     return result;
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> empty_hit() {
-    yakl::SArray<fp_t, 1, NUM_COMPONENTS> result;
+YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> empty_hit() {
+    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> result;
 #ifdef TRACE_OPAQUE_LIGHTS
     for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
         result(i) = FP(0.0);
         result(NUM_WAVELENGTHS + i) = FP(1.0);
     }
 #else
-    for (int i = 0; i < NUM_COMPONENTS; ++i) {
-        result(i) = FP(0.0);
-    }
+    result = FP(0.0);
 #endif
     return result;
 
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(
+YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
     const Fp3d& domain, // eta in volumetric
     const Fp3d& chi,
     vec2 ray_start, 
-    vec2 ray_end
+    vec2 ray_end,
+    yakl::SArray<fp_t, 1, NUM_AZ> az_rays
 ) {
     auto domain_dims = domain.get_dimensions();
     ivec2 domain_size;
@@ -478,7 +632,7 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(
 
     RayMarchState s = *marcher;
 
-    yakl::SArray<fp_t, 1, NUM_COMPONENTS> result = empty_hit();
+    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> result = empty_hit();
     yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> sample;
 #ifndef TRACE_OPAQUE_LIGHTS
     yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> chi_sample;
@@ -526,10 +680,21 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(
 
         for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             fp_t tau = chi_sample(i) * s.ds;
-            result(2*i+1) += tau;
-            fp_t edt = std::exp(-tau);
             fp_t source_fn = sample(i) / chi_sample(i);
-            result(2*i) = result(2*i) * edt + source_fn * (FP(1.0) - edt);
+
+            for (int r = 0; r < NUM_AZ; ++r) {
+                if (az_rays(r) == FP(0.0)) {
+                    result(2*i, r) = source_fn;
+                } else {
+                    fp_t mu = az_rays(r);
+                    result(2*i+1, r) += tau / mu;
+                    fp_t edt = std::exp(-tau / mu);
+                    result(2*i, r) = result(2*i, r) * edt + source_fn * (FP(1.0) - edt);
+                }
+            }
+            if (sample_coord(0) == int(CANVAS_X / 2) && sample_coord(1) == int(CANVAS_X / 2) + 400) {
+                printf("tau %g, sfn %g (%g/%g) \n", tau, source_fn, sample(i), chi_sample(i));
+            }
         }
 #endif
     }
@@ -537,12 +702,13 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> aw_raymarch(
     return result;
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> raymarch(
+YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> raymarch(
     const Fp3d& domain, 
     const Fp3d& chi, 
     vec2 ray_start, 
     vec2 direction, 
-    fp_t distance
+    fp_t distance,
+    yakl::SArray<fp_t, 1, NUM_AZ> az_rays
 ) {
 #ifdef OLD_RAYMARCH
     return dodgy_raymarch(domain, ray_start, direction, distance);
@@ -556,12 +722,16 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> raymarch(
     // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe
     // and go the other way, dropping out of the march early if we have
     // traversed sufficient optical depth.
-    return aw_raymarch(domain, chi, ray_end, ray_start);
+    return aw_raymarch(domain, chi, ray_end, ray_start, az_rays);
 #endif
 #endif
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> merge_intervals(yakl::SArray<fp_t, 1, NUM_COMPONENTS> closer, yakl::SArray<fp_t, 1, NUM_COMPONENTS> further) {
+YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> merge_intervals(
+    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> closer, 
+    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> further,
+    yakl::SArray<fp_t, 1, NUM_AZ> az_rays
+) {
 #ifdef TRACE_OPAQUE_LIGHTS
     fp_t transmission = closer(NUM_COMPONENTS-1);
     if (transmission == FP(0.0)) {
@@ -574,11 +744,16 @@ YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> merge_intervals(yakl::SArray<f
     closer(NUM_COMPONENTS-1) = closer(NUM_COMPONENTS-1) * further(NUM_COMPONENTS-1);
     return closer;
 #else
-    // NOTE(cmo): Storage is interleaved [intensity_1, tau_1, intensity_2...]
+    // NOTE(cmo): Storage is interleaved [intensity_1, tau_1, intensity_2...] on the first axis
     for (int i = 0; i < NUM_COMPONENTS; i += 2) {
-        fp_t transmission = std::exp(-closer(i+1));
-        closer(i) += transmission * further(i);
-        closer(i+1) += further(i+1);
+        for (int r = 0; r < NUM_AZ; ++r) {
+            if (az_rays(r) == FP(0.0)) {
+                continue;
+            }
+            fp_t transmission = std::exp(-closer(i+1, r));
+            closer(i, r) += transmission * further(i, r);
+            closer(i+1, r) += further(i+1, r);
+        }
     }
     return closer;
 #endif
@@ -599,6 +774,9 @@ void compute_cascade_i (
     auto dims = cascade_i.get_dimensions();
     auto edims = emission.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();
+
+    auto az_rays = get_az_rays();
+
     printf("[%d, %d, %d, %d]\n", dims(0), dims(1), dims(2), dims(3));
     printf("[%d, %d, %d]\n", edims(0), edims(1), edims(2));
     parallel_for(
@@ -607,7 +785,9 @@ void compute_cascade_i (
             // NOTE(cmo): u, v probe indices
             // NOTE(cmo): x, y world coords
             for (int i = 0; i < NUM_COMPONENTS; ++i) {
-                cascade_i(u, v, ray_idx, i) = FP(0.0);
+                for (int j = 0; j < NUM_AZ; ++j) {
+                    cascade_i(u, v, ray_idx, i, j) = FP(0.0);
+                }
             }
 
             int upper_cascade_idx = cascade_idx + 1;
@@ -652,34 +832,40 @@ void compute_cascade_i (
 
             if (BILINEAR_FIX) {
             } else {
-                auto sample = raymarch(emission, chi, start, direction, distance);
+                auto sample = raymarch(emission, chi, start, direction, distance, az_rays);
                 decltype(sample) upper_sample(FP(0.0));
                 // NOTE(cmo): Sample upper cascade.
-                if (cascade_idx != MAX_LEVEL && sample(NUM_COMPONENTS-1) > FP(0.0)) {
+                // if (cascade_idx != MAX_LEVEL && sample(NUM_COMPONENTS-1) > FP(0.0)) {
+                if (cascade_idx != MAX_LEVEL) {
                     for (
                         int upper_ray_idx = upper_ray_start_idx;
                         upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
                         ++upper_ray_idx
                     ) {
                         for (int i = 0; i < NUM_COMPONENTS; ++i) {
-                            fp_t u_11 = cascade_ip(u_bc, v_bc, upper_ray_idx, i);
-                            fp_t u_21 = cascade_ip(u_uc, v_bc, upper_ray_idx, i);
-                            fp_t u_12 = cascade_ip(u_bc, v_uc, upper_ray_idx, i);
-                            fp_t u_22 = cascade_ip(u_uc, v_uc, upper_ray_idx, i);
-                            fp_t term = (
-                                v_bc_weight * (u_bc_weight * u_11 + u_uc_weight * u_21) +
-                                v_uc_weight * (u_bc_weight * u_12 + u_uc_weight * u_22)
-                            );
-                            upper_sample(i) += ray_weight * term;
-                            // if (u == 50 && v == 120) {
-                            //     printf("<[%f, %f, %f, %f]>\n", upper_sample(i));
-                            // }
+                            for (int r = 0; r < NUM_AZ; ++r) {
+                                if (az_rays(r) == FP(0.0)) {
+                                    // NOTE(cmo): Can't merge the in-out of page ray.
+                                    continue;
+                                }
+                                fp_t u_11 = cascade_ip(u_bc, v_bc, upper_ray_idx, i, r);
+                                fp_t u_21 = cascade_ip(u_uc, v_bc, upper_ray_idx, i, r);
+                                fp_t u_12 = cascade_ip(u_bc, v_uc, upper_ray_idx, i, r);
+                                fp_t u_22 = cascade_ip(u_uc, v_uc, upper_ray_idx, i, r);
+                                fp_t term = (
+                                    v_bc_weight * (u_bc_weight * u_11 + u_uc_weight * u_21) +
+                                    v_uc_weight * (u_bc_weight * u_12 + u_uc_weight * u_22)
+                                );
+                                upper_sample(i, r) += ray_weight * term;
+                            }
                         }
                     }
                 }
-                auto merged = merge_intervals(sample, upper_sample);
+                auto merged = merge_intervals(sample, upper_sample, az_rays);
                 for (int i = 0; i < NUM_COMPONENTS; ++i) {
-                    cascade_i(u, v, ray_idx, i) = merged(i);
+                    for (int r = 0; r < NUM_AZ; ++r) {
+                        cascade_i(u, v, ray_idx, i, r) = merged(i, r);
+                    }
                 }
             }
         }
@@ -687,10 +873,11 @@ void compute_cascade_i (
 }
 
 #ifdef HAVE_MPI
-void save_results(Fp4d final_cascade) {
+void save_results(Fp5d final_cascade) {
     printf("Writing\n");
     auto dims = final_cascade.get_dimensions();
     yakl::Array<double, 4, yakl::memDevice> fp64_copy("fp64_copy", dims(0), dims(1), dims(2), NUM_WAVELENGTHS);
+    auto az_weights = get_az_weights();
     parallel_for(
         SimpleBounds<3>(dims(0), dims(1), dims(2)),
         YAKL_LAMBDA (int x, int y, int ray_idx) {
@@ -698,7 +885,10 @@ void save_results(Fp4d final_cascade) {
 #ifdef TRACE_OPAQUE_LIGHTS
                 fp64_copy(x, y, ray_idx, i)  = final_cascade(x, y, ray_idx, i);
 #else
-                fp64_copy(x, y, ray_idx, i)  = final_cascade(x, y, ray_idx, 2*i);
+                fp64_copy(x, y, ray_idx, i) = 0.0;
+                for (int r = 0; r < NUM_AZ; ++r) {
+                    fp64_copy(x, y, ray_idx, i)  += az_weights(r) * final_cascade(x, y, ray_idx, 2*i, r);
+                }
 #endif
             }
         }
