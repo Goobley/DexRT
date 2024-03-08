@@ -5,7 +5,7 @@ Features/ToDo
 - [x] Update raymarcher to Amanatides & Woo formalism (@fcdf129)
 - [x] Reformulate for flatland participating media (@c808b28)
 - [x] Convert to 2.5D (@c808b28)
-- [ ] Track down issues on top edge
+- [x] Track down issues on top edge (@95994d0)
 - [ ] Compare with Lightweaver on simple case (FS only)
 - [ ] Add branching/bilinear fix and compare
 - [ ] CRTAF parsing
