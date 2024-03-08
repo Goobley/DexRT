@@ -38,26 +38,26 @@ struct RayMarchState {
     // end pos
     vec2 p1;
 
-    // Current cell idx
-    ivec2 p;
+    // Current cell coordinate
+    ivec2 curr_coord;
+    // Next cell coordinate
+    ivec2 next_coord;
     // Integer step dir
     ivec2 step;
-    // Cell to stop in
-    ivec2 end;
 
     // t to next hit per axis
-    vec2 tm;
+    vec2 next_hit;
     // t increment per step per axis
-    vec2 td;
+    vec2 delta;
+    // t to stop at
+    fp_t max_t;
 
     // axis increment
-    vec2 d;
-    // hit location
-    vec2 hit;
-    // value of t at prev intersection
-    fp_t prev_t = FP(0.0);
+    vec2 direction;
+    // value of t at current intersection (far side of curr_coord, just before entering next_coord)
+    fp_t t = FP(0.0);
     // length of step
-    fp_t ds = FP(0.0);
+    fp_t dt = FP(0.0);
 };
 
 struct RayStartEnd {

@@ -3,12 +3,15 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "Utils.hpp"
-#include <stdio.h>
+#include "RayMarching.hpp"
+#include "RadianceIntervals.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #endif
 #include <vector>
+#include <string>
 #include <optional>
+#include <fmt/core.h>
 
 using yakl::c::parallel_for;
 using yakl::c::Bounds;
@@ -266,25 +269,10 @@ YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
     draw_disk(chi, c, 40, color, x, y);
 }
 
-template <typename T>
-YAKL_INLINE T sign(T t) {
-    return std::copysign(T(1.0), t);
-}
-
-template <typename T>
-YAKL_INLINE constexpr T square(T t) {
-    return t * t;
-}
-
-template <typename T>
-YAKL_INLINE constexpr T cube(T t) {
-    return t * t * t;
-}
-
 yakl::SArray<fp_t, 1, NUM_AZ> get_az_rays() {
     yakl::SArray<fp_t, 1, NUM_AZ> az_rays;
     for (int r = 0; r < NUM_AZ; ++r) {
-        az_rays(r) = AZ_RAYS[r];
+        az_rays(r) = INCL_RAYS[r];
     }
     return az_rays;
 }
@@ -295,176 +283,6 @@ yakl::SArray<fp_t, 1, NUM_AZ> get_az_weights() {
         az_weights(r) = AZ_WEIGHTS[r];
     }
     return az_weights;
-}
-
-YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box) {
-    RayStartEnd result(ray);
-    yakl::SArray<fp_t, 1, NUM_DIM> length;
-    fp_t clip_t_start = FP(-1.0);
-    fp_t clip_t_end = FP(-1.0);
-    for (int d = 0; d < NUM_DIM; ++d) {
-        length(d) = ray.end(d) - ray.start(d);
-        int clip_idx = -1;
-        if (ray.start(d) < box.dims[d](0)) {
-            clip_idx = 0;
-        } else if (ray.start(d) > box.dims[d](1)) {
-            clip_idx = 1;
-        }
-        if (clip_idx != -1) {
-            fp_t clip_t = (box.dims[d](clip_idx) - ray.start(d)) / length(d);
-            if (clip_t > clip_t_start) {
-                clip_t_start = clip_t;
-            }
-        }
-
-        clip_idx = -1;
-        if (ray.end(d) < box.dims[d](0)) {
-            clip_idx = 0;
-        } else if (ray.end(d) > box.dims[d](1)) {
-            clip_idx = 1;
-        }
-        if (clip_idx != -1) {
-            fp_t clip_t = (box.dims[d](clip_idx) - ray.end(d)) / -length(d);
-            if (clip_t > clip_t_end) {
-                clip_t_end = clip_t;
-            }
-        }
-    }
-
-    if (clip_t_start + clip_t_end >= 1) {
-        // NOTE(cmo): We've moved forwards from start enough, and back from end
-        // enough that there's none of the original ray actually intersecting
-        // the clip planes!
-        return std::nullopt;
-    }
-
-    if (clip_t_start >= FP(0.0)) {
-        for (int d = 0; d < NUM_DIM; ++d) {
-            result.start(d) += clip_t_start * length(d); 
-        }
-    }
-    if (clip_t_end >= FP(0.0)) {
-        for (int d = 0; d < NUM_DIM; ++d) {
-            result.end(d) -= clip_t_end * length(d); 
-        }
-    }
-    // NOTE(cmo): Catch precision errors with a clamp -- without this we will
-    // stop the ray at the edge of the box to floating point precision, but it's
-    // better for these to line up perfectly.
-    for (int d = 0; d < NUM_DIM; ++d) {
-        if (result.start(d) < box.dims[d](0)) {
-            result.start(d) = box.dims[d](0);
-        } else if (result.start(d) > box.dims[d](1)) {
-            result.start(d) = box.dims[d](1);
-        }
-        if (result.end(d) < box.dims[d](0)) {
-            result.end(d) = box.dims[d](0);
-        } else if (result.end(d) > box.dims[d](1)) {
-            result.end(d) = box.dims[d](1);
-        }
-    }
-
-    return result;
-}
-
-YAKL_INLINE std::optional<RayMarchState> RayMarch_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
-    Box box;
-    for (int d = 0; d < NUM_DIM; ++d) {
-        box.dims[d](0) = FP(0.0);
-        box.dims[d](1) = domain_size(d) - 1;
-    }
-    auto clipped = clip_ray_to_box({start_pos, end_pos}, box);
-    if (!clipped) {
-        return std::nullopt;
-    }
-
-    start_pos = clipped->start;
-    end_pos = clipped->end;
-    
-    RayMarchState r{};
-    r.p0 = start_pos;
-    r.p1 = end_pos;
-    r.p(0) = int(std::floor(start_pos(0)));
-    r.p(1) = int(std::floor(start_pos(1)));
-
-    r.step(0) = sign(end_pos(0) - start_pos(0));
-    r.step(1) = sign(end_pos(1) - start_pos(1));
-
-    r.end(0) = int(std::floor(end_pos(0))) + r.step(0);
-    r.end(1) = int(std::floor(end_pos(1))) + r.step(1);
-
-    fp_t dx = end_pos(0) - start_pos(0);
-    fp_t dy = end_pos(1) - start_pos(1);
-    fp_t length = FP(1.0) / std::sqrt(dx*dx + dy*dy);
-    dx *= length;
-    dy *= length;
-    r.d(0) = dx;
-    r.d(1) = dy;
-
-    r.tm(0) = (start_pos(0) - r.p(0)) / dx * r.step(0);
-    r.td(0) = r.step(0) / dx;
-    if (dx == FP(0.0)) {
-        r.tm(0) = FP(1e10);
-        r.td(0) = FP(0.0);
-    }
-
-    r.tm(1) = (start_pos(1) - r.p(1)) / dy * r.step(1);
-    r.td(1) = r.step(1) / dy;
-    if (dy == FP(0.0)) {
-        r.tm(1) = FP(1e10);
-        r.td(1) = FP(0.0);
-    }
-
-    return r;
-}
-
-YAKL_INLINE bool next_intersection(RayMarchState* state) {
-    bool stop = false;
-    auto& s = *state;
-    fp_t tmx = s.tm(0);
-    fp_t tmy = s.tm(1);
-    const bool equal = approx_equal(tmx, tmy, FP(1e-6));
-    if ((tmx < tmy) || equal) {
-        fp_t t = tmx;
-        s.hit(0) = s.p0(0) + t * s.d(0);
-        s.hit(1) = s.p0(1) + t * s.d(1);
-        s.ds = t - s.prev_t;
-        s.prev_t = t;
-        s.tm(0) += s.td(0);
-        s.p(0) += s.step(0);
-
-        stop = (s.p(0) == s.end(0));
-    } else {
-        fp_t t = tmy;
-        s.hit(0) = s.p0(0) + t * s.d(0);
-        s.hit(1) = s.p0(1) + t * s.d(1);
-        s.ds = t - s.prev_t;
-        s.prev_t = t;
-        s.tm(1) += s.td(1);
-        s.p(1) += s.step(1);
-
-        stop = (s.p(1) == s.end(1));
-    } 
-
-    if (equal) {
-        // NOTE(cmo): If the two min steps are equal (e.g. traversing on a
-        // diagonal), increment the position on both axes -- this is literally a
-        // corner case :D
-        // Stop condition should be consistent for either.
-        s.tm(1) += s.td(1);
-        s.p(1) += s.step(1);
-        stop = stop || (s.p(1) == s.end(1));
-    }
-
-    if (stop) {
-        // NOTE(cmo): Handle the (common) case where the final step isn't to the
-        // next grid intersection, but to an arbitrary point in the cell.
-        s.ds = std::sqrt(square(s.p1(0) - s.hit(0)) + square(s.p1(1) - s.hit(1)));
-        s.hit(0) = s.p1(0);
-        s.hit(1) = s.p1(1);
-    }
-
-    return !stop;
 }
 
 void init_state (State* state) {
@@ -482,7 +300,12 @@ void init_state (State* state) {
 
         auto casc = state->cascades[l];
         auto dims = casc.get_dimensions();
-        printf("[%d, %d, %d, %d]\n", dims(0), dims(1), dims(2), dims(3));
+        fp_t prev_radius = 0;
+        if (l != 0) {
+            prev_radius = PROBE0_LENGTH * (1 << ((l-1) * CASCADE_BRANCHING_FACTOR));
+        }
+        fp_t radius = PROBE0_LENGTH * (1 << (l * CASCADE_BRANCHING_FACTOR));
+        fmt::print("[{}, {}, {}, {}, {}->{}]\n", dims(0), dims(1), dims(2), dims(3), prev_radius, radius);
         parallel_for(
             SimpleBounds<3>(dims(0), dims(1), dims(2)),
             YAKL_LAMBDA (int i, int j, int k) {
@@ -544,230 +367,14 @@ void init_state (State* state) {
     yakl::fence();
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 1, NUM_COMPONENTS> dodgy_raymarch(const Fp3d& domain, vec2 ray_start, vec2 direction, fp_t distance) {
-    int steps = distance * yakl::max(yakl::abs(direction(0)), yakl::abs(direction(1)));
-    vec2 step;
-    step(0) = distance * direction(0) / steps;
-    step(1) = distance * direction(1) / steps;
-
-    vec2 pos;
-    pos(0) = ray_start(0);
-    pos(1) = ray_start(1);
-
-    ivec2 sample_coord;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> sample;
-    yakl::SArray<fp_t, 1, NUM_COMPONENTS> result;
-    for (int i = 0; i < steps; ++i) {
-        sample_coord(0) = int(std::round(pos(0)));
-        sample_coord(1) = int(std::round(pos(1)));
-
-        if (sample_coord(0) >= CANVAS_X || sample_coord(1) >= CANVAS_Y || sample_coord(0) < 0 || sample_coord(1) < 0) {
-            for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
-                result(i) = FP(0.0);
-            }
-            result(NUM_COMPONENTS-1) = FP(1.0);
-            return result;
-        }
-
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            sample(i) = domain(sample_coord(0), sample_coord(1), i);
-        }
-
-        bool hits = false;
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            hits |= bool(sample(i) != FP(0.0));
-            if (hits) {
-                break;
-            }
-        }
-
-        if (hits) {
-            for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-                result(i) = sample(i);
-            }
-            result(NUM_COMPONENTS - 1) = FP(0.0);
-            return result;
-        }
-        
-        pos(0) += step(0);
-        pos(1) += step(1);
-    }
-
-    for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
-        result(i) = FP(0.0);
-    }
-    result(NUM_COMPONENTS-1) = FP(1.0);
-    return result;
-}
-
-YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> empty_hit() {
-    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> result;
-#ifdef TRACE_OPAQUE_LIGHTS
-    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-        result(i) = FP(0.0);
-        result(NUM_WAVELENGTHS + i) = FP(1.0);
-    }
-#else
-    result = FP(0.0);
-#endif
-    return result;
-
-}
-
-YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
-    const Fp3d& domain, // eta in volumetric
-    const Fp3d& chi,
-    vec2 ray_start, 
-    vec2 ray_end,
-    yakl::SArray<fp_t, 1, NUM_AZ> az_rays
-) {
-    auto domain_dims = domain.get_dimensions();
-    ivec2 domain_size;
-    domain_size(0) = domain_dims(0);
-    domain_size(1) = domain_dims(1);
-    auto marcher = RayMarch_new(ray_start, ray_end, domain_size);
-    if (!marcher) {
-        return empty_hit();
-    }
-
-    RayMarchState s = *marcher;
-
-    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> result = empty_hit();
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> sample;
-#ifndef TRACE_OPAQUE_LIGHTS
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> chi_sample;
-#endif
-    while (next_intersection(&s)) {
-        auto sample_coord = s.p;
-        if (sample_coord(0) < 0 || sample_coord(0) >= CANVAS_X) {
-            printf("out x <%d, %d>, (%f, %f), [%f,%f] -> [%f,%f]\n", 
-            sample_coord(0), sample_coord(1), s.hit(0), s.hit(1),
-            s.p0(0), s.p0(1), s.p1(0), s.p1(1)
-            );
-            break;
-        }
-        if (sample_coord(1) < 0 || sample_coord(1) >= CANVAS_Y) {
-            printf("out y <%d, %d>, (%f, %g), [%f,%f] -> [%f,%f]\n", 
-            sample_coord(0), sample_coord(1), s.hit(0), s.hit(1),
-            s.p0(0), s.p0(1), s.p1(0), s.p1(1)
-            );
-            break;
-        }
-
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            sample(i) = domain(sample_coord(0), sample_coord(1), i);
-        }
-#ifdef TRACE_OPAQUE_LIGHTS
-        bool hits = false;
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            hits |= bool(sample(i) != FP(0.0));
-            if (hits) {
-                break;
-            }
-        }
-
-        if (hits) {
-            for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-                result(i) = sample(i);
-            }
-            result(NUM_COMPONENTS - 1) = FP(0.0);
-            return result;
-        }
-#else
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            chi_sample(i) = chi(sample_coord(0), sample_coord(1), i);
-        }
-
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            fp_t tau = chi_sample(i) * s.ds;
-            fp_t source_fn = sample(i) / chi_sample(i);
-
-            for (int r = 0; r < NUM_AZ; ++r) {
-                if (az_rays(r) == FP(0.0)) {
-                    result(2*i, r) = source_fn;
-                } else {
-                    fp_t mu = az_rays(r);
-                    result(2*i+1, r) += tau / mu;
-                    fp_t edt = std::exp(-tau / mu);
-                    result(2*i, r) = result(2*i, r) * edt + source_fn * (FP(1.0) - edt);
-                }
-            }
-            if (sample_coord(0) == int(CANVAS_X / 2) && sample_coord(1) == int(CANVAS_X / 2) + 400) {
-                printf("tau %g, sfn %g (%g/%g) \n", tau, source_fn, sample(i), chi_sample(i));
-            }
-        }
-#endif
-    }
-
-    return result;
-}
-
-YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> raymarch(
-    const Fp3d& domain, 
-    const Fp3d& chi, 
-    vec2 ray_start, 
-    vec2 direction, 
-    fp_t distance,
-    yakl::SArray<fp_t, 1, NUM_AZ> az_rays
-) {
-#ifdef OLD_RAYMARCH
-    return dodgy_raymarch(domain, ray_start, direction, distance);
-#else
-    vec2 ray_end;
-    ray_end(0) = ray_start(0) + direction(0) * distance;
-    ray_end(1) = ray_start(1) + direction(1) * distance;
-#ifdef TRACE_OPAQUE_LIGHTS
-    return aw_raymarch(domain, chi, ray_start, ray_end);
-#else
-    // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe
-    // and go the other way, dropping out of the march early if we have
-    // traversed sufficient optical depth.
-    return aw_raymarch(domain, chi, ray_end, ray_start, az_rays);
-#endif
-#endif
-}
-
-YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> merge_intervals(
-    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> closer, 
-    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> further,
-    yakl::SArray<fp_t, 1, NUM_AZ> az_rays
-) {
-#ifdef TRACE_OPAQUE_LIGHTS
-    fp_t transmission = closer(NUM_COMPONENTS-1);
-    if (transmission == FP(0.0)) {
-        return closer;
-    }
-
-    for (int i = 0; i < NUM_COMPONENTS - 1; ++i) {
-        closer(i) += transmission * further(i);
-    }
-    closer(NUM_COMPONENTS-1) = closer(NUM_COMPONENTS-1) * further(NUM_COMPONENTS-1);
-    return closer;
-#else
-    // NOTE(cmo): Storage is interleaved [intensity_1, tau_1, intensity_2...] on the first axis
-    for (int i = 0; i < NUM_COMPONENTS; i += 2) {
-        for (int r = 0; r < NUM_AZ; ++r) {
-            if (az_rays(r) == FP(0.0)) {
-                continue;
-            }
-            fp_t transmission = std::exp(-closer(i+1, r));
-            closer(i, r) += transmission * further(i, r);
-            closer(i+1, r) += further(i+1, r);
-        }
-    }
-    return closer;
-#endif
-}
-
 void compute_cascade_i (
     State* state,
     int cascade_idx
 ) {
-    const auto& emission = state->emission;
-    const auto& chi = state->absorption;
-    printf("Cascade idx: %d, vec size: %d\n", cascade_idx, state->cascades.size());
-    auto& cascade_i = state->cascades[cascade_idx];
-    auto cascade_ip = cascade_i;
+    const FpConst3d emission = state->emission;
+    const FpConst3d chi = state->absorption;
+    const auto& cascade_i = state->cascades[cascade_idx];
+    FpConst5d cascade_ip = cascade_i;
     if (cascade_idx != MAX_LEVEL) {
         cascade_ip = state->cascades[cascade_idx + 1];
     }
@@ -777,8 +384,8 @@ void compute_cascade_i (
 
     auto az_rays = get_az_rays();
 
-    printf("[%d, %d, %d, %d]\n", dims(0), dims(1), dims(2), dims(3));
-    printf("[%d, %d, %d]\n", edims(0), edims(1), edims(2));
+    std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
+    yakl::timer_start(cascade_name.c_str());
     parallel_for(
         SimpleBounds<3>(dims(2), dims(0), dims(1)),
         YAKL_LAMBDA (int ray_idx, int u, int v) {
@@ -796,6 +403,9 @@ void compute_cascade_i (
             int num_rays = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
             int upper_num_rays = PROBE0_NUM_RAYS * (1 << (upper_cascade_idx * CASCADE_BRANCHING_FACTOR));
             fp_t radius = PROBE0_LENGTH * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
+            if (LAST_CASCADE_TO_INFTY && cascade_idx == MAX_LEVEL) {
+                radius = LAST_CASCADE_MAX_DIST;
+            }
             fp_t prev_radius = FP(0.0);
             if (cascade_idx != 0) {
                 prev_radius = PROBE0_LENGTH * (1 << ((cascade_idx-1) * CASCADE_BRANCHING_FACTOR));
@@ -870,6 +480,7 @@ void compute_cascade_i (
             }
         }
     );
+    yakl::timer_stop(cascade_name.c_str());
 }
 
 #ifdef HAVE_MPI
@@ -940,8 +551,6 @@ int main(int argc, char** argv) {
         State state;
         init_state(&state);
         auto dims = state.cascades[0].get_dimensions();
-        printf("[[%d, %d, %d, %d]]\n", dims(0), dims(1), dims(2), dims(3));
-
 
         for (int i = MAX_LEVEL; i >= 0; --i) {
             compute_cascade_i(&state, i);

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.18)
 project(DexRT CXX)
 
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
@@ -7,10 +7,12 @@ endif()
 
 SET(CMAKE_CXX_FLAGS "${CXX_FLAGS}")
 add_subdirectory(YAKL)
-if (${CMAKE_VERSION} VERSION_GREATER "3.18.0")
-    set_property(TARGET yakl PROPERTY CUDA_ARCHITECTURES OFF)
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 84)
 endif()
 include_directories(YAKL)
+
+add_subdirectory(fmt)
 
 add_executable(dexrt "source/main.cpp")
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
@@ -20,6 +22,7 @@ endif()
 target_include_directories(dexrt SYSTEM PUBLIC "${GCC_INCLUDE_PATH}" "${MPI_INCLUDE_PATH}")
 # target_include_directories(dexrt SYSTEM PUBLIC "${MPI_INCLUDE_PATH}")
 target_link_libraries(dexrt "${LDFLAGS}")
+target_link_libraries(dexrt fmt::fmt)
 set_target_properties(dexrt PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED YES
@@ -31,7 +34,4 @@ yakl_process_target(dexrt)
 
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
     set_target_properties(dexrt PROPERTIES LINKER_LANGUAGE CXX)
-    if (${CMAKE_VERSION} VERSION_GREATER "3.18.0")
-        set_target_properties(dexrt PROPERTIES CUDA_ARCHITECTURES OFF)
-    endif()
 endif()

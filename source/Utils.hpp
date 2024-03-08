@@ -26,6 +26,22 @@ YAKL_INLINE bool approx_equal(T a, T b, T eps)
     }
 }
 
+template <typename T>
+YAKL_INLINE T sign(T t) {
+    return std::copysign(T(1.0), t);
+}
+
+using namespace yakl::componentwise;
+template <typename T>
+YAKL_INLINE constexpr auto square(T t) -> decltype(t * t) {
+    return t * t;
+}
+
+template <typename T>
+YAKL_INLINE constexpr auto cube(T t) -> decltype(t * t * t) {
+    return t * t * t;
+}
+
 
 #else
 #endif
