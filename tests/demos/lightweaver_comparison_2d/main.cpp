@@ -19,42 +19,6 @@ using yakl::c::parallel_for;
 using yakl::c::Bounds;
 using yakl::c::SimpleBounds;
 
-YAKL_INLINE void model_original(Fp3d emission, int x, int y) {
-    constexpr fp_t intensity_scale = FP(3.0);
-    if (x >= 25 && x < 35) {
-        if (y >= 235 && y < 275) {
-            emission(x, y, 0) = intensity_scale;
-        }
-    }
-
-    if (x >= 295 && x < 311) {
-        if (y >= 145 && y < 365) {
-            emission(x, y, 0) = FP(1e-6);
-            emission(x, y, 1) = FP(1e-6);
-            emission(x, y, 2) = FP(1e-6);
-        }
-    }
-
-    if (x >= 253 && x < 260) {
-        if (y >= 253 && y < 260) {
-            emission(x, y, 1) = FP(4.0) * intensity_scale;
-        }
-    }
-
-    if (x >= 220 && x < 222) {
-        if (y >= 220 && y < 222) {
-            emission(x, y, 0) = FP(1.414) * intensity_scale;
-            emission(x, y, 2) = FP(1.414) * intensity_scale;
-        }
-    }
-
-    if (x >= 405 && x < 410) {
-        if (y >= 252 && y < 262) {
-            emission(x, y, 2) = intensity_scale;
-        }
-    }
-}
-
 YAKL_INLINE void draw_disk(
     Fp3d emission,
     vec2 centre, 
@@ -71,74 +35,6 @@ YAKL_INLINE void draw_disk(
             emission(x, y, i) = color(i);
         }
     }
-}
-
-YAKL_INLINE void model_A(Fp3d emission, int x, int y) {
-    vec2 centre;
-    yakl::SArray<fp_t, 1, 3> color;
-
-    centre(0) = 30;
-    centre(1) = 30;
-    color(0) = FP(10.0);
-    color(1) = FP(10.0);
-    color(2) = FP(10.0);
-    draw_disk(emission, centre, 30, color, x, y);
-
-    centre(0) = 50;
-    centre(1) = 180;
-    color(0) = FP(1e-6);
-    color(1) = FP(1e-6);
-    color(2) = FP(1e-6);
-    draw_disk(emission, centre, 6, color, x, y);
-
-    centre(0) = CANVAS_X / 2;
-    centre(1) = CANVAS_Y / 2;
-    color(0) = FP(1.0);
-    color(1) = FP(1.0);
-    color(2) = FP(1.0);
-    draw_disk(emission, centre, 2, color, x, y);
-}
-
-YAKL_INLINE void model_B(Fp3d emission, int x, int y) {
-    int centre = int(CANVAS_X / 2);
-    vec2 c;
-    yakl::SArray<fp_t, 1, 3> color;
-    color(0) = FP(0.0);
-    color(1) = FP(1.0);
-    color(2) = FP(0.0);
-    for (int cx = centre - 256; cx < centre + 256; ++cx) {
-        c(0) = centre;
-        c(1) = cx;
-
-        draw_disk(emission, c, 6, color, x, y);
-    }
-
-    color(0) = FP(1e-6);
-    color(1) = FP(1e-6);
-    color(2) = FP(1e-6);
-    for (int cx = centre - 50; cx < centre + 50; ++cx) {
-        c(0) = centre + 100;
-        c(1) = cx;
-
-        draw_disk(emission, c, 6, color, x, y);
-    }
-
-    color(0) = FP(10.0);
-    color(1) = FP(0.0);
-    color(2) = FP(0.0);
-    for (int cx = centre - 50; cx < centre + 50; ++cx) {
-        c(0) = 100;
-        c(1) = cx;
-
-        draw_disk(emission, c, 6, color, x, y);
-    }
-
-    c(0) = centre + 400;
-    c(1) = centre;
-    color(0) = FP(0.0);
-    color(1) = FP(0.0);
-    color(2) = FP(0.5);
-    draw_disk(emission, c, 40, color, x, y);
 }
 
 YAKL_INLINE void model_D_emission(Fp3d emission, int x, int y) {
@@ -330,42 +226,22 @@ void init_state (State* state) {
                 for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
                     emission(x, y, i) = FP(0.0);
                 }
-
-                // model_original(emission, x, y);
-                // model_A(emission, x, y);
-                // model_B(emission, x, y);
-                LIGHT_MODEL(emission, x, y);
+                model_D_emission(emission, x, y);
             }
         );
     }
 
-#ifndef TRACE_OPAQUE_LIGHTS
     state->absorption = Fp3d("absorption_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
     {
         auto chi = state->absorption;
         parallel_for(
             SimpleBounds<2>(CANVAS_X, CANVAS_Y),
             YAKL_LAMBDA (int x, int y) {
-#ifndef ABSORPTION_MODEL
-                LIGHT_MODEL(chi, x, y);
-                for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-                    if (chi(x, y, i) == FP(0.0)) {
-                        chi(x, y, i) = FP(1e-10);
-                    } else if (chi(x, y, i) == FP(1e-6)) {
-                        chi(x, y, i) = FP(3.0);
-                    } else {
-                        chi(x, y, i) /= FP(2.0);
-                    }
-                }
-#else
-                ABSORPTION_MODEL(chi, x, y);
-#endif
+                model_D_absorption(chi, x, y);
             }
         );
 
     }
-#endif
-
     yakl::fence();
 }
 
@@ -493,44 +369,24 @@ void save_results(const FpConst5d& final_cascade) {
         SimpleBounds<3>(dims(0), dims(1), dims(2)),
         YAKL_LAMBDA (int x, int y, int ray_idx) {
             for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-#ifdef TRACE_OPAQUE_LIGHTS
-                fp64_copy(x, y, ray_idx, i)  = final_cascade(x, y, ray_idx, i);
-#else
                 fp64_copy(x, y, ray_idx, i) = 0.0;
                 for (int r = 0; r < NUM_AZ; ++r) {
                     fp64_copy(x, y, ray_idx, i)  += az_weights(r) * final_cascade(x, y, ray_idx, 2*i, r);
                 }
-#endif
             }
         }
     );
     yakl::fence();
     const auto out_dims = fp64_copy.get_dimensions();
 
-#ifdef HAVE_MPI
-    yakl::SimplePNetCDF nc;
-    nc.create("output.nc");
-    std::vector<MPI_Offset> starts(4, 0);
-    nc.create_dim("x", out_dims(0));
-    nc.create_dim("y", out_dims(1));
-    nc.create_dim("ray", out_dims(2));
-    nc.create_dim("col", out_dims(3));
-    nc.create_var<decltype(fp64_copy)::type>("image", {"x", "y", "ray", "col"});
-    nc.enddef();
-    nc.write_all(fp64_copy, "image", starts);
-    nc.close();
-#else
     yakl::SimpleNetCDF nc;
     nc.create("output.nc");
     nc.write(fp64_copy, "image", {"x", "y", "ray", "col"});
     nc.close();
-#endif
+    fmt::print("Saved to output.nc\n");
 }
 
 int main(int argc, char** argv) {
-#ifdef HAVE_MPI
-    MPI_Init(&argc, &argv);
-#endif
     yakl::init();
     {
         State state;
@@ -546,7 +402,4 @@ int main(int argc, char** argv) {
         save_results(state.cascades[0]);
     }
     yakl::finalize();
-#ifdef HAVE_MPI
-    MPI_Finalize();
-#endif
 }

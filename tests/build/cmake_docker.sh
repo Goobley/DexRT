@@ -13,5 +13,6 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DYAKL_CUDA_FLAGS="-O0 --ptxas-options=-v" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DMPI_INCLUDE_PATH="${MPI_INCLUDE_PATH}" \
-      -DLDFLAGS="" \
+      -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \
+      -DLDFLAGS="$(nc-config --libs)" \
       ..

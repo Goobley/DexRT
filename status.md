@@ -7,6 +7,7 @@ Features/ToDo
 - [x] Convert to 2.5D (@c808b28)
 - [x] Track down issues on top edge (@95994d0)
 - [ ] Compare with Lightweaver on simple case (FS only)
+- [ ] Add mipmapping for upper levels
 - [ ] Add branching/bilinear fix and compare
 - [ ] CRTAF parsing
 - [ ] LTE populations

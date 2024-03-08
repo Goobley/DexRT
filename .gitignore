@@ -1,3 +1,9 @@
+hdf5/*
+!hdf5/docker_setup.sh
+
+netcdf/*
+!netcdf/docker_setup.sh
+
 pnetcdf/*
 !pnetcdf/setup.sh
 !pnetcdf/docker_setup.sh
@@ -12,3 +18,7 @@ tests/build/*
 !tests/build/cmake_docker.sh
 
 .vscode
+
+*.png
+*.npy
+*.nc
