@@ -425,8 +425,8 @@ void compute_cascade_i (
             fp_t v_uc_weight = FP(1.0) - v_bc_weight;
             int u_bc = yakl::max(upper_u_bc, 0);
             int v_bc = yakl::max(upper_v_bc, 0);
-            int u_uc = yakl::min(u_bc+1, (int)upper_dims(0));
-            int v_uc = yakl::min(v_bc+1, (int)upper_dims(1));
+            int u_uc = yakl::min(u_bc+1, (int)upper_dims(0)-1);
+            int v_uc = yakl::min(v_bc+1, (int)upper_dims(1)-1);
 
             fp_t angle = FP(2.0) * FP(M_PI) / num_rays * (ray_idx + FP(0.5));
             vec2 direction;
@@ -445,7 +445,6 @@ void compute_cascade_i (
                 auto sample = raymarch(emission, chi, start, direction, distance, az_rays);
                 decltype(sample) upper_sample(FP(0.0));
                 // NOTE(cmo): Sample upper cascade.
-                // if (cascade_idx != MAX_LEVEL && sample(NUM_COMPONENTS-1) > FP(0.0)) {
                 if (cascade_idx != MAX_LEVEL) {
                     for (
                         int upper_ray_idx = upper_ray_start_idx;

@@ -310,8 +310,8 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
 }
 
 YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> raymarch(
-    const Fp3d& domain, 
-    const Fp3d& chi, 
+    const FpConst3d& domain, 
+    const FpConst3d& chi, 
     vec2 ray_start, 
     vec2 direction, 
     fp_t distance,
