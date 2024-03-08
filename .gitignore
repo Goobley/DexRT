@@ -12,13 +12,17 @@ build/*
 !build/cmake_basic.sh
 !build/cmake_clean.sh
 !build/cmake_docker.sh
+!build/cmake_docker_nompi.sh
+!build/cmake_docker_nompi_cpu.sh
 
 tests/build/*
 !tests/build/cmake_clean.sh
 !tests/build/cmake_docker.sh
+!tests/build/cmake_docker_cpu.sh
 
 .vscode
 
 *.png
 *.npy
 *.nc
+*.code-workspace
