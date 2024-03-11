@@ -6,9 +6,9 @@ Features/ToDo
 - [x] Reformulate for flatland participating media (@c808b28)
 - [x] Convert to 2.5D (@c808b28)
 - [x] Track down issues on top edge (@95994d0)
-- [ ] Compare with Lightweaver on simple case (FS only)
-- [ ] Add mipmapping for upper levels
-- [ ] Add branching/bilinear fix and compare
+- [x] Compare with Lightweaver on simple case (FS only) (@7beb0fb)
+- [x] Add mipmapping for upper levels (@5f65d5c)
+- [x] Add branching/bilinear fix and compare (@5f65d5c)
 - [ ] CRTAF parsing
 - [ ] LTE populations
 - [ ] Line absorption profile
