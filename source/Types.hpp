@@ -25,11 +25,23 @@ typedef yakl::Array<fp_t, 5, yakl::memHost> Fp5dHost;
 typedef yakl::SArray<fp_t, 1, 2> vec2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
 
-#include <vector>
-struct State {
-    std::vector<Fp5d> cascades;
+struct MipmapState {
     Fp3d emission;
     Fp3d absorption;
+    std::vector<Fp3d> emission_mipmaps;
+    std::vector<Fp3d> absorption_mipmaps;
+    yakl::SArray<int, 1, MAX_LEVEL+1> cumulative_mipmap_factor;
+};
+
+struct CascadeRTState {
+    int mipmap_factor;
+    FpConst3d eta;
+    FpConst3d chi;
+};
+
+struct State {
+    std::vector<Fp5d> cascades;
+    MipmapState raymarch_state;
 };
 
 struct RayMarchState {

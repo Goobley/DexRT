@@ -181,11 +181,13 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> empty_hit() {
 }
 
 YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
-    const FpConst3d& domain, // eta in volumetric
+    // eta in volumetric
+    const FpConst3d& domain, 
     const FpConst3d& chi,
     vec2 ray_start, 
     vec2 ray_end,
-    yakl::SArray<fp_t, 1, NUM_AZ> az_rays
+    yakl::SArray<fp_t, 1, NUM_AZ> az_rays,
+    fp_t distance_scale = FP(1.0)
 ) {
     auto domain_dims = domain.get_dimensions();
     ivec2 domain_size;
@@ -212,18 +214,18 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
         auto sample_coord = s.curr_coord;
         if (sample_coord(0) < 0 || sample_coord(0) >= CANVAS_X) {
             auto hit = s.p0 + s.t * s.direction;
-            printf("out x <%d, %d>, (%f, %f), [%f,%f] -> [%f,%f]\n", 
-            sample_coord(0), sample_coord(1), hit(0), hit(1),
-            s.p0(0), s.p0(1), s.p1(0), s.p1(1)
-            );
+            // printf("out x <%d, %d>, (%f, %f), [%f,%f] -> [%f,%f]\n", 
+            // sample_coord(0), sample_coord(1), hit(0), hit(1),
+            // s.p0(0), s.p0(1), s.p1(0), s.p1(1)
+            // );
             break;
         }
         if (sample_coord(1) < 0 || sample_coord(1) >= CANVAS_Y) {
             auto hit = s.p0 + s.t * s.direction;
-            printf("out y <%d, %d>, (%f, %g), [%f,%f] -> [%f,%f]\n", 
-            sample_coord(0), sample_coord(1), hit(0), hit(1),
-            s.p0(0), s.p0(1), s.p1(0), s.p1(1)
-            );
+            // printf("out y <%d, %d>, (%f, %g), [%f,%f] -> [%f,%f]\n", 
+            // sample_coord(0), sample_coord(1), hit(0), hit(1),
+            // s.p0(0), s.p0(1), s.p1(0), s.p1(1)
+            // );
             break;
         }
 
@@ -284,7 +286,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
             }
 #else
         for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            fp_t tau = chi_sample(i) * s.dt;
+            fp_t tau = chi_sample(i) * s.dt * distance_scale;
             fp_t source_fn = sample(i) / chi_sample(i);
 
             for (int r = 0; r < NUM_AZ; ++r) {
@@ -293,9 +295,16 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
                 } else {
                     fp_t mu = az_rays(r);
                     fp_t tau_mu = tau / mu;
+                    fp_t edt, one_m_edt;
+                    if (tau_mu < 1e-2) {
+                        edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
+                        one_m_edt = -std::expm1(-tau_mu);
+                    } else {
+                        edt = std::exp(-tau_mu);
+                        one_m_edt = -std::expm1(-tau_mu);
+                    }
                     result(2*i+1, r) += tau_mu;
-                    fp_t edt = std::exp(-tau_mu);
-                    result(2*i, r) = result(2*i, r) * edt + source_fn * (FP(1.0) - edt);
+                    result(2*i, r) = result(2*i, r) * edt + source_fn * one_m_edt;
                 }
             }
 #endif
@@ -310,24 +319,37 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
 }
 
 YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> raymarch(
-    const FpConst3d& domain, 
-    const FpConst3d& chi, 
+    const CascadeRTState& state,
     vec2 ray_start, 
     vec2 direction, 
     fp_t distance,
     yakl::SArray<fp_t, 1, NUM_AZ> az_rays
 ) {
-    vec2 ray_end;
-    ray_end(0) = ray_start(0) + direction(0) * distance;
-    ray_end(1) = ray_start(1) + direction(1) * distance;
-#ifdef TRACE_OPAQUE_LIGHTS
-    return aw_raymarch(domain, chi, ray_start, ray_end);
-#else
     // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe
     // and go the other way, dropping out of the march early if we have
     // traversed sufficient optical depth.
-    return aw_raymarch(domain, chi, ray_end, ray_start, az_rays);
-#endif
+    if (USE_MIPMAPS) {
+        fp_t factor = (1 << state.mipmap_factor);
+        distance /= factor;
+        vec2 ray_end;
+        ray_start(0) = ray_start(0) / factor;
+        ray_start(1) = ray_start(1) / factor;
+        ray_end(0) = ray_start(0) + direction(0) * distance;
+        ray_end(1) = ray_start(1) + direction(1) * distance;
+
+        const FpConst3d& eta = state.eta;
+        const FpConst3d& chi = state.chi;
+        return aw_raymarch(eta, chi, ray_end, ray_start, az_rays, factor);
+
+    } else {
+        vec2 ray_end;
+        ray_end(0) = ray_start(0) + direction(0) * distance;
+        ray_end(1) = ray_start(1) + direction(1) * distance;
+
+        const FpConst3d& domain = state.eta;
+        const FpConst3d& chi = state.chi;
+        return aw_raymarch(domain, chi, ray_end, ray_start, az_rays);
+    }
 }
 
 #else

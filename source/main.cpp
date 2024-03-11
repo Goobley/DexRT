@@ -320,10 +320,11 @@ void init_state (State* state) {
         );
     }
 
-    state->emission = Fp3d("emission_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
+    auto& march_state = state->raymarch_state;
+    march_state.emission = Fp3d("emission_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
 
     {
-        auto emission = state->emission;
+        const auto& emission = march_state.emission;
         parallel_for(
             SimpleBounds<2>(CANVAS_X, CANVAS_Y),
             YAKL_LAMBDA (int x, int y) {
@@ -340,9 +341,9 @@ void init_state (State* state) {
     }
 
 #ifndef TRACE_OPAQUE_LIGHTS
-    state->absorption = Fp3d("absorption_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
+    march_state.absorption = Fp3d("absorption_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
     {
-        auto chi = state->absorption;
+        const auto& chi = march_state.absorption;
         parallel_for(
             SimpleBounds<2>(CANVAS_X, CANVAS_Y),
             YAKL_LAMBDA (int x, int y) {
@@ -367,22 +368,102 @@ void init_state (State* state) {
 #endif
 
     yakl::fence();
+
+    if (USE_MIPMAPS) {
+        march_state.emission_mipmaps = std::vector<Fp3d>(MAX_LEVEL+1);
+        auto& emission_mipmaps = march_state.emission_mipmaps;
+        march_state.absorption_mipmaps = std::vector<Fp3d>(MAX_LEVEL+1);
+        auto& absorption_mipmaps = march_state.absorption_mipmaps;
+        march_state.cumulative_mipmap_factor = 0;
+
+        auto& curr_em = march_state.emission;
+        auto& curr_ab = march_state.absorption;
+
+        for (int i = 0; i <= MAX_LEVEL; ++i) {
+            if (MIPMAP_FACTORS[i] == 0) {
+                emission_mipmaps[i] = curr_em;
+                absorption_mipmaps[i] = curr_ab;
+                if (i == 0) {
+                    march_state.cumulative_mipmap_factor(i) = 0;
+                } else {
+                    march_state.cumulative_mipmap_factor(i) = march_state.cumulative_mipmap_factor(i-1);
+                }
+            } else {
+                int factor = MIPMAP_FACTORS[i];
+                if (i == 0) {
+                    march_state.cumulative_mipmap_factor(i) = factor;
+                } else {
+                    march_state.cumulative_mipmap_factor(i) = march_state.cumulative_mipmap_factor(i-1) + factor;
+                }
+
+                auto dims = curr_em.get_dimensions();
+                Fp3d new_em = Fp3d("emission_mipmap", dims(0) / (1 << factor), dims(1) / (1 << factor), dims(2));
+                Fp3d new_ab = Fp3d("absorption_mipmap", dims(0) / (1 << factor), dims(1) / (1 << factor), dims(2));
+                auto new_dims = new_em.get_dimensions();
+
+                // NOTE(cmo): Very basic averaging approach
+                auto mipmap_arr = [=] (const FpConst3d& arr, const Fp3d& result) {
+                    return YAKL_LAMBDA (int x, int y) {
+                        fp_t weight = FP(1.0) / fp_t(1 << (2 * factor));
+                        int scale = (1 << factor);
+                        yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> temp(FP(0.0));
+                        for (int off_x = 0; off_x < scale; ++off_x) {
+                            for (int off_y = 0; off_y < scale; ++off_y) {
+                                for (int w = 0; w < NUM_WAVELENGTHS; ++w) {
+                                    temp(w) += weight * arr(x * scale + off_x, y * scale + off_y, w);
+                                }
+                            }
+                        }
+                        for (int w = 0; w < NUM_WAVELENGTHS; ++w) {
+                            result(x, y, w) = temp(w);
+                        }
+                    };
+                };
+
+                parallel_for(
+                    SimpleBounds<2>(new_dims(0), new_dims(1)),
+                    mipmap_arr(curr_em, new_em)
+                );
+                parallel_for(
+                    SimpleBounds<2>(new_dims(0), new_dims(1)),
+                    mipmap_arr(curr_ab, new_ab)
+                );
+                yakl::fence();
+
+                emission_mipmaps[i] = new_em;
+                absorption_mipmaps[i] = new_ab;
+
+                curr_em = new_em;
+                curr_ab = new_ab;
+            }
+        }
+    }
 }
 
 void compute_cascade_i (
     State* state,
     int cascade_idx
 ) {
-    const FpConst3d emission = state->emission;
-    const FpConst3d chi = state->absorption;
+    const auto march_state = state->raymarch_state;
     const auto& cascade_i = state->cascades[cascade_idx];
     FpConst5d cascade_ip = cascade_i;
     if (cascade_idx != MAX_LEVEL) {
         cascade_ip = state->cascades[cascade_idx + 1];
     }
     auto dims = cascade_i.get_dimensions();
-    auto edims = emission.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();
+
+    CascadeRTState rt_state;
+    if (USE_MIPMAPS) {
+        rt_state.eta = state->raymarch_state.emission_mipmaps[cascade_idx];
+        rt_state.chi = state->raymarch_state.absorption_mipmaps[cascade_idx];
+        rt_state.mipmap_factor = state->raymarch_state.cumulative_mipmap_factor(cascade_idx);
+    } else {
+        rt_state.eta = march_state.emission;
+        rt_state.chi = march_state.absorption;
+        rt_state.mipmap_factor = 0;
+    }
+    fmt::println("Cascade {}: Scale: {}", cascade_idx, rt_state.mipmap_factor);
 
     auto az_rays = get_az_rays();
 
@@ -444,7 +525,7 @@ void compute_cascade_i (
 
             if (BILINEAR_FIX) {
             } else {
-                auto sample = raymarch(emission, chi, start, direction, distance, az_rays);
+                auto sample = raymarch(rt_state, start, direction, distance, az_rays);
                 decltype(sample) upper_sample(FP(0.0));
                 // NOTE(cmo): Sample upper cascade.
                 if (cascade_idx != MAX_LEVEL) {
@@ -521,7 +602,7 @@ void save_results(const FpConst5d& final_cascade) {
     nc.close();
 #else
     yakl::SimpleNetCDF nc;
-    nc.create("output.nc");
+    nc.create("output.nc", NC_CLOBBER);
     nc.write(fp64_copy, "image", {"x", "y", "ray", "col"});
     nc.close();
 #endif
@@ -535,6 +616,12 @@ int main(int argc, char** argv) {
     {
         State state;
         init_state(&state);
+        if (USE_MIPMAPS) {
+            for (int i = 0; i < MAX_LEVEL+1; ++i) {
+                auto dims = state.raymarch_state.emission_mipmaps[i].get_dimensions();
+                fmt::println("Cascade {} mipmap: ({}, {}, {})", i, dims(0), dims(1), dims(2));
+            }
+        }
         auto dims = state.cascades[0].get_dimensions();
 
         for (int i = MAX_LEVEL; i >= 0; --i) {
