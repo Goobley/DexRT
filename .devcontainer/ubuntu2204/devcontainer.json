@@ -35,7 +35,5 @@
 	"updateRemoteUserUID": true,
 
 	"runArgs": [
-    "--gpus",
-    "all"
-]
+	]
 }

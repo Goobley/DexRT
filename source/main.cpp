@@ -58,8 +58,8 @@ YAKL_INLINE void model_original(Fp3d emission, int x, int y) {
 
 YAKL_INLINE void draw_disk(
     Fp3d emission,
-    vec2 centre, 
-    fp_t radius, 
+    vec2 centre,
+    fp_t radius,
     yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color,
     int x,
     int y
@@ -729,9 +729,9 @@ void compute_cascade_i_bilinear_fix (
             yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> u11_contrib, u21_contrib, u12_contrib, u22_contrib, upper_sample;
 
             auto trace_and_merge_with_upper = [&upper_sample, &rt_state, &az_rays, &cascade_ip](
-                vec2 start, 
+                vec2 start,
                 vec2 end,
-                int u, 
+                int u,
                 int v,
                 int upper_ray_idx,
                 decltype(upper_sample)& storage
