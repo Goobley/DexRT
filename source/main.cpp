@@ -271,6 +271,36 @@ YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
     draw_disk(chi, c, 40, color, x, y);
 }
 
+YAKL_INLINE void model_E_emission(const Fp3d& emission, int x, int y) {
+    int centre = int(CANVAS_X / 2);
+    vec2 c;
+    yakl::SArray<fp_t, 1, 3> color;
+    c(0) = centre;
+    c(1) = centre;
+    fp_t emission_scale = FP(4.0);
+    color(0) = emission_scale;
+    color(1) = FP(0.0);
+    color(2) = emission_scale;
+    draw_disk(emission, c, 40, color, x, y);
+}
+
+YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
+    int centre = int(CANVAS_X / 2);
+    vec2 c;
+    yakl::SArray<fp_t, 1, 3> color;
+    fp_t bg = FP(1e-10);
+    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+        chi(x, y, i) = bg;
+    }
+
+    c(0) = centre;
+    c(1) = centre;
+    color(0) = FP(1.0);
+    color(1) = FP(0.0);
+    color(2) = FP(1.0);
+    draw_disk(chi, c, 40, color, x, y);
+}
+
 yakl::SArray<fp_t, 1, NUM_AZ> get_az_rays() {
     yakl::SArray<fp_t, 1, NUM_AZ> az_rays;
     for (int r = 0; r < NUM_AZ; ++r) {
@@ -516,48 +546,64 @@ void compute_cascade_i (
             direction(0) = yakl::cos(angle);
             direction(1) = yakl::sin(angle);
             vec2 start;
-            start(0) = cx + prev_radius * direction(0);
-            start(1) = cy + prev_radius * direction(1);
+            vec2 end;
 
             int upper_ray_start_idx = ray_idx * (1 << CASCADE_BRANCHING_FACTOR);
             int num_rays_per_ray = 1 << CASCADE_BRANCHING_FACTOR;
             fp_t ray_weight = FP(1.0) / num_rays_per_ray;
 
-            if (BILINEAR_FIX) {
+            if (BRANCH_RAYS) {
+                int prev_idx = ray_idx / (1 << CASCADE_BRANCHING_FACTOR);
+                int prev_num_rays = 1;
+                if (cascade_idx != 0) {
+                    prev_num_rays = num_rays / (1 << CASCADE_BRANCHING_FACTOR);
+                }
+                fp_t prev_angle = FP(2.0) * FP(M_PI) / prev_num_rays * (prev_idx + FP(0.5));
+                vec2 prev_direction;
+                prev_direction(0) = yakl::cos(prev_angle);
+                prev_direction(1) = yakl::sin(prev_angle);
+                start(0) = cx + prev_radius * prev_direction(0);
+                start(1) = cy + prev_radius * prev_direction(1);
+                end(0) = cx + radius * direction(0);
+                end(1) = cy + radius * direction(1);
             } else {
-                auto sample = raymarch(rt_state, start, direction, distance, az_rays);
-                decltype(sample) upper_sample(FP(0.0));
-                // NOTE(cmo): Sample upper cascade.
-                if (cascade_idx != MAX_LEVEL) {
-                    for (
-                        int upper_ray_idx = upper_ray_start_idx;
-                        upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
-                        ++upper_ray_idx
-                    ) {
-                        for (int i = 0; i < NUM_COMPONENTS; ++i) {
-                            for (int r = 0; r < NUM_AZ; ++r) {
-                                if (az_rays(r) == FP(0.0)) {
-                                    // NOTE(cmo): Can't merge the in-out of page ray.
-                                    continue;
-                                }
-                                fp_t u_11 = cascade_ip(u_bc, v_bc, upper_ray_idx, i, r);
-                                fp_t u_21 = cascade_ip(u_uc, v_bc, upper_ray_idx, i, r);
-                                fp_t u_12 = cascade_ip(u_bc, v_uc, upper_ray_idx, i, r);
-                                fp_t u_22 = cascade_ip(u_uc, v_uc, upper_ray_idx, i, r);
-                                fp_t term = (
-                                    v_bc_weight * (u_bc_weight * u_11 + u_uc_weight * u_21) +
-                                    v_uc_weight * (u_bc_weight * u_12 + u_uc_weight * u_22)
-                                );
-                                upper_sample(i, r) += ray_weight * term;
+                start(0) = cx + prev_radius * direction(0);
+                start(1) = cy + prev_radius * direction(1);
+                end = start + direction * distance;
+            }
+
+            auto sample = raymarch(rt_state, start, end, az_rays);
+            decltype(sample) upper_sample(FP(0.0));
+            // NOTE(cmo): Sample upper cascade.
+            if (cascade_idx != MAX_LEVEL) {
+                for (
+                    int upper_ray_idx = upper_ray_start_idx;
+                    upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
+                    ++upper_ray_idx
+                ) {
+                    for (int i = 0; i < NUM_COMPONENTS; ++i) {
+                        for (int r = 0; r < NUM_AZ; ++r) {
+                            if (az_rays(r) == FP(0.0)) {
+                                // NOTE(cmo): Can't merge the in-out of page ray.
+                                continue;
                             }
+                            fp_t u_11 = cascade_ip(u_bc, v_bc, upper_ray_idx, i, r);
+                            fp_t u_21 = cascade_ip(u_uc, v_bc, upper_ray_idx, i, r);
+                            fp_t u_12 = cascade_ip(u_bc, v_uc, upper_ray_idx, i, r);
+                            fp_t u_22 = cascade_ip(u_uc, v_uc, upper_ray_idx, i, r);
+                            fp_t term = (
+                                v_bc_weight * (u_bc_weight * u_11 + u_uc_weight * u_21) +
+                                v_uc_weight * (u_bc_weight * u_12 + u_uc_weight * u_22)
+                            );
+                            upper_sample(i, r) += ray_weight * term;
                         }
                     }
                 }
-                auto merged = merge_intervals(sample, upper_sample, az_rays);
-                for (int i = 0; i < NUM_COMPONENTS; ++i) {
-                    for (int r = 0; r < NUM_AZ; ++r) {
-                        cascade_i(u, v, ray_idx, i, r) = merged(i, r);
-                    }
+            }
+            auto merged = merge_intervals(sample, upper_sample, az_rays);
+            for (int i = 0; i < NUM_COMPONENTS; ++i) {
+                for (int r = 0; r < NUM_AZ; ++r) {
+                    cascade_i(u, v, ray_idx, i, r) = merged(i, r);
                 }
             }
         }

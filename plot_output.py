@@ -2,7 +2,7 @@ import numpy as np
 import netCDF4
 import matplotlib.pyplot as plt
 
-PLOT_COMPARISON = True
+PLOT_COMPARISON = False
 
 if __name__ == "__main__":
     ds = netCDF4.Dataset("build/output.nc")
