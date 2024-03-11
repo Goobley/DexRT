@@ -5,6 +5,7 @@
 #include "Utils.hpp"
 #include "RayMarching.hpp"
 #include "RadianceIntervals.hpp"
+#include "CrtafParser.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else

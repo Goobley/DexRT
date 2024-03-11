@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.18)
 project(DexRT CXX)
 
+add_subdirectory(fmt)
+add_subdirectory(yaml-cpp)
+
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
     enable_language(CUDA)
 endif()
@@ -11,8 +14,6 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 84)
 endif()
 include_directories(YAKL)
-
-add_subdirectory(fmt)
 
 add_executable(dexrt "source/main.cpp")
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
@@ -26,6 +27,7 @@ target_include_directories(dexrt SYSTEM PUBLIC
 )
 target_link_libraries(dexrt "${LDFLAGS}")
 target_link_libraries(dexrt fmt::fmt)
+target_link_libraries(dexrt yaml-cpp::yaml-cpp)
 set_target_properties(dexrt PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED YES
