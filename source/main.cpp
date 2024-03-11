@@ -370,7 +370,6 @@ void init_state (State* state) {
         );
     }
 
-#ifndef TRACE_OPAQUE_LIGHTS
     march_state.absorption = Fp3d("absorption_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
     {
         const auto& chi = march_state.absorption;
@@ -395,7 +394,6 @@ void init_state (State* state) {
         );
 
     }
-#endif
 
     yakl::fence();
 
@@ -620,14 +618,10 @@ void save_results(const FpConst5d& final_cascade) {
         SimpleBounds<3>(dims(0), dims(1), dims(2)),
         YAKL_LAMBDA (int x, int y, int ray_idx) {
             for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-#ifdef TRACE_OPAQUE_LIGHTS
-                fp64_copy(x, y, ray_idx, i)  = final_cascade(x, y, ray_idx, i);
-#else
                 fp64_copy(x, y, ray_idx, i) = 0.0;
                 for (int r = 0; r < NUM_AZ; ++r) {
                     fp64_copy(x, y, ray_idx, i)  += az_weights(r) * final_cascade(x, y, ray_idx, 2*i, r);
                 }
-#endif
             }
         }
     );

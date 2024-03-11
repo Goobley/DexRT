@@ -168,14 +168,7 @@ YAKL_INLINE std::optional<RayMarchState> RayMarch_new(vec2 start_pos, vec2 end_p
 
 YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> empty_hit() {
     yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> result;
-#ifdef TRACE_OPAQUE_LIGHTS
-    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-        result(i) = FP(0.0);
-        result(NUM_WAVELENGTHS + i) = FP(1.0);
-    }
-#else
     result = FP(0.0);
-#endif
     return result;
 
 }
@@ -202,9 +195,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
 
     yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> result = empty_hit();
     yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> sample;
-#ifndef TRACE_OPAQUE_LIGHTS
     yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> chi_sample;
-#endif
 #ifdef TRAPEZOIDAL_INTEGRATION
     yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> prev_chi = FP(-1.0);
     yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> prev_S = FP(-1.0);
@@ -232,23 +223,6 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
         for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             sample(i) = domain(sample_coord(0), sample_coord(1), i);
         }
-#ifdef TRACE_OPAQUE_LIGHTS
-        bool hits = false;
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            hits |= bool(sample(i) != FP(0.0));
-            if (hits) {
-                break;
-            }
-        }
-
-        if (hits) {
-            for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-                result(i) = sample(i);
-            }
-            result(NUM_COMPONENTS - 1) = FP(0.0);
-            return result;
-        }
-#else
         for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
             chi_sample(i) = chi(sample_coord(0), sample_coord(1), i);
         }
@@ -312,7 +286,6 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
             //     printf("tau %g, sfn %g (%g/%g) \n", tau, source_fn, sample(i), chi_sample(i));
             // }
         }
-#endif
     } while (next_intersection(&s));
 
     return result;

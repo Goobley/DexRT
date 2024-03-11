@@ -55,8 +55,6 @@ constexpr fp_t INCL_RAYS[NUM_AZ] = {FP(0.000000), FP(0.690212), FP(0.961045), FP
 constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.083333), FP(0.416667), FP(0.416667), FP(0.083333)};
 #endif
 
-// #define OLD_RAYMARCH 1
-// #define TRACE_OPAQUE_LIGHTS 1
 #define LIGHT_MODEL model_E_emission
 #define ABSORPTION_MODEL model_E_absorption
 
