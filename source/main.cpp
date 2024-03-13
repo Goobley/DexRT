@@ -278,7 +278,8 @@ YAKL_INLINE void model_E_emission(const Fp3d& emission, int x, int y) {
     yakl::SArray<fp_t, 1, 3> color;
     c(0) = centre;
     c(1) = centre;
-    fp_t emission_scale = FP(4.0);
+    fp_t emission_scale = FP(10.0) / FP(80.0);
+    // fp_t emission_scale = FP(40.0);
     color(0) = emission_scale;
     color(1) = FP(0.0);
     color(2) = emission_scale;
@@ -289,7 +290,8 @@ YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
     int centre = int(CANVAS_X / 2);
     vec2 c;
     yakl::SArray<fp_t, 1, 3> color;
-    fp_t bg = FP(1e-10);
+    // fp_t bg = FP(1e-10);
+    fp_t bg = FP(1e-20);
     for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
         chi(x, y, i) = bg;
     }
@@ -297,6 +299,7 @@ YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
     c(0) = centre;
     c(1) = centre;
     fp_t chi_scale = FP(1.0) / FP(80.0);
+    // fp_t chi_scale = FP(4.0);
     color(0) = chi_scale;
     color(1) = bg;
     color(2) = chi_scale;
@@ -384,7 +387,7 @@ void init_state (State* state) {
                     if (chi(x, y, i) == FP(0.0)) {
                         chi(x, y, i) = FP(1e-10);
                     } else if (chi(x, y, i) == FP(1e-6)) {
-                        chi(x, y, i) = FP(3.0);
+                        chi(x, y, i) = FP(3.0)true;
                     } else {
                         chi(x, y, i) /= FP(2.0);
                     }
@@ -432,15 +435,17 @@ void init_state (State* state) {
                 auto new_dims = new_em.get_dimensions();
 
                 // NOTE(cmo): Very basic averaging approach
-                Mipmapper mipmap_eta(curr_em, new_em, factor);
-                Mipmapper mipmap_chi(curr_ab, new_ab, factor);
                 parallel_for(
                     SimpleBounds<2>(new_dims(0), new_dims(1)),
-                    mipmap_eta
+                    YAKL_LAMBDA (int x, int y) {
+                        mipmap_arr(curr_em, new_em, factor, x, y);
+                    }
                 );
                 parallel_for(
                     SimpleBounds<2>(new_dims(0), new_dims(1)),
-                    mipmap_chi
+                    YAKL_LAMBDA (int x, int y) {
+                        mipmap_arr(curr_ab, new_ab, factor, x, y);
+                    }
                 );
                 yakl::fence();
 
