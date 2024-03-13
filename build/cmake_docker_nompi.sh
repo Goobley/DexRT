@@ -12,7 +12,8 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DCMAKE_Fortran_COMPILER=gfortran \
       -DYAKL_ARCH="CUDA"              \
       -DYAKL_PROFILE="On"             \
-      -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v" \
+      -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v --generate-line-info" \
+      -DDEXRT_CUDA_ARCHITECTURES="86" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DMPI_INCLUDE_PATH="${MPI_INCLUDE_PATH}" \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \

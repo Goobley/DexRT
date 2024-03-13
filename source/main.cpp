@@ -431,13 +431,15 @@ void init_state (State* state) {
                 auto new_dims = new_em.get_dimensions();
 
                 // NOTE(cmo): Very basic averaging approach
+                Mipmapper mipmap_eta(curr_em, new_em, factor);
+                Mipmapper mipmap_chi(curr_ab, new_ab, factor);
                 parallel_for(
                     SimpleBounds<2>(new_dims(0), new_dims(1)),
-                    mipmap_arr(curr_em, new_em, factor)
+                    mipmap_eta
                 );
                 parallel_for(
                     SimpleBounds<2>(new_dims(0), new_dims(1)),
-                    mipmap_arr(curr_ab, new_ab, factor)
+                    mipmap_chi
                 );
                 yakl::fence();
 

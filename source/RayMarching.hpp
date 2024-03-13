@@ -41,8 +41,8 @@ YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box)
     }
 
     if (
-        clip_t_start < 0 || 
-        clip_t_end < 0 ||  
+        clip_t_start < 0 ||
+        clip_t_end < 0 ||
         clip_t_start + clip_t_end >= FP(1.0)
     ) {
         // NOTE(cmo): We've moved forwards from start enough, and back from end
@@ -54,12 +54,12 @@ YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box)
 
     if (clip_t_start > FP(0.0)) {
         for (int d = 0; d < NUM_DIM; ++d) {
-            result.start(d) += clip_t_start * length(d); 
+            result.start(d) += clip_t_start * length(d);
         }
     }
     if (clip_t_end > FP(0.0)) {
         for (int d = 0; d < NUM_DIM; ++d) {
-            result.end(d) -= clip_t_end * length(d); 
+            result.end(d) -= clip_t_end * length(d);
         }
     }
     // NOTE(cmo): Catch precision errors with a clamp -- without this we will
@@ -126,7 +126,7 @@ YAKL_INLINE std::optional<RayMarchState> RayMarch_new(vec2 start_pos, vec2 end_p
 
     start_pos = clipped->start;
     end_pos = clipped->end;
-    
+
     RayMarchState r{};
     r.p0 = start_pos;
     r.p1 = end_pos;
@@ -175,9 +175,9 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> empty_hit() {
 
 YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
     // eta in volumetric
-    const FpConst3d& domain, 
+    const FpConst3d& domain,
     const FpConst3d& chi,
-    vec2 ray_start, 
+    vec2 ray_start,
     vec2 ray_end,
     yakl::SArray<fp_t, 1, NUM_AZ> az_rays,
     fp_t distance_scale = FP(1.0)
@@ -203,20 +203,25 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
 
     do {
         auto sample_coord = s.curr_coord;
+
         if (sample_coord(0) < 0 || sample_coord(0) >= CANVAS_X) {
             auto hit = s.p0 + s.t * s.direction;
-            printf("out x <%d, %d>, (%f, %f), [%f,%f] -> [%f,%f]\n", 
-            sample_coord(0), sample_coord(1), hit(0), hit(1),
-            s.p0(0), s.p0(1), s.p1(0), s.p1(1)
-            );
+            if (false) {
+                printf("out x <%d, %d>, (%f, %f), [%f,%f] -> [%f,%f]\n",
+                sample_coord(0), sample_coord(1), hit(0), hit(1),
+                s.p0(0), s.p0(1), s.p1(0), s.p1(1)
+                );
+            }
             break;
         }
         if (sample_coord(1) < 0 || sample_coord(1) >= CANVAS_Y) {
             auto hit = s.p0 + s.t * s.direction;
-            printf("out y <%d, %d>, (%f, %g), [%f,%f] -> [%f,%f]\n", 
-            sample_coord(0), sample_coord(1), hit(0), hit(1),
-            s.p0(0), s.p0(1), s.p1(0), s.p1(1)
-            );
+            if (false) {
+                printf("out y <%d, %d>, (%f, %g), [%f,%f] -> [%f,%f]\n",
+                sample_coord(0), sample_coord(1), hit(0), hit(1),
+                s.p0(0), s.p0(1), s.p1(0), s.p1(1)
+                );
+            }
             break;
         }
 
@@ -270,7 +275,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
                     fp_t mu = az_rays(r);
                     fp_t tau_mu = tau / mu;
                     fp_t edt, one_m_edt;
-                    if (tau_mu < 1e-2) {
+                    if (tau_mu < FP(1e-2)) {
                         edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
                         one_m_edt = -std::expm1(-tau_mu);
                     } else {
@@ -293,8 +298,8 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
 
 YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> raymarch(
     const CascadeRTState& state,
-    vec2 ray_start, 
-    vec2 ray_end, 
+    vec2 ray_start,
+    vec2 ray_end,
     yakl::SArray<fp_t, 1, NUM_AZ> az_rays
 ) {
     // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe

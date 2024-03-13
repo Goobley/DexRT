@@ -29,3 +29,4 @@ USER devcontainer
 WORKDIR /src/conda
 COPY miniconda/env_setup.sh .
 RUN [ "/bin/bash", "env_setup.sh" ]
+ENV HDF5_USE_FILE_LOCKING=FALSE

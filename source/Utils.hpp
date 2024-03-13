@@ -42,8 +42,21 @@ YAKL_INLINE constexpr auto cube(T t) -> decltype(t * t * t) {
     return t * t * t;
 }
 
-auto mipmap_arr(const FpConst3d& arr, const Fp3d& result, int factor) {
-    return YAKL_LAMBDA (int x, int y) {
+struct Mipmapper {
+    const FpConst3d& arr;
+    const Fp3d& result;
+    int factor;
+
+    Mipmapper(
+        const FpConst3d& array,
+        const Fp3d& result_storage,
+        int mip_factor
+    ) : arr(array),
+        result(result_storage),
+        factor(mip_factor)
+    {}
+
+    YAKL_INLINE void operator()(int x, int y) {
         fp_t weight = FP(1.0) / fp_t(1 << (2 * factor));
         int scale = (1 << factor);
         yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> temp(FP(0.0));
@@ -57,9 +70,8 @@ auto mipmap_arr(const FpConst3d& arr, const Fp3d& result, int factor) {
         for (int w = 0; w < NUM_WAVELENGTHS; ++w) {
             result(x, y, w) = temp(w);
         }
-    };
+    }
 };
-
 
 #else
 #endif
