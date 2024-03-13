@@ -27,7 +27,7 @@ constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e8);
 constexpr bool BRANCH_RAYS = false;
 constexpr bool BILINEAR_FIX = false;
 
-constexpr bool USE_MIPMAPS = true;
+constexpr bool USE_MIPMAPS = false;
 constexpr int MIPMAP_FACTORS[MAX_LEVEL+1] = {0, 0, 1, 1, 1};
 
 constexpr int NUM_WAVELENGTHS = 3;

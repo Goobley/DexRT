@@ -431,31 +431,13 @@ void init_state (State* state) {
                 auto new_dims = new_em.get_dimensions();
 
                 // NOTE(cmo): Very basic averaging approach
-                auto mipmap_arr = [=] (const FpConst3d& arr, const Fp3d& result) {
-                    return YAKL_LAMBDA (int x, int y) {
-                        fp_t weight = FP(1.0) / fp_t(1 << (2 * factor));
-                        int scale = (1 << factor);
-                        yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> temp(FP(0.0));
-                        for (int off_x = 0; off_x < scale; ++off_x) {
-                            for (int off_y = 0; off_y < scale; ++off_y) {
-                                for (int w = 0; w < NUM_WAVELENGTHS; ++w) {
-                                    temp(w) += weight * arr(x * scale + off_x, y * scale + off_y, w);
-                                }
-                            }
-                        }
-                        for (int w = 0; w < NUM_WAVELENGTHS; ++w) {
-                            result(x, y, w) = temp(w);
-                        }
-                    };
-                };
-
                 parallel_for(
                     SimpleBounds<2>(new_dims(0), new_dims(1)),
-                    mipmap_arr(curr_em, new_em)
+                    mipmap_arr(curr_em, new_em, factor)
                 );
                 parallel_for(
                     SimpleBounds<2>(new_dims(0), new_dims(1)),
-                    mipmap_arr(curr_ab, new_ab)
+                    mipmap_arr(curr_ab, new_ab, factor)
                 );
                 yakl::fence();
 
