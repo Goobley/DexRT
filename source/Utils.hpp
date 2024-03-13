@@ -56,7 +56,7 @@ struct Mipmapper {
         factor(mip_factor)
     {}
 
-    YAKL_INLINE void operator()(int x, int y) {
+    YAKL_INLINE void operator()(int x, int y) const {
         fp_t weight = FP(1.0) / fp_t(1 << (2 * factor));
         int scale = (1 << factor);
         yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> temp(FP(0.0));

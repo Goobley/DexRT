@@ -296,9 +296,10 @@ YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
 
     c(0) = centre;
     c(1) = centre;
-    color(0) = FP(1.0);
-    color(1) = FP(0.0);
-    color(2) = FP(1.0);
+    fp_t chi_scale = FP(1.0) / FP(80.0);
+    color(0) = chi_scale;
+    color(1) = bg;
+    color(2) = chi_scale;
     draw_disk(chi, c, 40, color, x, y);
 }
 
