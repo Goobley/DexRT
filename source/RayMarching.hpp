@@ -6,12 +6,13 @@
 
 using yakl::intrinsics::minloc;
 
+template <int NumDim = NUM_DIM>
 YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box) {
     RayStartEnd result(ray);
-    yakl::SArray<fp_t, 1, NUM_DIM> length;
+    yakl::SArray<fp_t, 1, NumDim> length;
     fp_t clip_t_start = FP(0.0);
     fp_t clip_t_end = FP(0.0);
-    for (int d = 0; d < NUM_DIM; ++d) {
+    for (int d = 0; d < NumDim; ++d) {
         length(d) = ray.end(d) - ray.start(d);
         int clip_idx = -1;
         if (ray.start(d) < box.dims[d](0)) {
@@ -81,7 +82,7 @@ YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box)
     return result;
 }
 
-YAKL_INLINE bool next_intersection(RayMarchState* state) {
+YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
     using namespace yakl::componentwise;
     using yakl::intrinsics::sum;
 
@@ -113,7 +114,7 @@ YAKL_INLINE bool next_intersection(RayMarchState* state) {
     return new_t <= s.max_t;
 }
 
-YAKL_INLINE std::optional<RayMarchState> RayMarch_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
+YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
     Box box;
     for (int d = 0; d < NUM_DIM; ++d) {
         box.dims[d](0) = FP(0.0);
@@ -127,7 +128,7 @@ YAKL_INLINE std::optional<RayMarchState> RayMarch_new(vec2 start_pos, vec2 end_p
     start_pos = clipped->start;
     end_pos = clipped->end;
 
-    RayMarchState r{};
+    RayMarchState2d r{};
     r.p0 = start_pos;
     r.p1 = end_pos;
 
@@ -173,33 +174,30 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> empty_hit() {
 
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
+template <int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     // eta in volumetric
     const FpConst3d& domain,
     const FpConst3d& chi,
     vec2 ray_start,
     vec2 ray_end,
-    yakl::SArray<fp_t, 1, NUM_AZ> az_rays,
+    yakl::SArray<fp_t, 1, NumAz> az_rays,
     fp_t distance_scale = FP(1.0)
 ) {
     auto domain_dims = domain.get_dimensions();
     ivec2 domain_size;
     domain_size(0) = domain_dims(0);
     domain_size(1) = domain_dims(1);
-    auto marcher = RayMarch_new(ray_start, ray_end, domain_size);
+    auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size);
     if (!marcher) {
         return empty_hit();
     }
 
-    RayMarchState s = *marcher;
+    RayMarchState2d s = *marcher;
 
-    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> result = empty_hit();
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> sample;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> chi_sample;
-#ifdef TRAPEZOIDAL_INTEGRATION
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> prev_chi = FP(-1.0);
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> prev_S = FP(-1.0);
-#endif
+    yakl::SArray<fp_t, 2, NumComponents, NumAz> result = empty_hit();
+    yakl::SArray<fp_t, 1, NumWavelengths> sample;
+    yakl::SArray<fp_t, 1, NumWavelengths> chi_sample;
 
     do {
         auto sample_coord = s.curr_coord;
@@ -225,46 +223,14 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
             break;
         }
 
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+        for (int i = 0; i < NumWavelengths; ++i) {
             sample(i) = domain(sample_coord(0), sample_coord(1), i);
         }
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+        for (int i = 0; i < NumWavelengths; ++i) {
             chi_sample(i) = chi(sample_coord(0), sample_coord(1), i);
         }
 
-#ifdef TRAPEZOIDAL_INTEGRATION
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            if (prev_chi(i) == FP(-1.0)) {
-                prev_chi(i) = chi_sample(i);
-            }
-            fp_t tau = FP(0.5) * (chi_sample(i) + prev_chi(i)) * s.ds;
-            fp_t source_fn = sample(i) / chi_sample(i);
-
-            if (prev_S(i) == FP(-1.0)) {
-                prev_S(i) = source_fn;
-            }
-
-            for (int r = 0; r < NUM_AZ; ++r) {
-                if (az_rays(r) == FP(0.0)) {
-                    result(2*i, r) = source_fn;
-                } else {
-                    fp_t mu = az_rays(r);
-                    fp_t tau_mu = tau / mu;
-                    result(2*i+1, r) += tau_mu;
-                    // if (tau_mu < FP(3.0)) {
-                    if (false) {
-                        fp_t half_dtau = FP(0.5) * tau_mu;
-                        fp_t I = result(2*i, r);
-                        I = (I * (FP(1.0) - half_dtau) + half_dtau * (prev_S(i) + source_fn)) / (FP(1.0) + half_dtau);
-                        result(2*i, r) = I;
-                    } else {
-                        fp_t edt = std::exp(-tau_mu);
-                        result(2*i, r) = result(2*i, r) * edt + source_fn * (FP(1.0) - edt);
-                    }
-                }
-            }
-#else
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+        for (int i = 0; i < NumWavelengths; ++i) {
             fp_t tau = chi_sample(i) * s.dt * distance_scale;
             fp_t source_fn = sample(i) / chi_sample(i);
 
@@ -286,26 +252,23 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> aw_raymarch(
                     result(2*i, r) = result(2*i, r) * edt + source_fn * one_m_edt;
                 }
             }
-#endif
-            // if (sample_coord(0) == int(CANVAS_X / 2) && sample_coord(1) == int(CANVAS_X / 2) + 400) {
-            //     printf("tau %g, sfn %g (%g/%g) \n", tau, source_fn, sample(i), chi_sample(i));
-            // }
         }
     } while (next_intersection(&s));
 
     return result;
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> raymarch(
+template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     const CascadeRTState& state,
     vec2 ray_start,
     vec2 ray_end,
-    yakl::SArray<fp_t, 1, NUM_AZ> az_rays
+    const yakl::SArray<fp_t, 1, NumAz>& az_rays
 ) {
     // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe
     // and go the other way, dropping out of the march early if we have
     // traversed sufficient optical depth.
-    if (USE_MIPMAPS) {
+    if constexpr (UseMipmaps) {
         fp_t factor = (1 << state.mipmap_factor);
         ray_start(0) = ray_start(0) / factor;
         ray_start(1) = ray_start(1) / factor;
@@ -314,12 +277,12 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> raymarch(
 
         const FpConst3d& eta = state.eta;
         const FpConst3d& chi = state.chi;
-        return aw_raymarch(eta, chi, ray_end, ray_start, az_rays, factor);
+        return dda_raymarch_2d<NumWavelengths, NumAz, NumComponents>(eta, chi, ray_end, ray_start, az_rays, factor);
 
     } else {
         const FpConst3d& domain = state.eta;
         const FpConst3d& chi = state.chi;
-        return aw_raymarch(domain, chi, ray_end, ray_start, az_rays);
+        return dda_raymarch_2d<NumWavelengths, NumAz, NumComponents>(domain, chi, ray_end, ray_start, az_rays);
     }
 }
 

@@ -147,7 +147,7 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     end(1) = FP(10.23);
 
     // NOTE(cmo): Test cases from python impl verified by hand
-    auto marcher = RayMarch_new(start, end, domain_size).value();
+    auto marcher = RayMarch2d_new(start, end, domain_size).value();
     REQUIRE_THAT( marcher.dt, WithinAbs(FP(0.504451), FP(1e-4)) );
     REQUIRE( marcher.curr_coord(0) == 2 );
     REQUIRE( marcher.curr_coord(1) == 3 );
@@ -189,7 +189,7 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     start(1) = FP(3.085815);
     end(0) = FP(0.5);
     end(1) = FP(4.5);
-    marcher = RayMarch_new(start, end, domain_size).value();
+    marcher = RayMarch2d_new(start, end, domain_size).value();
     REQUIRE_THAT( marcher.dt, WithinAbs(FP(1.2928661), FP(1e-4)) );
     REQUIRE( marcher.curr_coord(0) == 1 );
     REQUIRE( marcher.curr_coord(1) == 3 );
@@ -207,7 +207,7 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     start(1) = FP(3.1);
     end(0) = FP(4.8);
     end(1) = FP(5.8);
-    marcher = RayMarch_new(start, end, domain_size).value();
+    marcher = RayMarch2d_new(start, end, domain_size).value();
     REQUIRE_THAT( marcher.dt, WithinAbs(FP(1.27279236), FP(1e-4)) );
     REQUIRE( marcher.curr_coord(0) == 2 );
     REQUIRE( marcher.curr_coord(1) == 3 );
@@ -233,7 +233,7 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     start(1) = FP(18.4);
     end(0) = FP(21.0);
     end(1) = FP(2342.0);
-    auto maybe = RayMarch_new(start, end, domain_size);
+    auto maybe = RayMarch2d_new(start, end, domain_size);
     REQUIRE( !maybe );
 }
 
@@ -283,7 +283,7 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
             ray_end(0) = FP(1024.0);
             ray_end(1) = FP(512.0);
 
-            auto result = raymarch(rt_state, ray_start, ray_end, az_rays);
+            auto result = raymarch_2d(rt_state, ray_start, ray_end, az_rays);
             intensity_full_res = result(0, 0);
         }
     );
@@ -323,7 +323,7 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
             ray_end(0) = FP(64.0);
             ray_end(1) = FP(32.0);
 
-            auto result = raymarch(rt_state, ray_start, ray_end, az_rays);
+            auto result = raymarch_2d(rt_state, ray_start, ray_end, az_rays);
             intensity_mipped = result(0, 0);
         }
     );

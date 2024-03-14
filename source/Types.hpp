@@ -44,7 +44,7 @@ struct State {
     MipmapState raymarch_state;
 };
 
-struct RayMarchState {
+struct RayMarchState2d {
     // Start pos
     vec2 p0;
     // end pos
@@ -73,8 +73,8 @@ struct RayMarchState {
 };
 
 struct RayStartEnd {
-    vec2 start;
-    vec2 end;
+    yakl::SArray<fp_t, 1, NUM_DIM> start;
+    yakl::SArray<fp_t, 1, NUM_DIM> end;
 };
 
 struct Box {

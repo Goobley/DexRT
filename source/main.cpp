@@ -306,17 +306,19 @@ YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
     draw_disk(chi, c, 40, color, x, y);
 }
 
-yakl::SArray<fp_t, 1, NUM_AZ> get_az_rays() {
-    yakl::SArray<fp_t, 1, NUM_AZ> az_rays;
-    for (int r = 0; r < NUM_AZ; ++r) {
+template <int NumAz=NUM_AZ>
+yakl::SArray<fp_t, 1, NumAz> get_az_rays() {
+    yakl::SArray<fp_t, 1, NumAz> az_rays;
+    for (int r = 0; r < NumAz; ++r) {
         az_rays(r) = INCL_RAYS[r];
     }
     return az_rays;
 }
 
-yakl::SArray<fp_t, 1, NUM_AZ> get_az_weights() {
-    yakl::SArray<fp_t, 1, NUM_AZ> az_weights;
-    for (int r = 0; r < NUM_AZ; ++r) {
+template <int NumAz=NUM_AZ>
+yakl::SArray<fp_t, 1, NumAz> get_az_weights() {
+    yakl::SArray<fp_t, 1, NumAz> az_weights;
+    for (int r = 0; r < NumAz; ++r) {
         az_weights(r) = AZ_WEIGHTS[r];
     }
     return az_weights;
@@ -459,6 +461,7 @@ void init_state (State* state) {
     }
 }
 
+template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 void compute_cascade_i (
     State* state,
     int cascade_idx
@@ -473,7 +476,7 @@ void compute_cascade_i (
     auto upper_dims = cascade_ip.get_dimensions();
 
     CascadeRTState rt_state;
-    if (USE_MIPMAPS) {
+    if constexpr (UseMipmaps) {
         rt_state.eta = state->raymarch_state.emission_mipmaps[cascade_idx];
         rt_state.chi = state->raymarch_state.absorption_mipmaps[cascade_idx];
         rt_state.mipmap_factor = state->raymarch_state.cumulative_mipmap_factor(cascade_idx);
@@ -561,7 +564,7 @@ void compute_cascade_i (
                 end = start + direction * distance;
             }
 
-            auto sample = raymarch(rt_state, start, end, az_rays);
+            auto sample = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(rt_state, start, end, az_rays);
             decltype(sample) upper_sample(FP(0.0));
             // NOTE(cmo): Sample upper cascade.
             if (cascade_idx != MAX_LEVEL) {
@@ -600,6 +603,7 @@ void compute_cascade_i (
     yakl::timer_stop(cascade_name.c_str());
 }
 
+template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 void compute_cascade_i_bilinear_fix (
     State* state,
     int cascade_idx
@@ -618,7 +622,7 @@ void compute_cascade_i_bilinear_fix (
     auto upper_dims = cascade_ip.get_dimensions();
 
     CascadeRTState rt_state;
-    if (USE_MIPMAPS) {
+    if constexpr (UseMipmaps) {
         rt_state.eta = state->raymarch_state.emission_mipmaps[cascade_idx];
         rt_state.chi = state->raymarch_state.absorption_mipmaps[cascade_idx];
         rt_state.mipmap_factor = state->raymarch_state.cumulative_mipmap_factor(cascade_idx);
@@ -726,7 +730,7 @@ void compute_cascade_i_bilinear_fix (
                 int upper_ray_idx,
                 decltype(upper_sample)& storage
             ) {
-                storage = raymarch(rt_state, start, end, az_rays);
+                storage = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(rt_state, start, end, az_rays);
                 for (int i = 0; i < NUM_COMPONENTS; ++i) {
                     for (int r = 0; r < NUM_AZ; ++r) {
                         upper_sample(i, r) = cascade_ip(u, v, upper_ray_idx, i, r);
