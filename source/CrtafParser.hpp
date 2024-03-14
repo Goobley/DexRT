@@ -5,31 +5,44 @@
 #include <string>
 #include <yaml-cpp/yaml.h>
 #include <vector>
-
-inline std::vector<char> read_entire_file(const std::string& path) {
-    FILE* f = fopen(path.c_str(), "r");
-    std::vector<char> result;
-    if (!f) {
-        return result;
-    }
-
-    fseek(f, 0, SEEK_END);
-    int length = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    result.resize(length + 1);
-
-    int num_read = fread(result.data(), length, 1, f);
-    if (num_read != 1) {
-        return result;
-    }
-    result[length] = '\0';
-    fclose(f);
-    return result;
-}
+#include "Types.hpp"
 
 inline YAML::Node parse_crtaf_model(const std::string& path) {
-    // auto yaml_buf = read_entire_file(path);
     YAML::Node file = YAML::LoadFile(path);
+
+    if (!file["crtaf_meta"]) {
+        throw std::runtime_error(fmt::format("Did not find `crtaf_meta` mapping in {}, is this a model atom?", path));
+    }
+
+    if (file["crtaf_meta"]["level"].as<std::string>() != "simplified") {
+        throw std::runtime_error("Can only parse \"simplified\" models");
+    }
+
+    ModelAtom model;
+    auto elem = file["element"];
+    model.element.symbol = elem["symbol"].as<std::string>();
+    model.element.mass = elem["atomic_mass"].as<fp_t>();
+    model.element.abundance = elem["abundance"].as<fp_t>();
+    model.element.Z = elem["Z"].as<int>();
+
+    assert(file["levels"].IsMap());
+    int num_levels = file["levels"].size();
+    model.levels.reserve(num_levels);
+    for (const auto l : file["levels"]) {
+        AtomicLevel new_level;
+        new_level.energy = l["energy_eV"].as<fp_t>();
+        new_level.g = l["g"].as<int>();
+        new_level.stage = l["stage"].as<int>();
+        if (l["label"]) {
+            new_level.label = l["label"].as<std::string>();
+        }
+        // TODO(cmo): Need to get the key here.
+    }
+
+    
+
+
+
     return file;
 }
 

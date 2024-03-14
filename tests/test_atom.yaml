@@ -1,0 +1,325 @@
+crtaf_meta:
+  version: v0.1.0
+  level: simplified
+  extensions: []
+  notes: ''
+element:
+  symbol: H
+  atomic_mass: 1.007975
+  abundance: 12.0
+  Z: 1
+levels:
+  i_1:
+    energy:
+      unit: 1 / cm
+      value: 0.0
+    g: 2
+    stage: 1
+    label: H I 1S 2SE
+    J:
+      numerator: 1
+      denominator: 2
+    L: 0
+    S:
+      numerator: 1
+      denominator: 2
+    energy_eV:
+      unit: eV
+      value: 0.0
+  i_2:
+    energy:
+      unit: 1 / cm
+      value: 82258.211
+    g: 8
+    stage: 1
+    label: H I 2P 2PO
+    J:
+      numerator: 7
+      denominator: 2
+    L: 1
+    S:
+      numerator: 1
+      denominator: 2
+    energy_eV:
+      unit: eV
+      value: 10.198718355384056
+  i_3:
+    energy:
+      unit: 1 / cm
+      value: 97491.219
+    g: 18
+    stage: 1
+    label: H I 3D 2DE
+    J:
+      numerator: 17
+      denominator: 2
+    L: 2
+    S:
+      numerator: 1
+      denominator: 2
+    energy_eV:
+      unit: eV
+      value: 12.087370641990585
+  ii_1:
+    energy:
+      unit: 1 / cm
+      value: 109677.617
+    g: 1
+    stage: 2
+    label: H II
+    energy_eV:
+      unit: eV
+      value: 13.598291429808539
+lines:
+- type: PRD-Voigt
+  transition: [i_2, i_1]
+  f_value: 0.4162
+  broadening:
+  - {type: Natural, elastic: false, value: {unit: 1 / s, value: 470000000.0}}
+  - {type: Scaled_Exponents, elastic: true, scaling: 1.5837482337434034e-15, temperature_exponent: 0.3,
+    hydrogen_exponent: 1.0, electron_exponent: 0.0}
+  - {type: Scaled_Exponents, elastic: true, scaling: 2.662620428386389e-13, temperature_exponent: 0.16666666666666666,
+    hydrogen_exponent: 0.0, electron_exponent: 1.0}
+  - {type: Scaled_Exponents, elastic: true, scaling: 0.0006171721599830221, temperature_exponent: 0.0,
+    hydrogen_exponent: 0.0, electron_exponent: 0.6666666666666666}
+  wavelength_grid:
+    type: Linear
+    n_lambda: 101
+    delta_lambda:
+      unit: nm
+      value: 0.01
+  Aji:
+    unit: 1 / s
+    value: 7513855080.129925
+  Bji:
+    unit: m2 / (J s)
+    value: 33979603476815.664
+  Bji_wavelength:
+    unit: m3 / J
+    value: 1.6750936168200494e-09
+  Bij:
+    unit: m2 / (J s)
+    value: 8494900869203.916
+  Bij_wavelength:
+    unit: m3 / J
+    value: 4.1877340420501234e-10
+  lambda0:
+    unit: nm
+    value: 121.56841096386108
+- type: Voigt
+  transition: [i_3, i_1]
+  f_value: 0.0791
+  broadening:
+  - {type: Natural, elastic: false, value: {unit: 1 / s, value: 99800000.0}}
+  - {type: Scaled_Exponents, elastic: true, scaling: 3.0937539490410914e-15, temperature_exponent: 0.3,
+    hydrogen_exponent: 1.0, electron_exponent: 0.0}
+  - {type: Scaled_Exponents, elastic: true, scaling: 1.3169563457181103e-12, temperature_exponent: 0.16666666666666666,
+    hydrogen_exponent: 0.0, electron_exponent: 1.0}
+  - {type: Scaled_Exponents, elastic: true, scaling: 0.002563539605329271, temperature_exponent: 0.0,
+    hydrogen_exponent: 0.0, electron_exponent: 0.6666666666666666}
+  wavelength_grid:
+    type: Tabulated
+    wavelengths: {unit: nm, value: [-0.2566108763073463, -0.1680377835005209, -0.11015139751902452,
+        -0.0723107197182994, -0.047564650562154254, -0.031372471047044034, -0.020768013164324042,
+        -0.013813664688124828, -0.009243704618524183, -0.006231316511935154, -0.004236392847484007,
+        -0.0029061151291587075, -0.002010009078565909, -0.0013975202502858294, -0.0009703008321735755,
+        -0.0006641063435914749, -0.0004369698795073757, -0.00026147708306920107, -0.00011971986786845214,
+        0.0, 0.00011971986786845214, 0.00026147708306920107, 0.0004369698795073757,
+        0.0006641063435914749, 0.0009703008321735755, 0.0013975202502858294, 0.002010009078565909,
+        0.0029061151291587075, 0.004236392847484007, 0.006231316511935154, 0.009243704618524183,
+        0.013813664688124828, 0.020768013164324042, 0.031372471047044034, 0.047564650562154254,
+        0.0723107197182994, 0.11015139751902452, 0.1680377835005209, 0.2566108763073463]}
+  Aji:
+    unit: 1 / s
+    value: 4513279419.413459
+  Bji:
+    unit: m2 / (J s)
+    value: 12259958260013.863
+  Bji_wavelength:
+    unit: m3 / J
+    value: 4.3026625575289247e-10
+  Bij:
+    unit: m2 / (J s)
+    value: 1362217584445.9849
+  Bij_wavelength:
+    unit: m3 / J
+    value: 4.7807361750321384e-11
+  lambda0:
+    unit: nm
+    value: 102.57334047695103
+- type: Voigt
+  transition: [i_3, i_2]
+  f_value: 0.6407
+  broadening:
+  - {type: Natural, elastic: false, value: {unit: 1 / s, value: 99800000.0}}
+  - {type: Scaled_Exponents, elastic: true, scaling: 2.8471814786975374e-15, temperature_exponent: 0.3,
+    hydrogen_exponent: 1.0, electron_exponent: 0.0}
+  - {type: Scaled_Exponents, elastic: true, scaling: 1.2358799561233912e-12, temperature_exponent: 0.16666666666666666,
+    hydrogen_exponent: 0.0, electron_exponent: 1.0}
+  - {type: Scaled_Exponents, elastic: true, scaling: 0.00102862026663837, temperature_exponent: 0.0,
+    hydrogen_exponent: 0.0, electron_exponent: 0.6666666666666666}
+  wavelength_grid:
+    type: Tabulated
+    wavelengths: {unit: nm, value: [-1.3138472527480511, -0.8364260726336521, -0.5328836573066864,
+        -0.3398609689092203, -0.21708613427068463, -0.13896179864110825, -0.08921793237919043,
+        -0.057513081568521585, -0.03727407630941462, -0.024322919689694904, -0.016004019587976412,
+        -0.010629445241405513, -0.007126324714098921, -0.004812725893592536, -0.0032552033793158764,
+        -0.0021782533317491496, -0.0014067617330939298, -0.0008294237126705213, -0.000375492368587361,
+        0.0, 0.000375492368587361, 0.0008294237126705213, 0.0014067617330939298, 0.0021782533317491496,
+        0.0032552033793158764, 0.004812725893592536, 0.007126324714098921, 0.010629445241405513,
+        0.016004019587976412, 0.024322919689694904, 0.03727407630941462, 0.057513081568521585,
+        0.08921793237919043, 0.13896179864110825, 0.21708613427068463, 0.3398609689092203,
+        0.5328836573066864, 0.8364260726336521, 1.3138472527480511]}
+  Aji:
+    unit: 1 / s
+    value: 223126323.6502062
+  Bji:
+    unit: m2 / (J s)
+    value: 158886526681340.12
+  Bji_wavelength:
+    unit: m3 / J
+    value: 2.2839943647260232e-07
+  Bij:
+    unit: m2 / (J s)
+    value: 70616234080595.61
+  Bij_wavelength:
+    unit: m3 / J
+    value: 1.0151086065448993e-07
+  lambda0:
+    unit: nm
+    value: 656.4691622298096
+continua:
+- type: Hydrogenic
+  transition: [ii_1, i_1]
+  sigma_peak:
+    unit: m2
+    value: 6.152e-22
+  lambda_min:
+    unit: nm
+    value: 50.0
+  n_lambda: 20
+- type: Hydrogenic
+  transition: [ii_1, i_2]
+  sigma_peak:
+    unit: m2
+    value: 1.379e-21
+  lambda_min:
+    unit: nm
+    value: 91.176
+  n_lambda: 20
+- type: Tabulated
+  transition: [ii_1, i_3]
+  unit:
+  - nm
+  - m2
+  value:
+  - [205.147, 3.85909772017358e-23]
+  - [237.53857991641254, 5.93111457468223e-23]
+  - [269.9301598328251, 8.622141481904939e-23]
+  - [302.3217397492376, 1.2006634262410567e-22]
+  - [334.71331966565015, 1.615725589313753e-22]
+  - [367.1048995820627, 2.1144949689207468e-22]
+  - [399.49647949847525, 2.7039000293709656e-22]
+  - [431.88805941488783, 3.390708549488223e-22]
+  - [464.27963933130036, 4.1815320940362443e-22]
+  - [496.6712192477129, 5.082829922004498e-22]
+  - [529.0627991641254, 6.100912439580778e-22]
+  - [561.454379080538, 7.241944278839222e-22]
+  - [593.8459589969505, 8.511947064355481e-22]
+  - [626.2375389133631, 9.916801916404815e-22]
+  - [658.6291188297756, 1.1462251729412716e-21]
+  - [691.0206987461881, 1.3153903256828515e-21]
+  - [723.4122786626008, 1.4997229027862483e-21]
+  - [755.8038585790132, 1.699756911708326e-21]
+  - [788.1954384954258, 1.916013278437844e-21]
+  - [820.5870184118384, 2.1489999999999995e-21]
+collisions:
+- transition: [i_2, i_1]
+  data:
+  - type: CE
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / (K(1/2) s)
+      value: [9.75e-16, 6.098e-16, 4.535e-16, 3.365e-16, 2.008e-16, 1.56e-16]
+  - type: Omega
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: ''
+      value: [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+- transition: [i_3, i_1]
+  data:
+  - type: CE
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / (K(1/2) s)
+      value: [1.437e-16, 9.069e-17, 6.798e-17, 5.097e-17, 3.118e-17, 2.461e-17]
+  - type: CP
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / s
+      value: [1.437e-16, 9.069e-17, 6.798e-17, 5.097e-17, 3.118e-17, 2.461e-17]
+- transition: [i_3, i_2]
+  data:
+  - type: CE
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / (K(1/2) s)
+      value: [1.127e-14, 8.077e-15, 6.716e-15, 5.691e-15, 4.419e-15, 3.89e-15]
+  - type: CH
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / s
+      value: [1.127e-14, 8.077e-15, 6.716e-15, 5.691e-15, 4.419e-15, 3.89e-15]
+- transition: [ii_1, i_1]
+  data:
+  - type: CI
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / (K(1/2) s)
+      value: [2.635e-17, 2.864e-17, 3.076e-17, 3.365e-17, 4.138e-17, 4.703e-17]
+  - type: ChargeExcH
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / s
+      value: [2.635e-17, 2.864e-17, 3.076e-17, 3.365e-17, 4.138e-17, 4.703e-17]
+- transition: [ii_1, i_2]
+  data:
+  - type: CI
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / (K(1/2) s)
+      value: [5.34e-16, 6.596e-16, 7.546e-16, 8.583e-16, 1.025e-15, 1.069e-15]
+  - type: ChargeExcP
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / s
+      value: [5.34e-16, 6.596e-16, 7.546e-16, 8.583e-16, 1.025e-15, 1.069e-15]
+- transition: [ii_1, i_3]
+  data:
+  - type: CI
+    temperature:
+      unit: K
+      value: [3000.0, 5000.0, 7000.0, 10000.0, 20000.0, 30000.0]
+    data:
+      unit: m3 / (K(1/2) s)
+      value: [2.215e-15, 2.792e-15, 3.169e-15, 3.518e-15, 3.884e-15, 3.828e-15]

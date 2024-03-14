@@ -84,5 +84,29 @@ struct Box {
     vec2 dims[NUM_DIM];
 };
 
+struct Element {
+    std::string symbol;
+    fp_t mass;
+    fp_t abundance;
+    int Z;
+};
+
+struct AtomicLevel {
+    /// in eV
+    fp_t energy;
+    /// statistical weight
+    int g;
+    /// ionisation stage
+    int stage;
+    std::string key;
+    std::string label;
+};
+
+struct ModelAtom {
+    Element element;
+    std::vector<AtomicLevel> levels;
+
+};
+
 #else
 #endif
