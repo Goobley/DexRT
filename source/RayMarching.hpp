@@ -6,7 +6,7 @@
 
 using yakl::intrinsics::minloc;
 
-template <int NumDim = NUM_DIM>
+template <int NumDim=NUM_DIM>
 YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box) {
     RayStartEnd result(ray);
     yakl::SArray<fp_t, 1, NumDim> length;
@@ -54,19 +54,19 @@ YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box)
     }
 
     if (clip_t_start > FP(0.0)) {
-        for (int d = 0; d < NUM_DIM; ++d) {
+        for (int d = 0; d < NumDim; ++d) {
             result.start(d) += clip_t_start * length(d);
         }
     }
     if (clip_t_end > FP(0.0)) {
-        for (int d = 0; d < NUM_DIM; ++d) {
+        for (int d = 0; d < NumDim; ++d) {
             result.end(d) -= clip_t_end * length(d);
         }
     }
     // NOTE(cmo): Catch precision errors with a clamp -- without this we will
     // stop the ray at the edge of the box to floating point precision, but it's
     // better for these to line up perfectly.
-    for (int d = 0; d < NUM_DIM; ++d) {
+    for (int d = 0; d < NumDim; ++d) {
         if (result.start(d) < box.dims[d](0)) {
             result.start(d) = box.dims[d](0);
         } else if (result.start(d) > box.dims[d](1)) {
@@ -114,9 +114,10 @@ YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
     return new_t <= s.max_t;
 }
 
+template <int NumDim=2>
 YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
     Box box;
-    for (int d = 0; d < NUM_DIM; ++d) {
+    for (int d = 0; d < NumDim; ++d) {
         box.dims[d](0) = FP(0.0);
         box.dims[d](1) = domain_size(d) - 1;
     }
@@ -133,7 +134,7 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(vec2 start_pos, vec2 e
     r.p1 = end_pos;
 
     fp_t length = FP(0.0);
-    for (int d = 0; d < NUM_DIM; ++d) {
+    for (int d = 0; d < NumDim; ++d) {
         r.curr_coord(d) = int(std::floor(start_pos(d)));
         r.direction(d) = end_pos(d) - start_pos(d);
         length += square(end_pos(d) - start_pos(d));
@@ -143,7 +144,7 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(vec2 start_pos, vec2 e
     r.max_t = length;
 
     fp_t inv_length = FP(1.0) / length;
-    for (int d = 0; d < NUM_DIM; ++d) {
+    for (int d = 0; d < NumDim; ++d) {
         r.direction(d) *= inv_length;
         if (r.direction(d) > FP(0.0)) {
             r.next_hit(d) = (r.curr_coord(d) + 1 - r.p0(d)) / r.direction(d);
@@ -167,11 +168,11 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(vec2 start_pos, vec2 e
     return r;
 }
 
-YAKL_INLINE yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> empty_hit() {
-    yakl::SArray<fp_t, 2, NUM_COMPONENTS, NUM_AZ> result;
+template <int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> empty_hit() {
+    yakl::SArray<fp_t, 2, NumComponents, NumAz> result;
     result = FP(0.0);
     return result;
-
 }
 
 template <int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
@@ -190,12 +191,12 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     domain_size(1) = domain_dims(1);
     auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size);
     if (!marcher) {
-        return empty_hit();
+        return empty_hit<NumAz, NumComponents>();
     }
 
     RayMarchState2d s = *marcher;
 
-    yakl::SArray<fp_t, 2, NumComponents, NumAz> result = empty_hit();
+    yakl::SArray<fp_t, 2, NumComponents, NumAz> result(FP(0.0));
     yakl::SArray<fp_t, 1, NumWavelengths> sample;
     yakl::SArray<fp_t, 1, NumWavelengths> chi_sample;
 
@@ -234,7 +235,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
             fp_t tau = chi_sample(i) * s.dt * distance_scale;
             fp_t source_fn = sample(i) / chi_sample(i);
 
-            for (int r = 0; r < NUM_AZ; ++r) {
+            for (int r = 0; r < NumAz; ++r) {
                 if (az_rays(r) == FP(0.0)) {
                     result(2*i, r) = source_fn;
                 } else {

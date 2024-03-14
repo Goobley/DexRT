@@ -243,6 +243,7 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
     using yakl::c::parallel_for;
     using yakl::c::SimpleBounds;
     constexpr int grid_size = 1024;
+    constexpr int NUM_WAVELENGTHS = 1;
 
     {
     Fp3d eta("eta", grid_size, grid_size, NUM_WAVELENGTHS);
@@ -283,7 +284,7 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
             ray_end(0) = FP(1024.0);
             ray_end(1) = FP(512.0);
 
-            auto result = raymarch_2d(rt_state, ray_start, ray_end, az_rays);
+            auto result = raymarch_2d<true, NUM_WAVELENGTHS, 1, 2 * NUM_WAVELENGTHS>(rt_state, ray_start, ray_end, az_rays);
             intensity_full_res = result(0, 0);
         }
     );
@@ -300,11 +301,15 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
 
     parallel_for(
         SimpleBounds<2>(mip_dims(0), mip_dims(1)),
-        mipmap_arr(eta, eta_mip, mip_factor)
+        YAKL_LAMBDA (int x, int y) {
+            mipmap_arr(eta, eta_mip, mip_factor, x, y);
+        }
     );
     parallel_for(
         SimpleBounds<2>(mip_dims(0), mip_dims(1)),
-        mipmap_arr(chi, chi_mip, mip_factor)
+        YAKL_LAMBDA (int x, int y) {
+            mipmap_arr(chi, chi_mip, mip_factor, x, y);
+        }
     );
     yakl::fence();
 
@@ -316,14 +321,15 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
         SimpleBounds<1>(1),
         YAKL_LAMBDA (int x) {
             yakl::SArray<fp_t, 1, 1> az_rays(FP(1.0));
+            // NOTE(cmo): In voxel "world" space, rather than mipmap space - conversion happens in the raymarch fn
             vec2 ray_start;
             ray_start(0) = FP(0.0);
-            ray_start(1) = FP(32.0);
+            ray_start(1) = FP(512.0);
             vec2 ray_end;
-            ray_end(0) = FP(64.0);
-            ray_end(1) = FP(32.0);
+            ray_end(0) = FP(1024.0);
+            ray_end(1) = FP(512.0);
 
-            auto result = raymarch_2d(rt_state, ray_start, ray_end, az_rays);
+            auto result = raymarch_2d<true, NUM_WAVELENGTHS, 1, 2 * NUM_WAVELENGTHS>(rt_state, ray_start, ray_end, az_rays);
             intensity_mipped = result(0, 0);
         }
     );

@@ -58,5 +58,23 @@ constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.083333), FP(0.416667), FP(0.416667), F
 #define LIGHT_MODEL model_E_emission
 #define ABSORPTION_MODEL model_E_absorption
 
+template <int NumAz=NUM_AZ>
+yakl::SArray<fp_t, 1, NumAz> get_az_rays() {
+    yakl::SArray<fp_t, 1, NumAz> az_rays;
+    for (int r = 0; r < NumAz; ++r) {
+        az_rays(r) = INCL_RAYS[r];
+    }
+    return az_rays;
+}
+
+template <int NumAz=NUM_AZ>
+yakl::SArray<fp_t, 1, NumAz> get_az_weights() {
+    yakl::SArray<fp_t, 1, NumAz> az_weights;
+    for (int r = 0; r < NumAz; ++r) {
+        az_weights(r) = AZ_WEIGHTS[r];
+    }
+    return az_weights;
+}
+
 #else
 #endif

@@ -25,6 +25,9 @@ typedef yakl::Array<fp_t, 5, yakl::memHost> Fp5dHost;
 typedef yakl::SArray<fp_t, 1, 2> vec2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
 
+using yakl::c::parallel_for;
+using yakl::c::SimpleBounds;
+
 struct MipmapState {
     Fp3d emission;
     Fp3d absorption;
