@@ -4,10 +4,13 @@
 #include <cstdio>
 #include <string>
 #include <yaml-cpp/yaml.h>
+#include <fmt/core.h>
+#include <unordered_map>
 #include <vector>
+#include <algorithm>
 #include "Types.hpp"
 
-inline YAML::Node parse_crtaf_model(const std::string& path) {
+inline ModelAtom parse_crtaf_model(const std::string& path) {
     YAML::Node file = YAML::LoadFile(path);
 
     if (!file["crtaf_meta"]) {
@@ -25,25 +28,36 @@ inline YAML::Node parse_crtaf_model(const std::string& path) {
     model.element.abundance = elem["abundance"].as<fp_t>();
     model.element.Z = elem["Z"].as<int>();
 
+    // NOTE(cmo): Parse levels
     assert(file["levels"].IsMap());
     int num_levels = file["levels"].size();
     model.levels.reserve(num_levels);
-    for (const auto l : file["levels"]) {
+    for (const auto& l : file["levels"]) {
+        YAML::Node key = l.first;
+        YAML::Node value = l.second;
+
         AtomicLevel new_level;
-        new_level.energy = l["energy_eV"].as<fp_t>();
-        new_level.g = l["g"].as<int>();
-        new_level.stage = l["stage"].as<int>();
-        if (l["label"]) {
-            new_level.label = l["label"].as<std::string>();
+        new_level.energy = value["energy_eV"]["value"].as<fp_t>();
+        new_level.g = value["g"].as<int>();
+        new_level.stage = value["stage"].as<int>();
+        if (value["label"]) {
+            new_level.label = value["label"].as<std::string>();
         }
-        // TODO(cmo): Need to get the key here.
+        new_level.key = key.as<std::string>();
+        model.levels.emplace_back(new_level);
+    }
+    // NOTE(cmo): Sort levels by increasing energy
+    std::sort(model.levels.begin(), model.levels.end(), [](AtomicLevel a, AtomicLevel b) {
+        return a.energy < b.energy;
+    });
+    // NOTE(cmo): Mapping from key to level idx
+    std::unordered_map<std::string, int> level_idx_mapping;
+    for (int i = 0; i < model.levels.size(); ++i) {
+        const AtomicLevel& level = model.levels[i];
+        level_idx_mapping[level.key] = i;
     }
 
-    
-
-
-
-    return file;
+    return model;
 }
 
 
