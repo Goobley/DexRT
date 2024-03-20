@@ -62,9 +62,9 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
         AtomicLine<T> new_line;
         std::string type = l["type"].as<std::string>();
         if (type == "Voigt") {
-            new_line.type = LineProfileType.Voigt;
+            new_line.type = LineProfileType::Voigt;
         } else if (type == "PRD-Voigt") {
-            new_line.type == LineProfileType.PrdVoigt;
+            new_line.type = LineProfileType::PrdVoigt;
         } else {
             throw std::runtime_error(fmt::format("Unexpected line type: {}\n", type).c_str());
         }
@@ -73,13 +73,13 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
         std::string lower = l["transition"][1].as<std::string>();
         new_line.j = level_idx_mapping.at(upper);
         new_line.i = level_idx_mapping.at(lower);
-        new_line.f = l["f"].as<T>();
-        new_line.Aji = l["Aji"].as<T>();
-        new_line.Bji = l["Bji"].as<T>();
-        new_line.Bji_wavelength = l["Bji_wavelength"].as<T>();
-        new_line.Bij = l["Bij"].as<T>();
-        new_line.Bij_wavelength = l["Bij_wavelength"].as<T>();
-        new_line.lambda0 = l["lambda0"].as<T>();
+        new_line.f = l["f_value"].as<T>();
+        new_line.Aji = l["Aji"]["value"].as<T>();
+        new_line.Bji = l["Bji"]["value"].as<T>();
+        new_line.Bji_wavelength = l["Bji_wavelength"]["value"].as<T>();
+        new_line.Bij = l["Bij"]["value"].as<T>();
+        new_line.Bij_wavelength = l["Bij_wavelength"]["value"].as<T>();
+        new_line.lambda0 = l["lambda0"]["value"].as<T>();
 
         bool got_natural = false;
         for (const auto& b : l["broadening"]) {
@@ -101,6 +101,28 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
             } else {
                 throw std::runtime_error(fmt::format("Got unexpected broadening type {}\n", type).c_str());
             }
+        }
+        
+        const auto q = l["wavelength_grid"];
+        std::string grid_type = q["type"].as<std::string>();
+        if (grid_type == "Linear") {
+            T half_width = q["delta_lambda"]["value"].as<T>();
+            int n_lambda = q["n_lambda"].as<int>();
+            T step_size = (half_width + half_width) / T(n_lambda - 1);
+            new_line.wavelength.reserve(n_lambda);
+            T start = new_line.lambda0 - half_width;
+            for (int i = 0; i < n_lambda; ++i) {
+                new_line.wavelength.push_back(start);
+                start += step_size;
+            }
+        } else if (grid_type == "Tabulated") {
+            int n_lambda = q["wavelengths"]["value"].size();
+            new_line.wavelength.reserve(n_lambda);
+            for (const auto& entry: q["wavelengths"]["value"]) {
+                new_line.wavelength.push_back(new_line.lambda0 - entry.as<T>());
+            }
+        } else {
+            throw std::runtime_error(fmt::format("Got unexpected wavelength grid type {}\n", grid_type).c_str());
         }
     }
 
