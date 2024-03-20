@@ -84,16 +84,18 @@ struct Box {
     vec2 dims[NUM_DIM];
 };
 
+template <typename T=fp_t>
 struct Element {
     std::string symbol;
-    fp_t mass;
-    fp_t abundance;
+    T mass;
+    T abundance;
     int Z;
 };
 
+template <typename T=fp_t>
 struct AtomicLevel {
     /// in eV
-    fp_t energy;
+    T energy;
     /// statistical weight
     int g;
     /// ionisation stage
@@ -102,9 +104,53 @@ struct AtomicLevel {
     std::string label;
 };
 
+enum class LineProfileType {
+    Voigt,
+    PrdVoigt
+};
+
+template <typename T=fp_t>
+struct ScaledExponentsBroadening {
+    T scaling;
+    T temperature_exponent;
+    T hydrogen_exponent;
+    T electron_exponent;
+};
+
+template <typename T=fp_t>
+struct AtomicLine {
+    LineProfileType type;
+    /// upper level
+    int j;
+    /// lower level
+    int i;
+    /// oscillator strength
+    T f;
+    /// natural broadening
+    T g_natural;
+    /// Einstein A (spontaneous emission)
+    T Aji;
+    /// Einstein B (stimulated emission); frequency
+    T Bji;
+    /// Einstein B (stimulated emission); wavelength
+    T Bji_wavelength;
+    /// Einstein B (absorption); frequency
+    T Bij;
+    /// Einstein B (absorption); wavelength
+    T Bij_wavelength;
+    /// Rest wavelength [nm]
+    T lambda0;
+    /// Broadening terms
+    std::vector<ScaledExponentsBroadening<T>> broadening;
+    /// Specified wavelength grid [nm]
+    std::vector<T> wavelength;
+};
+
+template <typename T=fp_t>
 struct ModelAtom {
-    Element element;
-    std::vector<AtomicLevel> levels;
+    Element<T> element;
+    std::vector<AtomicLevel<T>> levels;
+    std::vector<AtomicLine<T>> lines;
 
 };
 
