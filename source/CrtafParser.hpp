@@ -66,7 +66,7 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
         } else if (type == "PRD-Voigt") {
             new_line.type = LineProfileType::PrdVoigt;
         } else {
-            throw std::runtime_error(fmt::format("Unexpected line type: {}\n", type).c_str());
+            throw std::runtime_error(fmt::format("Unexpected line type: {}\n", type));
         }
 
         std::string upper = l["transition"][0].as<std::string>();
@@ -99,7 +99,7 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
                 new_b.electron_exponent = b["electron_exponent"].as<T>();
                 new_line.broadening.emplace_back(new_b);
             } else {
-                throw std::runtime_error(fmt::format("Got unexpected broadening type {}\n", type).c_str());
+                throw std::runtime_error(fmt::format("Got unexpected broadening type {}\n", type));
             }
         }
         
@@ -110,19 +110,91 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
             int n_lambda = q["n_lambda"].as<int>();
             T step_size = (half_width + half_width) / T(n_lambda - 1);
             new_line.wavelength.reserve(n_lambda);
-            T start = new_line.lambda0 - half_width;
+            const T start = new_line.lambda0 - half_width;
             for (int i = 0; i < n_lambda; ++i) {
-                new_line.wavelength.push_back(start);
-                start += step_size;
+                new_line.wavelength.push_back(start + i * step_size);
             }
         } else if (grid_type == "Tabulated") {
             int n_lambda = q["wavelengths"]["value"].size();
             new_line.wavelength.reserve(n_lambda);
             for (const auto& entry: q["wavelengths"]["value"]) {
-                new_line.wavelength.push_back(new_line.lambda0 - entry.as<T>());
+                new_line.wavelength.push_back(new_line.lambda0 + entry.as<T>());
             }
         } else {
-            throw std::runtime_error(fmt::format("Got unexpected wavelength grid type {}\n", grid_type).c_str());
+            throw std::runtime_error(fmt::format("Got unexpected wavelength grid type {}\n", grid_type));
+        }
+
+        model.lines.emplace_back(new_line);
+    }
+
+    for (const auto& c : file["continua"]) {
+        std::string upper = c["transition"][0].as<std::string>();
+        std::string lower = c["transition"][1].as<std::string>();
+        int j = level_idx_mapping.at(upper);
+        int i = level_idx_mapping.at(lower);
+        T lambda_edge = model.transition_wavelength(j, i);
+        std::string type = c["type"].as<std::string>();
+
+        if (type != "Tabulated") {
+            throw std::runtime_error(fmt::format("Can only parse Tabulated continua, got {}\n", type));
+        } 
+
+        int n_lambda = c["value"].size();
+        AtomicContinuum<T> new_cont;
+        new_cont.j = j;
+        new_cont.i = i;
+        new_cont.wavelength.reserve(n_lambda);
+        new_cont.sigma.reserve(n_lambda);
+        for (int i = 0; i < n_lambda; ++i) {
+            new_cont.wavelength.push_back(c["value"][i][0].as<T>());
+            new_cont.sigma.push_back(c["value"][i][1].as<T>());
+        }
+        model.continua.emplace_back(new_cont);
+    }
+
+    for (const auto& c : file["collisions"]) {
+        std::string upper = c["transition"][0].as<std::string>();
+        std::string lower = c["transition"][1].as<std::string>();
+        int j = level_idx_mapping.at(upper);
+        int i = level_idx_mapping.at(lower);
+
+        for (const auto& coll : c["data"]) {
+            InterpCollRate<T> new_coll;
+            new_coll.j = j;
+            new_coll.i = i;
+
+            std::string type = coll["type"].as<std::string>();
+            CollRateType coll_type;
+            if (type == "Omega") {
+                coll_type = CollRateType::Omega;
+            } else if (type == "CI") {
+                coll_type = CollRateType::CI;
+            } else if (type == "CE") {
+                coll_type = CollRateType::CE;
+            } else if (type == "CP") {
+                coll_type = CollRateType::CP;
+            } else if (type == "CH") {
+                coll_type = CollRateType::CH;
+            } else if (type == "ChargeExcH") {
+                coll_type = CollRateType::ChargeExcH;
+            } else if (type == "ChargeExcP") {
+                coll_type = CollRateType::ChargeExcP;
+            } else {
+                throw std::runtime_error(fmt::format("Unexpected collisional rate type {}\n", type));
+            }
+            new_coll.type = coll_type;
+            int n_temperature = coll["temperature"]["value"].size();
+            new_coll.temperature.reserve(n_temperature);
+            new_coll.data.reserve(n_temperature);
+
+            for (const auto& t : coll["temperature"]["value"]) {
+                new_coll.temperature.push_back(t.as<T>());
+            }
+            for (const auto& d : coll["data"]["value"]) {
+                new_coll.data.push_back(d.as<T>());
+            }
+
+            model.coll_rates.emplace_back(new_coll);
         }
     }
 

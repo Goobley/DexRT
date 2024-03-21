@@ -1,6 +1,7 @@
 #if !defined(DEXRT_TYPES_HPP)
 #define DEXRT_TYPES_HPP
 #include "Config.hpp"
+#include "Constants.hpp"
 
 constexpr auto memDevice = yakl::memDevice;
 // constexpr auto memDevice = yakl::memHost;
@@ -147,11 +148,62 @@ struct AtomicLine {
 };
 
 template <typename T=fp_t>
+struct AtomicContinuum {
+    /// Upper level index
+    int j;
+    /// Lower level index
+    int i;
+    /// Specified wavelength grid [nm]
+    std::vector<T> wavelength;
+    /// Specified cross-sections [m2]
+    std::vector<T> sigma;
+};
+
+enum class CollRateType {
+    /// Seaton's collision strength
+    Omega,
+    /// Collisional ionisation by electrons
+    CI,
+    /// Collisional excitation of neutrals by electrons
+    CE,
+    /// Collisional excitation by protons
+    CP,
+    /// Collisional excitation by neutral H
+    CH,
+    /// Charge exchange with neutral H (downward only)
+    ChargeExcH,
+    /// Charge exchange with protons (upward only)
+    ChargeExcP,
+};
+
+template <typename T=fp_t>
+struct InterpCollRate {
+    /// Upper level index
+    int j;
+    /// Lower level index
+    int i;
+    CollRateType type;
+    /// Specified temperature grid
+    std::vector<T> temperature;
+    /// Specified rates at each temperature point
+    std::vector<T> data;
+};
+
+template <typename T=fp_t>
 struct ModelAtom {
     Element<T> element;
     std::vector<AtomicLevel<T>> levels;
     std::vector<AtomicLine<T>> lines;
+    std::vector<AtomicContinuum<T>> continua;
+    std::vector<InterpCollRate<T>> coll_rates;
 
+    /// Compute the wavelength [nm] (lambda0 for lines, lambda_edge for
+    /// continua) for a transition between levels j and i (j > i) 
+    T transition_wavelength(int j, int i) {
+        using namespace ConstantsF64;
+        T delta_e = levels[j].energy - levels[i].energy;
+        return T(hc_eV_nm) / delta_e;
+    }
 };
 
 #else

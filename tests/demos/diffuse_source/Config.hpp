@@ -10,6 +10,9 @@ typedef float fp_t;
 typedef double fp_t;
 #define FP(X) (X)
 #endif
+typedef float f32;
+typedef double f64;
+typedef int32_t i32;
 
 constexpr int CANVAS_X = 1024;
 constexpr int CANVAS_Y = 1024;
