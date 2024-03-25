@@ -73,7 +73,7 @@ YAKL_INLINE void draw_disk(
 
 YAKL_INLINE void model_A(Fp3d emission, int x, int y) {
     vec2 centre;
-    yakl::SArray<fp_t, 1, 3> color;
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color(FP(0.0));
 
     centre(0) = 30;
     centre(1) = 30;
@@ -100,7 +100,7 @@ YAKL_INLINE void model_A(Fp3d emission, int x, int y) {
 YAKL_INLINE void model_B(Fp3d emission, int x, int y) {
     int centre = int(CANVAS_X / 2);
     vec2 c;
-    yakl::SArray<fp_t, 1, 3> color;
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color(FP(0.0));
     color(0) = FP(0.0);
     color(1) = FP(1.0);
     color(2) = FP(0.0);
@@ -142,7 +142,7 @@ YAKL_INLINE void model_B(Fp3d emission, int x, int y) {
 YAKL_INLINE void model_D_emission(Fp3d emission, int x, int y) {
     int centre = int(CANVAS_X / 2);
     vec2 c;
-    yakl::SArray<fp_t, 1, 3> color;
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color(FP(0.0));
     c(0) = centre + 400;
     c(1) = centre;
     color(0) = FP(0.0);
@@ -196,8 +196,8 @@ YAKL_INLINE void model_D_emission(Fp3d emission, int x, int y) {
 YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
     int centre = int(CANVAS_X / 2);
     vec2 c;
-    yakl::SArray<fp_t, 1, 3> color;
     fp_t bg = FP(1e-10);
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color(bg);
     for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
         chi(x, y, i) = bg;
     }
@@ -272,7 +272,7 @@ YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
 YAKL_INLINE void model_E_emission(const Fp3d& emission, int x, int y) {
     int centre = int(CANVAS_X / 2);
     vec2 c;
-    yakl::SArray<fp_t, 1, 3> color;
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color(FP(0.0));
     c(0) = centre;
     c(1) = centre;
     fp_t emission_scale = FP(10.0) / FP(80.0);
@@ -286,9 +286,9 @@ YAKL_INLINE void model_E_emission(const Fp3d& emission, int x, int y) {
 YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
     int centre = int(CANVAS_X / 2);
     vec2 c;
-    yakl::SArray<fp_t, 1, 3> color;
     // fp_t bg = FP(1e-10);
     fp_t bg = FP(1e-20);
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color(bg);
     for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
         chi(x, y, i) = bg;
     }

@@ -176,7 +176,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> empty_hit() {
 }
 
 template <int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
-YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
+YAKL_DEVICE_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     // eta in volumetric
     const FpConst3d& domain,
     const FpConst3d& chi,
@@ -224,12 +224,32 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
             break;
         }
 
+    // const ptrdiff_t coord_offset = sample_coord(0) * domain_size(1) * NumWavelengths + sample_coord(1) * NumWavelengths;
+    const ptrdiff_t coord_offset = sample_coord(0) * domain_size(1) + sample_coord(1);
+    #ifdef YAKL_ARCH_CUDA
+        const __restrict__ float4* eta_ptr = (float4*)domain.data();
+        float4 eta4 = __ldg(eta_ptr + coord_offset);
+        sample(0) = eta4.x;
+        sample(1) = eta4.y;
+        sample(2) = eta4.z;
+        sample(3) = eta4.w;
+    #else
         for (int i = 0; i < NumWavelengths; ++i) {
             sample(i) = domain(sample_coord(0), sample_coord(1), i);
         }
+    #endif
+    #ifdef YAKL_ARCH_CUDA
+        const __restrict__ float4* chi_ptr = (float4*)chi.data();
+        float4 chi4 = __ldg(chi_ptr + coord_offset);
+        chi_sample(0) = chi4.x;
+        chi_sample(1) = chi4.y;
+        chi_sample(2) = chi4.z;
+        chi_sample(3) = chi4.w;
+    #else
         for (int i = 0; i < NumWavelengths; ++i) {
             chi_sample(i) = chi(sample_coord(0), sample_coord(1), i);
         }
+    #endif
 
         for (int i = 0; i < NumWavelengths; ++i) {
             fp_t tau = chi_sample(i) * s.dt * distance_scale;
