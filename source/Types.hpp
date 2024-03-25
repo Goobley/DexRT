@@ -280,13 +280,13 @@ struct CompAtom {
     yakl::Array<CompLine<T> const, 1, mem_space> lines;
     /// Shared array of broadeners
     yakl::Array<ScaledExponentsBroadening<T> const, 1, mem_space> broadening;
+
     /// Temporary per atom wavelength grid
     yakl::Array<T const, 1, mem_space> wavelength;
     yakl::Array<CompCont<T> const, 1, mem_space> continua;
-
     yakl::Array<T const, 1, mem_space> sigma;
 
-    // TODO(cmo): Collisions etc.
+    // TODO(cmo): Voigts, Collisions etc.
 };
 
 #else
