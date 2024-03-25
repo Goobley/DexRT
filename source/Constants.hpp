@@ -1,5 +1,5 @@
 #if !defined(DEXRT_CONSTANTS_HPP)
-#define DEXRT_CONSTATNTS_HPP
+#define DEXRT_CONSTANTS_HPP
 
 #include "Config.hpp"
 
@@ -12,6 +12,9 @@ namespace ConstantsF64 {
     constexpr f64 hc_eV = 1.239841984332002624e-06; // [eV m]
     constexpr f64 hc_eV_nm = 1.239841984332002539e+03; // [eV nm]
     constexpr f64 u = 1.660539066599999971e-27; // [kg]
+    constexpr f64 m_e = 9.1093837015e-31; // [kg]
+    constexpr f64 k_B = 1.380649e-23; // [J / K]
+    constexpr f64 k_B_eV =  8.61733326e-05; // [eV / K]
 }
 
 namespace ConstantsFP {
@@ -22,6 +25,9 @@ namespace ConstantsFP {
     constexpr fp_t hc_eV = FP(1.239841984332002624e-06); // [eV m]
     constexpr fp_t hc_eV_nm = FP(1.239841984332002539e+03); // [eV nm]
     constexpr fp_t u = FP(1.660539066599999971e-27); // [kg]
+    constexpr fp_t m_e = FP(9.1093837015e-31); // [kg]
+    constexpr fp_t k_B = FP(1.380649e-23); // [J / K]
+    constexpr fp_t k_B_eV =  FP(8.61733326e-05); // [eV / K]
 }
 
 #else

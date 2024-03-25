@@ -18,6 +18,7 @@ include_directories(${YAKL_PATH})
 list(APPEND UNIT_TEST_SOURCE_FILES
     test_raymarch.cpp
     test_crtaf.cpp
+    test_lte.cpp
 )
 
 add_executable(dexrt_test 

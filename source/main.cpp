@@ -3,6 +3,8 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "Utils.hpp"
+#include "Atmosphere.hpp"
+#include "Populations.hpp"
 #include "RayMarching.hpp"
 #include "RadianceIntervals.hpp"
 #include "RadianceCascades.hpp"
@@ -75,6 +77,8 @@ YAKL_INLINE void model_A(Fp3d emission, int x, int y) {
     vec2 centre;
     yakl::SArray<fp_t, 1, 3> color;
 
+    auto dims = emission.get_dimensions();
+
     centre(0) = 30;
     centre(1) = 30;
     color(0) = FP(10.0);
@@ -89,8 +93,8 @@ YAKL_INLINE void model_A(Fp3d emission, int x, int y) {
     color(2) = FP(1e-6);
     draw_disk(emission, centre, 6, color, x, y);
 
-    centre(0) = CANVAS_X / 2;
-    centre(1) = CANVAS_Y / 2;
+    centre(0) = dims(0) / 2;
+    centre(1) = dims(1) / 2;
     color(0) = FP(1.0);
     color(1) = FP(1.0);
     color(2) = FP(1.0);
@@ -98,7 +102,8 @@ YAKL_INLINE void model_A(Fp3d emission, int x, int y) {
 }
 
 YAKL_INLINE void model_B(Fp3d emission, int x, int y) {
-    int centre = int(CANVAS_X / 2);
+    auto dims = emission.get_dimensions();
+    int centre = int(dims(0) / 2);
     vec2 c;
     yakl::SArray<fp_t, 1, 3> color;
     color(0) = FP(0.0);
@@ -140,7 +145,8 @@ YAKL_INLINE void model_B(Fp3d emission, int x, int y) {
 }
 
 YAKL_INLINE void model_D_emission(Fp3d emission, int x, int y) {
-    int centre = int(CANVAS_X / 2);
+    auto dims = emission.get_dimensions();
+    int centre = int(dims(0) / 2);
     vec2 c;
     yakl::SArray<fp_t, 1, 3> color;
     c(0) = centre + 400;
@@ -178,7 +184,7 @@ YAKL_INLINE void model_D_emission(Fp3d emission, int x, int y) {
     color(2) = FP(0.0);
     draw_disk(emission, c, 40, color, x, y);
 
-    c(0) = CANVAS_X - 200;
+    c(0) = dims(0) - 200;
     c(1) = 200;
     color(0) = FP(0.0);
     color(1) = FP(0.0);
@@ -194,7 +200,8 @@ YAKL_INLINE void model_D_emission(Fp3d emission, int x, int y) {
 }
 
 YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
-    int centre = int(CANVAS_X / 2);
+    auto dims = chi.get_dimensions();
+    int centre = int(dims(0) / 2);
     vec2 c;
     yakl::SArray<fp_t, 1, 3> color;
     fp_t bg = FP(1e-10);
@@ -254,7 +261,7 @@ YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
     color(2) = bg;
     draw_disk(chi, c, 40, color, x, y);
 
-    c(0) = CANVAS_X - 200;
+    c(0) = dims(0) - 200;
     c(1) = 200;
     color(0) = bg;
     color(1) = bg;
@@ -270,7 +277,8 @@ YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
 }
 
 YAKL_INLINE void model_E_emission(const Fp3d& emission, int x, int y) {
-    int centre = int(CANVAS_X / 2);
+    auto dims = emission.get_dimensions();
+    int centre = int(dims(0) / 2);
     vec2 c;
     yakl::SArray<fp_t, 1, 3> color;
     c(0) = centre;
@@ -284,7 +292,8 @@ YAKL_INLINE void model_E_emission(const Fp3d& emission, int x, int y) {
 }
 
 YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
-    int centre = int(CANVAS_X / 2);
+    auto dims = chi.get_dimensions();
+    int centre = int(dims(0) / 2);
     vec2 c;
     yakl::SArray<fp_t, 1, 3> color;
     // fp_t bg = FP(1e-10);
@@ -303,13 +312,17 @@ YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
     draw_disk(chi, c, 40, color, x, y);
 }
 
-void init_state (State* state) {
+void init_state (State* state, const Atmosphere& atmos) {
+    const auto space_dims = atmos.temperature.get_dimensions();
+    const int cascade_0_x_probes = space_dims(0) / PROBE0_SPACING;
+    const int cascade_0_z_probes = space_dims(1) / PROBE0_SPACING;
+    
     for (int l = 0; l < MAX_LEVEL + 1; ++l) {
         state->cascades.push_back(
             Fp5d(
                 "cascade",
-                PROBES_IN_CASCADE_0 / (1 << l),
-                PROBES_IN_CASCADE_0 / (1 << l),
+                cascade_0_x_probes / (1 << l),
+                cascade_0_z_probes / (1 << l),
                 PROBE0_NUM_RAYS * (1 << (l * CASCADE_BRANCHING_FACTOR)),
                 NUM_COMPONENTS,
                 NUM_AZ
@@ -337,12 +350,12 @@ void init_state (State* state) {
     }
 
     auto& march_state = state->raymarch_state;
-    march_state.emission = Fp3d("emission_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
+    march_state.emission = Fp3d("emission_map", space_dims(0), space_dims(1), NUM_WAVELENGTHS);
 
     {
         const auto& emission = march_state.emission;
         parallel_for(
-            SimpleBounds<2>(CANVAS_X, CANVAS_Y),
+            SimpleBounds<2>(space_dims(0), space_dims(1)),
             YAKL_LAMBDA (int x, int y) {
                 for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
                     emission(x, y, i) = FP(0.0);
@@ -356,11 +369,11 @@ void init_state (State* state) {
         );
     }
 
-    march_state.absorption = Fp3d("absorption_map", CANVAS_X, CANVAS_Y, NUM_WAVELENGTHS);
+    march_state.absorption = Fp3d("absorption_map", space_dims(0), space_dims(1), NUM_WAVELENGTHS);
     {
         const auto& chi = march_state.absorption;
         parallel_for(
-            SimpleBounds<2>(CANVAS_X, CANVAS_Y),
+            SimpleBounds<2>(space_dims(0), space_dims(1)),
             YAKL_LAMBDA (int x, int y) {
 #ifndef ABSORPTION_MODEL
                 LIGHT_MODEL(chi, x, y);
@@ -485,8 +498,9 @@ int main(int argc, char** argv) {
 #endif
     yakl::init();
     {
+        Atmosphere atmos = load_atmos("atmos.nc");
         State state;
-        init_state(&state);
+        init_state(&state, atmos);
         if (USE_MIPMAPS) {
             for (int i = 0; i < MAX_LEVEL+1; ++i) {
                 auto dims = state.raymarch_state.emission_mipmaps[i].get_dimensions();

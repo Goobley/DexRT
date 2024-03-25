@@ -9,7 +9,8 @@ Features/ToDo
 - [x] Compare with Lightweaver on simple case (FS only) (@7beb0fb)
 - [x] Add mipmapping for upper levels (@5f65d5c)
 - [x] Add branching/bilinear fix and compare (@5f65d5c)
-- [ ] CRTAF parsing
+- [x] CRTAF parsing (@ed49231)
+- [x] Load atmosphere (@85ed408)
 - [ ] LTE populations
 - [ ] Line absorption profile
 - [ ] Emission, opacity, source function

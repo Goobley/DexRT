@@ -203,7 +203,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     do {
         auto sample_coord = s.curr_coord;
 
-        if (sample_coord(0) < 0 || sample_coord(0) >= CANVAS_X) {
+        if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
             auto hit = s.p0 + s.t * s.direction;
             if (false) {
                 printf("out x <%d, %d>, (%f, %f), [%f,%f] -> [%f,%f]\n",
@@ -213,7 +213,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
             }
             break;
         }
-        if (sample_coord(1) < 0 || sample_coord(1) >= CANVAS_Y) {
+        if (sample_coord(1) < 0 || sample_coord(1) >= domain_size(1)) {
             auto hit = s.p0 + s.t * s.direction;
             if (false) {
                 printf("out y <%d, %d>, (%f, %g), [%f,%f] -> [%f,%f]\n",

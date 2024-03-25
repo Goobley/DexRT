@@ -29,6 +29,15 @@ typedef yakl::SArray<int32_t, 1, 2> ivec2;
 using yakl::c::parallel_for;
 using yakl::c::SimpleBounds;
 
+struct Atmosphere {
+    fp_t voxel_scale;
+    Fp2d temperature;
+    Fp2d pressure;
+    Fp2d ne;
+    Fp2d nh_tot;
+    Fp2d vturb;
+};
+
 struct MipmapState {
     Fp3d emission;
     Fp3d absorption;
@@ -204,6 +213,80 @@ struct ModelAtom {
         T delta_e = levels[j].energy - levels[i].energy;
         return T(hc_eV_nm) / delta_e;
     }
+};
+
+template <typename T=fp_t>
+struct CompLine {
+    /// Short wavelength index
+    int red_idx;
+    /// Long wavelength index
+    int blue_idx;
+
+    LineProfileType type;
+    /// upper level
+    int j;
+    /// lower level
+    int i;
+    /// oscillator strength
+    T f;
+    /// natural broadening
+    T g_natural;
+    /// Einstein A (spontaneous emission)
+    T Aji;
+    /// Einstein B (stimulated emission); frequency
+    T Bji;
+    /// Einstein B (stimulated emission); wavelength
+    T Bji_wavelength;
+    /// Einstein B (absorption); frequency
+    T Bij;
+    /// Einstein B (absorption); wavelength
+    T Bij_wavelength;
+    /// Rest wavelength [nm]
+    T lambda0;
+    /// Broadening start index
+    int broad_start;
+    /// Broadening end index (exclusive)
+    int broad_end;
+};
+
+template <typename T=fp_t>
+struct CompCont {
+    /// Short wavelength index
+    int red_idx;
+    /// Long wavelength index
+    int blue_idx;
+
+    /// upper level
+    int j;
+    /// lower level
+    int i;
+
+    /// Cross-section start index
+    int sigma_start;
+    /// Cross-section end index
+    int sigma_end;
+};
+
+template <typename T=fp_t, int mem_space=memDevice>
+struct CompAtom {
+    T mass;
+    T abundance;
+    int Z;
+
+    yakl::Array<T const, 1, mem_space> energy;
+    yakl::Array<int const, 1, mem_space> g;
+    yakl::Array<int const, 1, mem_space> stage;
+
+    yakl::Array<CompLine<T> const, 1, mem_space> lines;
+    /// Shared array of broadeners
+    yakl::Array<ScaledExponentsBroadening<T> const, 1, mem_space> broadening;
+    /// Temporary per atom wavelength grid
+    yakl::Array<T const, 1, mem_space> wavelength;
+    yakl::Array<CompCont<T> const, 1, mem_space> continua;
+
+    yakl::Array<T const, 1, mem_space> sigma;
+
+    // TODO(cmo): Collisions etc.
 };
 
 #else
