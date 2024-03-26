@@ -274,8 +274,8 @@ struct CompAtom {
     int Z;
 
     yakl::Array<T const, 1, mem_space> energy;
-    yakl::Array<int const, 1, mem_space> g;
-    yakl::Array<int const, 1, mem_space> stage;
+    yakl::Array<T const, 1, mem_space> g;
+    yakl::Array<T const, 1, mem_space> stage;
 
     yakl::Array<CompLine<T> const, 1, mem_space> lines;
     /// Shared array of broadeners

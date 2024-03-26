@@ -13,9 +13,9 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     host_atom.Z = model.element.Z;
 
     const int n_level = model.levels.size();
-    Fp1dHost energy("energy", n_level);
-    yakl::Array<int, 1, yakl::memHost> g("g", n_level);
-    yakl::Array<int, 1, yakl::memHost> stage("stage", n_level);
+    yakl::Array<T, 1, yakl::memHost> energy("energy", n_level);
+    yakl::Array<T, 1, yakl::memHost> g("g", n_level);
+    yakl::Array<T, 1, yakl::memHost> stage("stage", n_level);
 
     for (int i = 0; i < n_level; ++i) {
         energy(i) = model.levels[i].energy;
@@ -73,7 +73,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         n_sigma += cont.sigma.size();
     }
     yakl::Array<CompCont<T>, 1, yakl::memHost> continua("continua", n_cont);
-    Fp1dHost sigma("sigma", n_sigma);
+    yakl::Array<T, 1, yakl::memHost> sigma("sigma", n_sigma);
     int sigma_offset = 0;
     for (int kr = 0; kr < n_cont; ++kr) {
         const auto& c = model.continua[kr];
@@ -195,7 +195,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         ++ptr;
     }
 
-    Fp1dHost wavelength("wavelength", new_grid.size());
+    yakl::Array<T, 1, yakl::memHost> wavelength("wavelength", new_grid.size());
     for (int la = 0; la < new_grid.size(); ++la) {
         wavelength(la) = new_grid[la];
     }
@@ -247,44 +247,52 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
 }
 
 
-template <typename T=fp_t, int mem_space>
+template <typename FPT=fp_t, typename T=fp_t, int mem_space>
 YAKL_INLINE
 void lte_pops(
-    const yakl::Array<fp_t const, 1, mem_space>& energy,
-    const yakl::Array<int const, 1, mem_space>& g,
-    const yakl::Array<int const, 1, mem_space>& stage,
+    const yakl::Array<T const, 1, mem_space>& energy,
+    const yakl::Array<T const, 1, mem_space>& g,
+    const yakl::Array<T const, 1, mem_space>& stage,
     fp_t temperature,
     fp_t ne,
     fp_t ntot,
-    yakl::Array<fp_t, 1, mem_space>& pops
+    const yakl::Array<T, 1, mem_space>& pops
 ) {
-    using namespace ConstantsFP;
-    constexpr fp_t debroglie_const = square(h) / (FP(2.0) * FP(M_PI) * m_e);
+    using namespace ConstantsF64;
+    // NOTE(cmo): Rearranged for fp_t stability
+    constexpr FPT debroglie_const = h / (FP(2.0) * FP(M_PI) * k_B) * (h / m_e);
 
     const int n_level = energy.extent(0);
 
-    const fp_t kbT = temperature * k_B_eV;
-    const fp_t saha_term = 1.5 * ne * std::pow(debroglie_const / temperature, FP(1.5));
-    fp_t sum = FP(1.0);
+    const FPT kbT = temperature * k_B_eV;
+    const FPT saha_term = FP(0.5) * ne * std::pow(debroglie_const / temperature, FP(1.5));
+    FPT sum = FP(1.0);
+    printf("%e\n", saha_term);
 
     for (int i = 1; i < n_level; ++i) {
-        const fp_t dE = energy(i) - energy(0);
-        const fp_t gi0 = g(i) / g(0);
+        const FPT dE = energy(i) - energy(0);
+        const FPT gi0 = g(i) / g(0);
         const int dZ = stage(i) - stage(0);
 
-        const fp_t dE_kbT = dE / kbT;
-        fp_t pop_i = gi0 * std::exp(-dE_kbT);
+        const FPT dE_kbT = dE / kbT;
+        printf("%e %e\n", gi0, dE_kbT);
+        FPT pop_i = gi0 * std::exp(-dE_kbT);
+        printf("%d %e\n", i, pop_i);
         for (int _ = 1; _ <= dZ; ++_) {
             pop_i /= saha_term;
         }
+        printf("%d %e\n", i, pop_i);
+        printf("%.1f\n", stage(i));
         sum += pop_i;
         pops(i) = pop_i;
     }
-    const fp_t pop_0 = ntot / sum;
+    const FPT pop_0 = ntot / sum;
     pops(0) = pop_0;
 
     for (int i = 1; i < n_level; ++i) {
-        pops(i) *= yakl::max(pop_0, std::numeric_limits<fp_t>::min());
+        FPT pop_i = pops(i) * pop_0;
+        pop_i = yakl::max(pop_i, std::numeric_limits<FPT>::min());
+        pops(i) = pop_i;
     }
 }
 

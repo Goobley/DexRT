@@ -272,3 +272,90 @@ TEST_CASE( "Test Comp Atom", "[comp_atom]" ) {
     }
     yakl::finalize();
 }
+
+TEST_CASE( "LTE Pops", "[lte_pops]" ) {
+    Catch::StringMaker<float>::precision = 15;
+    ModelAtom<double> model = parse_crtaf_model<double>("../test_atom.yaml");
+    yakl::init();
+    {
+        CompAtom<fp_t> atom = to_comp_atom(model);
+        yakl::Array<fp_t, 1, yakl::memDevice> n_star("n_star", model.levels.size());
+
+        using namespace ConstantsF64;
+        fp_t temperature = FP(5000.0);
+        fp_t pressure = FP(0.1);
+        fp_t X = FP(0.1);
+        fp_t nh_tot = pressure / (k_B * temperature * (FP(1.0) + X));
+        fp_t ne = X * nh_tot;
+
+        parallel_for(
+            SimpleBounds<1>(1),
+            YAKL_LAMBDA (int x) {
+                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star);
+            }
+        );
+        yakl::fence();
+        auto n_star_h = n_star.createHostCopy();
+        REQUIRE(n_star_h.extent(0) == 4);
+        f64 expected_soln[] = {
+            1.31673597e+18,
+            2.76499931e+08,
+            7.76601665e+06,
+            1.67793086e+14
+        };
+        for (int i = 0; i < n_star_h.extent(0); ++i) {
+            REQUIRE_THAT(n_star_h(i), WithinRel(expected_soln[i], FP(1e-4)));
+        }
+
+        temperature = FP(10000.0);
+        pressure = FP(0.1);
+        X = FP(0.1);
+        nh_tot = pressure / (k_B * temperature * (FP(1.0) + X));
+        ne = X * nh_tot;
+        parallel_for(
+            SimpleBounds<1>(1),
+            YAKL_LAMBDA (int x) {
+                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star);
+            }
+        );
+        yakl::fence();
+        n_star_h = n_star.createHostCopy();
+        REQUIRE(n_star_h.extent(0) == 4);
+        f64 expected_soln_2[] = {
+            1.28040201e+14,
+            3.71085946e+09,
+            9.32862018e+08,
+            6.58323816e+17
+        };
+        for (int i = 0; i < n_star_h.extent(0); ++i) {
+            REQUIRE_THAT(n_star_h(i), WithinRel(expected_soln_2[i], FP(1e-4)));
+        }
+
+        temperature = FP(5000.0) * FP(100.0);
+        pressure = FP(0.1);
+        X = FP(0.1);
+        nh_tot = pressure / (k_B * temperature * (FP(1.0) + X));
+        ne = X * nh_tot * FP(10.0);
+        parallel_for(
+            SimpleBounds<1>(1),
+            YAKL_LAMBDA (int x) {
+                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star);
+            }
+        );
+        yakl::fence();
+        n_star_h = n_star.createHostCopy();
+        REQUIRE(n_star_h.extent(0) == 4);
+        f64 expected_soln_3[] = {
+            2.78520903e+02,
+            8.79263711e+02,
+            1.89349811e+03,
+            1.31690376e+16
+        };
+        for (int i = 0; i < n_star_h.extent(0); ++i) {
+            REQUIRE_THAT(n_star_h(i), WithinRel(expected_soln_3[i], FP(1e-4)));
+        }
+
+
+    }
+    yakl::finalize();
+}
