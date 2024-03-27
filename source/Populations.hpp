@@ -267,7 +267,6 @@ void lte_pops(
     const FPT kbT = temperature * k_B_eV;
     const FPT saha_term = FP(0.5) * ne * std::pow(debroglie_const / temperature, FP(1.5));
     FPT sum = FP(1.0);
-    printf("%e\n", saha_term);
 
     for (int i = 1; i < n_level; ++i) {
         const FPT dE = energy(i) - energy(0);
@@ -275,14 +274,10 @@ void lte_pops(
         const int dZ = stage(i) - stage(0);
 
         const FPT dE_kbT = dE / kbT;
-        printf("%e %e\n", gi0, dE_kbT);
         FPT pop_i = gi0 * std::exp(-dE_kbT);
-        printf("%d %e\n", i, pop_i);
         for (int _ = 1; _ <= dZ; ++_) {
             pop_i /= saha_term;
         }
-        printf("%d %e\n", i, pop_i);
-        printf("%.1f\n", stage(i));
         sum += pop_i;
         pops(i) = pop_i;
     }
