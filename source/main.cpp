@@ -9,6 +9,7 @@
 #include "RadianceIntervals.hpp"
 #include "RadianceCascades.hpp"
 #include "CrtafParser.hpp"
+#include "Voigt.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else
