@@ -233,20 +233,20 @@ struct CompLine {
     T g_natural;
     /// Einstein A (spontaneous emission)
     T Aji;
-    /// Einstein B (stimulated emission); frequency
+    /// Einstein B (stimulated emission); (nm m2) / kJ
     T Bji;
-    /// Einstein B (stimulated emission); wavelength
-    T Bji_wavelength;
-    /// Einstein B (absorption); frequency
+    /// Einstein B (absorption); (nm m2) / kJ
     T Bij;
-    /// Einstein B (absorption); wavelength
-    T Bij_wavelength;
     /// Rest wavelength [nm]
     T lambda0;
     /// Broadening start index
     int broad_start;
     /// Broadening end index (exclusive)
     int broad_end;
+
+    YAKL_INLINE bool is_active(int la) {
+        return la >= red_idx && la < blue_idx;
+    }
 };
 
 template <typename T=fp_t>
@@ -265,6 +265,10 @@ struct CompCont {
     int sigma_start;
     /// Cross-section end index
     int sigma_end;
+
+    YAKL_INLINE bool is_active(int la) {
+        return la >= red_idx && la < blue_idx;
+    }
 };
 
 template <typename T=fp_t, int mem_space=memDevice>

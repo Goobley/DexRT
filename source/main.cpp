@@ -10,6 +10,7 @@
 #include "RadianceCascades.hpp"
 #include "CrtafParser.hpp"
 #include "Voigt.hpp"
+#include "EmisOpac.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else

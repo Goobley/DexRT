@@ -7,7 +7,7 @@ def make_atom():
     conv = LightweaverAtomConverter()
     h = H_4_atom()
     base_model = conv.convert(H_4_atom())
-    base_model_dict = base_model.dict()
+    base_model_dict = base_model.model_dump()
     base_model_dict["lines"][0]["type"] = "PRD-Voigt"
     base_model_dict["lines"][0]["wavelength_grid"] = {
         "type": "Linear",

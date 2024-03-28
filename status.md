@@ -15,9 +15,11 @@ Features/ToDo
 - [x] Line absorption profile (@c878288)
 - [ ] Emission, opacity, source function
 - [ ] LTE formal solution from atmosphere
+- [ ] LTE background from tabulated atmosphere
 - [ ] LTE with background J iteration
 - [ ] Final formal solution (interactive?)
 - [ ] Non-LTE iteration
+- [ ] Boundary conditions
 
 
 Ideas

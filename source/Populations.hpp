@@ -7,6 +7,8 @@
 
 template <typename T=fp_t, typename U=fp_t, int mem_space=yakl::memDevice>
 CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
+#define DFPU(X) U(FP(X))
+    using namespace ConstantsF64;
     CompAtom<T, yakl::memHost> host_atom;
     host_atom.mass = model.element.mass;
     host_atom.abundance = model.element.abundance;
@@ -45,10 +47,9 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         new_l.f = l.f;
         new_l.g_natural = l.g_natural;
         new_l.Aji = l.Aji;
-        new_l.Bji = l.Bji;
-        new_l.Bji_wavelength = l.Bji_wavelength;
-        new_l.Bij = l.Bij;
-        new_l.Bij_wavelength = l.Bij_wavelength;
+        // Convert to (nm m2) / kJ
+        new_l.Bji = l.Bji_wavelength * DFPU(1e12);
+        new_l.Bij = l.Bij_wavelength * DFPU(1e12);
         new_l.lambda0 = l.lambda0;
 
         new_l.broad_start = broad_idx;
@@ -244,6 +245,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     } else {
         return host_atom;
     }
+#undef DFPU
 }
 
 

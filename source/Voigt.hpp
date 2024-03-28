@@ -94,6 +94,7 @@ struct VoigtProfile {
     /// Voigt function interpolator
     /// Assumes a and v are linearly interpolated on linspaces, so
     /// these are implicit, rather than stored.
+    /// For non-complex voigt, expects min v to be 0, as it is symmetric around this.
     /// Return value clamped to domain if sampled outside.
     using Linspace = DexVoigtDetail::Linspace<T>;
     typedef std::conditional_t<Complex, DexComplex<T>, T> Voigt_t;
@@ -156,6 +157,9 @@ struct VoigtProfile {
             }
         );
 #endif
+        if constexpr (!Complex) {
+            v = std::abs(v);
+        }
         T frac_a = (a - a_range.min) / a_step;
         // NOTE(cmo): p suffix for term at idx + 1
         int ia, iap;
