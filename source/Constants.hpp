@@ -18,6 +18,7 @@ namespace ConstantsF64 {
     constexpr f64 k_B_eV =  8.61733326e-05; // [eV / K]
     constexpr f64 k_B_u = 8314.46262102654; // [J / (K kg)]
     constexpr f64 four_pi = 4.0 * M_PI;
+    constexpr f64 sqrt_pi = 1.7724538509055159;
 }
 
 namespace ConstantsFP {
@@ -34,6 +35,7 @@ namespace ConstantsFP {
     constexpr fp_t k_B_eV =  FP(8.61733326e-05); // [eV / K]
     constexpr fp_t k_B_u = FP(8314.46262102654); // [J / (K kg)]
     constexpr fp_t four_pi = FP(4.0) * FP(M_PI);
+    constexpr fp_t sqrt_pi = FP(1.7724538509055159);
 }
 
 #else

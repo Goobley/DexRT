@@ -64,7 +64,7 @@ YAKL_INLINE UV uv(
     const fp_t a = damping_from_gamma(params.gamma, lambda, params.dop_width);
     const fp_t v = (lambda - l.lambda0 + params.vel / c * l.lambda0) / params.dop_width;
     // [nm-1]
-    const fp_t p = phi(a, v) / (FP(M_PI) * params.dop_width);
+    const fp_t p = phi(a, v) / (sqrt_pi * params.dop_width);
     UV result;
     // [m2]
     result.Vij = hnu_4pi * l.Bij * p;
