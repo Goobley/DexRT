@@ -11,11 +11,16 @@ Features/ToDo
 - [x] Add branching/bilinear fix and compare (@5f65d5c)
 - [x] CRTAF parsing (@ed49231)
 - [x] Load atmosphere (@85ed408)
-- [ ] LTE populations
-- [ ] Line absorption profile
+- [x] LTE populations (@b54f9ff)
+- [x] Line absorption profile (@c878288)
 - [ ] Emission, opacity, source function
 - [ ] LTE formal solution from atmosphere
 - [ ] LTE with background J iteration
 - [ ] Final formal solution (interactive?)
 - [ ] Non-LTE iteration
 
+
+Ideas
+=====
+
+- [ ] Move LTE populations to be partition function based (allows for calculation of only the levels of interest)
