@@ -17,11 +17,11 @@ TEST_CASE("Interp", "[interp]") {
             y(i) = std::sin(x(i));
         }
 
-        fp_t sample = interp<fp_t, yakl::memHost>(FP(5.5) * two_pi / fp_t(n-1), x, y);
+        fp_t sample = interp(FP(5.5) * two_pi / fp_t(n-1), x, y);
         REQUIRE_THAT(sample, WithinRel(FP(0.5) * (y(5) + y(6)), FP(1e-6)));
-        sample = interp<fp_t, yakl::memHost>(FP(100.0), x, y);
+        sample = interp(FP(100.0), x, y);
         REQUIRE(sample == y(y.extent(0) - 1));
-        sample = interp<fp_t, yakl::memHost>(FP(-1000.0), x, y);
+        sample = interp(FP(-1000.0), x, y);
         REQUIRE(sample == y(0));
 
         constexpr fp_t samples[n] = {
