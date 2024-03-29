@@ -162,29 +162,29 @@ struct VoigtProfile {
         }
         T frac_a = (a - a_range.min) / a_step;
         // NOTE(cmo): p suffix for term at idx + 1
-        int ia, iap;
+        int ia = int(frac_a);
+        int iap;
         T ta, tap;
-        if (frac_a < FP(0.0) || frac_a >= a_range.n) {
-            ia = yakl::min(yakl::max(ia, 0), a_range.n);
+        if (frac_a < FP(0.0) || frac_a >= (a_range.n - 1)) {
+            ia = yakl::min(yakl::max(ia, 0), a_range.n - 1);
             iap = ia;
             ta = FP(1.0);
             tap = FP(0.0);
         } else {
-            ia = int(frac_a);
             iap = ia + 1;
             tap = frac_a - ia;
             ta = FP(1.0) - tap;
         }
         T frac_v = (v - v_range.min) / v_step;
-        int iv, ivp;
+        int iv = int(frac_v);
+        int ivp;
         T tv, tvp;
-        if (frac_v < FP(0.0) || frac_v >= v_range.n) {
-            iv = yakl::min(yakl::max(iv, 0), v_range.n);
+        if (frac_v < FP(0.0) || frac_v >= (v_range.n - 1)) {
+            iv = yakl::min(yakl::max(iv, 0), v_range.n - 1);
             ivp = iv;
             tv = FP(1.0);
             tvp = FP(0.0);
         } else {
-            iv = int(frac_v);
             ivp = iv + 1;
             tvp = frac_v - iv;
             tv = FP(1.0) - tvp;

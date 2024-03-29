@@ -20,6 +20,7 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_crtaf.cpp
     test_lte.cpp
     test_voigt.cpp
+    test_utils.cpp
 )
 
 add_executable(dexrt_test 

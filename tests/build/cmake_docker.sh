@@ -9,8 +9,9 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DCMAKE_CUDA_COMPILER=nvcc   \
       -DCMAKE_C_COMPILER=gcc        \
       -DCMAKE_Fortran_COMPILER=gfortran \
+      -DYAKL_DEBUG="On"               \
       -DYAKL_ARCH="CUDA"              \
-      -DYAKL_CUDA_FLAGS="-O0 --ptxas-options=-v" \
+      -DYAKL_CUDA_FLAGS="-O0 -g -G --ptxas-options=-v" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DMPI_INCLUDE_PATH="${MPI_INCLUDE_PATH}" \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \

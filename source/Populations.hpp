@@ -11,7 +11,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     using namespace ConstantsF64;
     CompAtom<T, yakl::memHost> host_atom;
     host_atom.mass = model.element.mass;
-    host_atom.abundance = model.element.abundance;
+    host_atom.abundance = std::exp(model.element.abundance - DFPU(12.0));
     host_atom.Z = model.element.Z;
 
     const int n_level = model.levels.size();
@@ -68,28 +68,16 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     host_atom.broadening = broadening;
 
     const int n_cont = model.continua.size();
-    int n_sigma = 0;
     for (const auto& cont : model.continua) {
         n_max_wavelengths += cont.wavelength.size();
-        n_sigma += cont.sigma.size();
     }
     yakl::Array<CompCont<T>, 1, yakl::memHost> continua("continua", n_cont);
-    yakl::Array<T, 1, yakl::memHost> sigma("sigma", n_sigma);
-    int sigma_offset = 0;
     for (int kr = 0; kr < n_cont; ++kr) {
         const auto& c = model.continua[kr];
         auto& new_c = continua(kr);
         new_c.i = c.i;
         new_c.j = c.j;
-
-        new_c.sigma_start = sigma_offset;
-        for (int la = 0; la < c.sigma.size(); ++la) {
-            sigma(sigma_offset) = c.sigma[la];
-            sigma_offset += 1;
-        }
-        new_c.sigma_end = sigma_offset;
     }
-    host_atom.sigma = sigma;
 
     // NOTE(cmo): Fancy new wavelength grid... more complex than intended!
     struct WavelengthAndOrigin {
@@ -202,6 +190,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     }
     host_atom.wavelength = wavelength;
 
+    int n_sigma = 0;
     for (int kr = 0; kr < blue_wavelengths.size(); ++kr) {
         auto blue_iter = std::lower_bound(
             new_grid.begin(), 
@@ -221,10 +210,41 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
             auto& cont = continua(kr - n_lines);
             cont.blue_idx = blue_iter - new_grid.begin();
             cont.red_idx = red_iter - new_grid.begin();
+            n_sigma += cont.red_idx - cont.blue_idx;
         }
+    }
+    yakl::Array<T, 1, yakl::memHost> sigma("sigma", n_sigma);
+    int sigma_offset = 0;
+    for (int kr = 0; kr < continua.extent(0); ++kr) {
+        const auto& model_cont = model.continua[kr];
+        yakl::Array<U const, 1, yakl::memHost> model_wave(
+            "wavelength", 
+            model_cont.wavelength.data(), 
+            model_cont.wavelength.size()
+        );
+        yakl::Array<U const, 1, yakl::memHost> model_sigma(
+            "sigma", 
+            model_cont.sigma.data(), 
+            model_cont.sigma.size()
+        );
+
+        auto& cont = continua(kr);
+        cont.sigma_start = sigma_offset;
+        for (int la = cont.blue_idx; la < cont.red_idx; ++la) {
+            int sigma_idx = sigma_offset + la - cont.blue_idx;
+            sigma(sigma_idx) = interp(
+                U(wavelength(la)),
+                model_wave,
+                model_sigma
+            );
+        }
+
+        sigma_offset += cont.red_idx - cont.blue_idx;
+        cont.sigma_end = sigma_offset;
     }
     host_atom.lines = lines;
     host_atom.continua = continua;
+    host_atom.sigma = sigma;
 
     if constexpr (mem_space == yakl::memDevice) {
         CompAtom<T, mem_space> result;
