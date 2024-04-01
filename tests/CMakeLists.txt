@@ -21,6 +21,7 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_lte.cpp
     test_voigt.cpp
     test_utils.cpp
+    test_emis_opac.cpp
 )
 
 add_executable(dexrt_test 

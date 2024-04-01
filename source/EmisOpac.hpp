@@ -37,7 +37,7 @@ struct AtmosPointParams {
 
 template <int mem_space=yakl::memDevice>
 struct SigmaInterp {
-    yakl::Array<fp_t, 1, mem_space> sigma;
+    yakl::Array<fp_t const, 1, mem_space> sigma;
 };
 
 template <int mem_space=yakl::memDevice>
@@ -53,7 +53,7 @@ template <int mem_space=yakl::memDevice>
 YAKL_INLINE SigmaInterp<mem_space> get_sigma(const CompAtom<fp_t, mem_space>& atom, const CompCont<fp_t>& cont) {
     SigmaInterp<mem_space> result;
 
-    result.sigma = yakl::Array<fp_t, 1, mem_space>(
+    result.sigma = yakl::Array<fp_t const, 1, mem_space>(
         "cont_sigma",
         &atom.sigma(cont.sigma_start),
         // TODO(cmo): Can we do away with sigma end? The array length should be the same as red_idx - blue_idx
@@ -73,7 +73,7 @@ YAKL_INLINE fp_t doppler_width(fp_t lambda0, fp_t mass, fp_t temperature, fp_t v
 
     using namespace ConstantsFP;
     constexpr fp_t two_k_B_u = FP(2.0) * k_B_u;
-    return lambda0 / c * std::sqrt(two_k_B_u * temperature / mass + square(vturb));
+    return lambda0 * std::sqrt(two_k_B_u * temperature / mass + square(vturb)) / c;
 }
 
 /** Compute damping coefficient for Voigt profile from gamma
@@ -84,7 +84,8 @@ YAKL_INLINE fp_t doppler_width(fp_t lambda0, fp_t mass, fp_t temperature, fp_t v
 */
 YAKL_INLINE fp_t damping_from_gamma(fp_t gamma, fp_t lambda, fp_t dop_width) {
     using namespace ConstantsFP;
-    return FP(1.0) / (four_pi * c) * gamma * square(lambda) / dop_width;
+    // NOTE(cmo): Extra 1e-9 to convert c to nm / s (all lengths here in nm)
+    return FP(1.0) / (four_pi * c) * gamma * FP(1e-9) * square(lambda) / dop_width;
 }
 
 /** Compute gamma from all the broadening terms for a line
@@ -137,9 +138,9 @@ YAKL_INLINE UV compute_uv(
 ) {
     using namespace ConstantsFP;
     // [kJ]
-    const fp_t hnu_4pi = hc_kJ_nm / (four_pi * wave);
+    const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
     const fp_t a = damping_from_gamma(params.gamma, lambda, params.dop_width);
-    const fp_t v = (lambda - l.lambda0 + params.vel / c * l.lambda0) / params.dop_width;
+    const fp_t v = ((lambda - l.lambda0) + (params.vel * l.lambda0) / c) / params.dop_width;
     // [nm-1]
     const fp_t p = phi(a, v) / (sqrt_pi * params.dop_width);
     UV result;
@@ -174,7 +175,8 @@ YAKL_INLINE EmisOpac emis_opac(
     const CompAtom<T, mem_space>& atom, 
     const VoigtProfile<T, false, mem_space>& profile,
     int la, 
-    const yakl::Array<fp_t const, 1, mem_space>& n,
+    yakl::Array<fp_t const, 1, mem_space> n,
+    const yakl::Array<fp_t, 1, mem_space>& n_star_scratch,
     const AtmosPointParams& atmos
 ) {
     EmisOpac result{FP(0.0), FP(0.0)};
@@ -194,6 +196,7 @@ YAKL_INLINE EmisOpac emis_opac(
 
         const UV uv = compute_uv(
             l,
+            profile,
             params,
             lambda
         );
@@ -201,9 +204,7 @@ YAKL_INLINE EmisOpac emis_opac(
         result.chi += n(l.i) * uv.Vij - n(l.j) * uv.Vji;
     }
 
-    // TODO(cmo): Look at using partition function so we don't need to do this
-    // mess here... I don't want allocations this deep.
-    yakl::Array<fp_t, 1, mem_space> n_star("n_star", atom.energy.extent(0));
+    auto& n_star = n_star_scratch;
     lte_pops<T, fp_t, mem_space>(
         atom.energy, 
         atom.g, 
@@ -222,7 +223,7 @@ YAKL_INLINE EmisOpac emis_opac(
         using namespace ConstantsFP;
         ContParams<mem_space> params;
         params.la = la;
-        params.thermal_ratio = n_star(l.i) / n_star(l.j) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
+        params.thermal_ratio = n_star(cont.i) / n_star(cont.j) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
         params.sigma_grid = get_sigma<mem_space>(atom, cont);
 
         const UV uv = compute_uv<mem_space>(
@@ -230,11 +231,24 @@ YAKL_INLINE EmisOpac emis_opac(
             params,
             lambda
         );
-        result.eta += n(l.j) * uv.Uji;
-        result.chi += n(l.i) * uv.Vij - n(l.j) * uv.Vji;
+        result.eta += n(cont.j) * uv.Uji;
+        result.chi += n(cont.i) * uv.Vij - n(cont.j) * uv.Vji;
     }
 
     return result;
+}
+
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE EmisOpac emis_opac(
+    const CompAtom<T, mem_space>& atom, 
+    const VoigtProfile<T, false, mem_space>& profile,
+    int la, 
+    const yakl::Array<fp_t, 1, mem_space>& n,
+    const yakl::Array<fp_t, 1, mem_space>& n_star_scratch,
+    const AtmosPointParams& atmos
+) {
+    const yakl::Array<fp_t const, 1, mem_space> const_n(n);
+    return emis_opac(atom, profile, la, const_n, n_star_scratch, atmos);
 }
 
 #else

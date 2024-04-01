@@ -20,6 +20,7 @@ Features/ToDo
 - [ ] Final formal solution (interactive?)
 - [ ] Non-LTE iteration
 - [ ] Boundary conditions
+- [ ] Multiple atoms - basically splat everything SOA a la MULTI and like is done for the one atom here.
 
 
 Ideas

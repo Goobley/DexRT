@@ -244,8 +244,8 @@ struct CompLine {
     /// Broadening end index (exclusive)
     int broad_end;
 
-    YAKL_INLINE bool is_active(int la) {
-        return la >= red_idx && la < blue_idx;
+    YAKL_INLINE bool is_active(int la) const {
+        return la >= blue_idx && la < red_idx;
     }
 };
 
@@ -266,8 +266,8 @@ struct CompCont {
     /// Cross-section end index
     int sigma_end;
 
-    YAKL_INLINE bool is_active(int la) {
-        return la >= red_idx && la < blue_idx;
+    YAKL_INLINE bool is_active(int la) const {
+        return la >= blue_idx && la < red_idx;
     }
 };
 

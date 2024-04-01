@@ -41,10 +41,11 @@ TEST_CASE("Interp", "[interp]") {
         );
         auto test_samples_host = test_samples.createHostCopy();
 
-        constexpr fp_t expected[n] = {
+        const fp_t sin2pi = std::sin(two_pi);
+        const fp_t expected[n] = {
             FP(0.0),  FP(0.0),  FP(8.49464167e-01),  FP(8.82086087e-01),
             FP(-5.36953542e-01), FP(-2.60735913e-01), FP(-9.49261115e-01),
-            FP(1.74845553e-07), FP(1.74845553e-07), FP(1.74845553e-07)
+            sin2pi, sin2pi, sin2pi
         };
         for (int i = 0; i < n; ++i) {
             REQUIRE_THAT(test_samples_host(i), WithinRel(expected[i], FP(1e-6)));

@@ -11,7 +11,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     using namespace ConstantsF64;
     CompAtom<T, yakl::memHost> host_atom;
     host_atom.mass = model.element.mass;
-    host_atom.abundance = std::exp(model.element.abundance - DFPU(12.0));
+    host_atom.abundance = std::pow(DFPU(10.0), model.element.abundance - DFPU(12.0));
     host_atom.Z = model.element.Z;
 
     const int n_level = model.levels.size();

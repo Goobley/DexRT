@@ -498,7 +498,7 @@ int main(int argc, char** argv) {
 #ifdef HAVE_MPI
     MPI_Init(&argc, &argv);
 #endif
-    yakl::init();
+    yakl::init(yakl::InitConfig().set_pool_initial_mb(1.55 * 1024).set_pool_grow_mb(1.55 * 1024));
     {
         Atmosphere atmos = load_atmos("atmos.nc");
         State state;

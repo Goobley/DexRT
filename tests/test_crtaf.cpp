@@ -30,11 +30,11 @@ TEST_CASE("Basic Parsing", "[crtaf_parsing]") {
     REQUIRE(model.lines[1].type == LineProfileType::Voigt);
     REQUIRE(model.lines[1].j == 2);
     REQUIRE(model.lines[1].i == 0);
-    REQUIRE_THAT(model.lines[1].Aji, WithinRel(4513279419.413459, 1e-6));
-    REQUIRE_THAT(model.lines[1].Bji, WithinRel(12259958260013.863, 1e-6));
-    REQUIRE_THAT(model.lines[1].Bji_wavelength, WithinRel(4.3026625575289247e-10, 1e-6));
-    REQUIRE_THAT(model.lines[1].Bij, WithinRel(1362217584445.9849, 1e-6));
-    REQUIRE_THAT(model.lines[1].Bij_wavelength, WithinRel(4.7807361750321384e-11, 1e-6));
+    REQUIRE_THAT(model.lines[1].Aji, WithinRel(55719499.00510443, 1e-6));
+    REQUIRE_THAT(model.lines[1].Bji, WithinRel(151357509382.88724, 1e-6));
+    REQUIRE_THAT(model.lines[1].Bji_wavelength, WithinRel(5.311929083369043e-12, 1e-6));
+    REQUIRE_THAT(model.lines[1].Bij, WithinRel(1362217584445.985, 1e-6));
+    REQUIRE_THAT(model.lines[1].Bij_wavelength, WithinRel(4.780736175032139e-11, 1e-6));
     REQUIRE_THAT(model.lines[1].g_natural, WithinRel(99800000.0, 1e-6));
     REQUIRE(model.lines[1].broadening.size() == 3);
     REQUIRE_THAT(model.lines[1].broadening[0].scaling, WithinRel(3.0937539490410914e-15, 1e-6));
@@ -52,7 +52,7 @@ TEST_CASE("Basic Parsing", "[crtaf_parsing]") {
     REQUIRE(model.lines[2].j == 2);
     REQUIRE(model.lines[2].i == 1);
     REQUIRE_THAT(model.lines[2].f, WithinRel(0.6407, 1e-6));
-    REQUIRE_THAT(model.lines[2].Bji_wavelength, WithinRel(2.2839943647260232e-07, 1e-6));
+    REQUIRE_THAT(model.lines[2].Bji_wavelength, WithinRel(4.511593806866219e-08, 1e-6));
 
     REQUIRE(model.continua.size() == 3);
     REQUIRE(model.continua[1].wavelength.size() == 20);
