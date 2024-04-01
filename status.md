@@ -13,7 +13,7 @@ Features/ToDo
 - [x] Load atmosphere (@85ed408)
 - [x] LTE populations (@b54f9ff)
 - [x] Line absorption profile (@c878288)
-- [ ] Emission, opacity, source function
+- [x] Emission, opacity, source function (@2bf9af7 - not source function, but that's just a ratio!)
 - [ ] LTE formal solution from atmosphere
 - [ ] LTE background from tabulated atmosphere
 - [ ] LTE with background J iteration

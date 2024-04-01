@@ -115,7 +115,7 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
         // NOTE(cmo): The tolerance is relatively low here due to an accumulation of factors...
         // - difference in LTE pops
         // - potential single precision (but failure is identical in double \o/)
-        // - post-calculation conversion + different constants in lw
+        // - post-calculation conversion + different constants in lw (also feed into LTE pops)
         for (int i = 0; i < eta_h.extent(0); ++i) {
             REQUIRE_THAT(eta_h(i), WithinRel(eta_expec[i], FP(1e-2)));
             REQUIRE_THAT(chi_h(i), WithinRel(chi_expec[i], FP(1e-2)));
