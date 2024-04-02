@@ -282,11 +282,11 @@ void lte_pops(
 ) {
     using namespace ConstantsF64;
     // NOTE(cmo): Rearranged for fp_t stability
-    constexpr FPT debroglie_const = h / (FP(2.0) * FP(M_PI) * k_B) * (h / m_e);
+    constexpr FPT debroglie_const = FPT(h / (FP(2.0) * FP(M_PI) * k_B) * (h / m_e));
 
     const int n_level = energy.extent(0);
 
-    const FPT kbT = temperature * k_B_eV;
+    const FPT kbT = temperature * FPT(k_B_eV);
     const FPT saha_term = FP(0.5) * ne * std::pow(debroglie_const / temperature, FP(1.5));
     FPT sum = FP(1.0);
 
@@ -311,6 +311,34 @@ void lte_pops(
         pop_i = yakl::max(pop_i, std::numeric_limits<FPT>::min());
         pops(i) = pop_i;
     }
+}
+
+/**
+ * Computes the LTE populations in state. Assumes state->pops is already allocated.
+*/
+void compute_lte_pops(State* state) {
+    // TODO(cmo): This routine/array likely needs to be transposed
+    const auto& pops = state->pops;
+    const auto& atom = state->atom;
+    const auto& temperature = state->atmos.temperature;
+    const auto& ne = state->atmos.temperature;
+    const auto& nhtot = state->atmos.temperature;
+    parallel_for(
+        "LTE Pops",
+        SimpleBounds<2>(pops.extent(0), pops.extent(1)),
+        YAKL_LAMBDA (int x, int y) {
+            auto pops_slice = pops.slice<1>({x, y, yakl::COLON});
+            lte_pops(
+                atom.energy,
+                atom.g,
+                atom.stage,
+                temperature(x, y),
+                ne(x, y),
+                atom.abundance * nhtot(x, y),
+                pops_slice
+            );
+        }
+    );
 }
 
 #else

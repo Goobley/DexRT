@@ -31,7 +31,7 @@ void compute_cascade_i_2d (
         rt_state.chi = march_state.absorption;
         rt_state.mipmap_factor = 0;
     }
-    fmt::println("Cascade {}: Scale: {}", cascade_idx, rt_state.mipmap_factor);
+    // fmt::println("Cascade {}: Scale: {}", cascade_idx, rt_state.mipmap_factor);
 
     auto az_rays = get_az_rays();
 

@@ -30,10 +30,6 @@ constexpr bool BILINEAR_FIX = false;
 constexpr bool USE_MIPMAPS = true;
 constexpr int MIPMAP_FACTORS[MAX_LEVEL+1] = {0, 0, 1, 1, 1};
 
-constexpr int NUM_WAVELENGTHS = 3;
-constexpr int NUM_COMPONENTS = 2 * NUM_WAVELENGTHS;
-constexpr int NUM_DIM = 2;
-
 #define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_AZ = 1;
@@ -55,8 +51,17 @@ constexpr fp_t INCL_RAYS[NUM_AZ] = {FP(0.000000), FP(0.690212), FP(0.961045), FP
 constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.083333), FP(0.416667), FP(0.416667), FP(0.083333)};
 #endif
 
+/// Whether to load an atmosphere or use the LIGHT_MODEL to determine eta/chi.
+constexpr bool USE_ATMOSPHERE = true;
+constexpr int MODEL_X = 1024;
+constexpr int MODEL_Y = 1024;
 #define LIGHT_MODEL model_E_emission
 #define ABSORPTION_MODEL model_E_absorption
+
+/// Number of wavelengths in an RGB batch
+constexpr int NUM_WAVELENGTHS = USE_ATMOSPHERE ? 1 : 3;
+constexpr int NUM_COMPONENTS = 2 * NUM_WAVELENGTHS;
+constexpr int NUM_DIM = 2;
 
 template <int NumAz=NUM_AZ>
 yakl::SArray<fp_t, 1, NumAz> get_az_rays() {

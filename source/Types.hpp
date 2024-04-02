@@ -52,11 +52,6 @@ struct CascadeRTState {
     FpConst3d chi;
 };
 
-struct State {
-    std::vector<Fp5d> cascades;
-    MipmapState raymarch_state;
-};
-
 struct RayMarchState2d {
     // Start pos
     vec2 p0;
