@@ -30,7 +30,7 @@ constexpr bool BILINEAR_FIX = false;
 constexpr bool USE_MIPMAPS = true;
 constexpr int MIPMAP_FACTORS[MAX_LEVEL+1] = {0, 0, 1, 1, 1};
 
-#define FLATLAND
+// #define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_AZ = 1;
 constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_AZ - 1, 1);
@@ -41,14 +41,16 @@ constexpr fp_t AZ_RAYS[NUM_AZ] = {FP(0.000000)};
 constexpr fp_t INCL_RAYS[NUM_AZ] = {FP(1.000000)};
 constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(1.0)};
 #else
-constexpr int NUM_AZ = 4;
-constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_AZ - 1, 1);
-constexpr fp_t TRACE_AZ_RAYS[NUM_GAUSS_LOBATTO] = {FP(1.000000), FP(0.723607), FP(0.276393)};
-constexpr fp_t TRACE_INCL_RAYS[NUM_GAUSS_LOBATTO] = {FP(0.000000), FP(0.690212), FP(0.961045)};
-constexpr fp_t TRACE_AZ_WEIGHTS[NUM_GAUSS_LOBATTO] = {FP(0.083333), FP(0.416667), FP(0.416667)};
-constexpr fp_t AZ_RAYS[NUM_AZ] = {FP(1.000000), FP(0.723607), FP(0.276393), FP(0.000000)};
-constexpr fp_t INCL_RAYS[NUM_AZ] = {FP(0.000000), FP(0.690212), FP(0.961045), FP(1.000000)};
-constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.083333), FP(0.416667), FP(0.416667), FP(0.083333)};
+constexpr int NUM_AZ = 5;
+// constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_AZ - 1, 1);
+// constexpr fp_t TRACE_AZ_RAYS[NUM_GAUSS_LOBATTO] = {FP(1.000000), FP(0.723607), FP(0.276393)};
+// constexpr fp_t TRACE_INCL_RAYS[NUM_GAUSS_LOBATTO] = {FP(0.000000), FP(0.690212), FP(0.961045)};
+// constexpr fp_t TRACE_AZ_WEIGHTS[NUM_GAUSS_LOBATTO] = {FP(0.083333), FP(0.416667), FP(0.416667)};
+// constexpr fp_t AZ_RAYS[NUM_AZ] = {FP(1.000000), FP(0.723607), FP(0.276393), FP(0.000000)};
+// constexpr fp_t INCL_RAYS[NUM_AZ] = {FP(0.000000), FP(0.690212), FP(0.961045), FP(1.000000)};
+// constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.083333), FP(0.416667), FP(0.416667), FP(0.083333)};
+constexpr fp_t INCL_RAYS[NUM_AZ] = {FP(0.04691008), FP(0.23076534), FP(0.5), FP(0.76923466), FP(0.95308992)};
+constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.11846344), FP(0.23931434), FP(0.28444444), FP(0.23931434), FP(0.11846344)};
 #endif
 
 /// Whether to load an atmosphere or use the LIGHT_MODEL to determine eta/chi.

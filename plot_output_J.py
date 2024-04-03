@@ -32,7 +32,7 @@ if __name__ == "__main__":
         lowerBc=lw.ZeroRadiation(),
         upperBc=lw.ZeroRadiation(),
     )
-    atmos.quadrature(11)
+    atmos.quadrature(5)
 
     a_set = lw.RadiativeSet([H_6_atom(), CaII_atom()])
     a_set.set_active("Ca")
@@ -49,5 +49,5 @@ if __name__ == "__main__":
 
     plt.ion()
     plt.figure()
-    plt.semilogy(dex_wave, dex_J[:, 511, 255], '-+')
+    plt.semilogy(dex_wave, dex_J[:, 255, 255], '-+')
     plt.semilogy(ctx.spect.wavelength, J_slice, '-+')
