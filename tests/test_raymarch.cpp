@@ -235,6 +235,30 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     end(1) = FP(2342.0);
     auto maybe = RayMarch2d_new(start, end, domain_size);
     REQUIRE( !maybe );
+
+    start(0) = FP(17.0);
+    start(1) = FP(8.5);
+    end(0) = FP(14.0);
+    end(1) = FP(5.5);
+    marcher = RayMarch2d_new(start, end, domain_size).value();
+    REQUIRE(marcher.curr_coord(0) == 15);
+    REQUIRE(marcher.curr_coord(1) == 7);
+    REQUIRE(marcher.p0(0) == FP(16.0));
+    REQUIRE(marcher.p0(1) == FP(7.5));
+    REQUIRE_THAT(marcher.dt, WithinRel(FP(0.5) * std::sqrt(FP(2.0)), FP(1e-6)));
+    next_intersection(&marcher);
+    REQUIRE(marcher.curr_coord(0) == 15);
+    REQUIRE(marcher.curr_coord(1) == 6);
+    REQUIRE_THAT(marcher.dt, WithinRel(FP(0.5) * std::sqrt(FP(2.0)), FP(1e-6)));
+    next_intersection(&marcher);
+    REQUIRE(marcher.curr_coord(0) == 14);
+    REQUIRE(marcher.curr_coord(1) == 6);
+    REQUIRE_THAT(marcher.dt, WithinRel(FP(0.5) * std::sqrt(FP(2.0)), FP(1e-6)));
+    next_intersection(&marcher);
+    REQUIRE(marcher.curr_coord(0) == 14);
+    REQUIRE(marcher.curr_coord(1) == 5);
+    REQUIRE_THAT(marcher.dt, WithinRel(FP(0.5) * std::sqrt(FP(2.0)), FP(1e-6)));
+    REQUIRE(!next_intersection(&marcher));
 }
 
 #ifdef FLATLAND

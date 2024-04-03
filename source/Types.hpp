@@ -53,30 +53,33 @@ struct CascadeRTState {
 };
 
 struct RayMarchState2d {
-    // Start pos
+    /// Start pos
     vec2 p0;
-    // end pos
+    /// end pos
     vec2 p1;
 
-    // Current cell coordinate
+    /// Current cell coordinate
     ivec2 curr_coord;
-    // Next cell coordinate
+    /// Next cell coordinate
     ivec2 next_coord;
-    // Integer step dir
+    /// Final cell coordinate -- for intersections with the outer edge of the
+    /// box, this isn't floor(p1), but inside it is.
+    ivec2 final_coord;
+    /// Integer step dir
     ivec2 step;
 
-    // t to next hit per axis
+    /// t to next hit per axis
     vec2 next_hit;
-    // t increment per step per axis
+    /// t increment per step per axis
     vec2 delta;
-    // t to stop at
+    /// t to stop at
     fp_t max_t;
 
-    // axis increment
+    /// axis increment
     vec2 direction;
-    // value of t at current intersection (far side of curr_coord, just before entering next_coord)
+    /// value of t at current intersection (far side of curr_coord, just before entering next_coord)
     fp_t t = FP(0.0);
-    // length of step
+    /// length of step
     fp_t dt = FP(0.0);
 };
 

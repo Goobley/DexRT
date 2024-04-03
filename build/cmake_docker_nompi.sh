@@ -6,6 +6,7 @@ MPI_INCLUDE_PATH="/opt/nvidia/hpc_sdk/Linux_x86_64/24.1/comm_libs/12.3/hpcx/hpcx
 ./cmake_clean.sh
 
       # -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v" \
+      # -DYAKL_DEBUG="On"               \
 cmake -DCMAKE_CXX_COMPILER=g++     \
       -DCMAKE_CUDA_COMPILER=nvcc    \
       -DCMAKE_C_COMPILER=gcc        \

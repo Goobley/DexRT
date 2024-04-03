@@ -415,8 +415,8 @@ void init_state (State* state) {
         auto& absorption_mipmaps = march_state.absorption_mipmaps;
         march_state.cumulative_mipmap_factor = 0;
 
-        auto& curr_em = march_state.emission;
-        auto& curr_ab = march_state.absorption;
+        auto curr_em = march_state.emission;
+        auto curr_ab = march_state.absorption;
 
         for (int i = 0; i <= MAX_LEVEL; ++i) {
             if (MIPMAP_FACTORS[i] == 0) {
@@ -474,55 +474,46 @@ FpConst3d final_cascade_to_J(const FpConst5d& final_cascade, const Fp3d* J_curre
     Fp3d J;
     if (J_current) {
         assert((dims(3) / 2 == 1) && "Got multiple wavelength entries when updating in existing J array, expect one at a time.");
-        J = J_current->slice<3>({J_offset, yakl::COLON, yakl::COLON});
+        auto temp = J_current->slice<2>({J_offset, yakl::COLON, yakl::COLON});
+        J = Fp3d("J_3d_nonown", temp.get_data(), 1, J_current->extent(1), J_current->extent(2));
         J = FP(0.0);
     } else {
         J = Fp3d("J", dims(3) / 2, dims(0), dims(1));
         J = FP(0.0);
     }
     yakl::fence();
+    const fp_t angular_weight = FP(1.0) / fp_t(dims(2));
     parallel_for(
         "final_cascade_to_J",
         SimpleBounds<5>(dims(0), dims(1), dims(2), dims(3) / 2, dims(4)),
         YAKL_LAMBDA (int x, int y, int ray_idx, int la, int r) {
-            fp_t ray_weight = az_weights(r);
+            fp_t ray_weight = angular_weight * az_weights(r);
+            if (x == 0 && y == 0 && ray_idx == 0 && J_offset == 278) {
+                printf("weight: %f\n", ray_weight);
+            }
             yakl::atomicAdd(J(la, x, y), ray_weight * final_cascade(x, y, ray_idx, 2 * la, r));
         }
     );
     return J;
 }
 
-void save_results(const FpConst3d& J) {
+void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths) {
     fmt::print("Saving output...\n");
     auto dims = J.get_dimensions();
-    const yakl::Array<double, 3, yakl::memDevice> fp64_copy("fp64_copy", dims(0), dims(1), dims(2));
-    parallel_for(
-        SimpleBounds<3>(dims(0), dims(1), dims(2)),
-        YAKL_LAMBDA (int la, int x, int y) {
-            fp64_copy(la, x, y) = J(la, x, y);
-        }
-    );
-    yakl::fence();
-    const auto out_dims = fp64_copy.get_dimensions();
 
-#ifdef HAVE_MPI
-    yakl::SimplePNetCDF nc;
-    nc.create("output.nc");
-    std::vector<MPI_Offset> starts(4, 0);
-    nc.create_dim("x", out_dims(0));
-    nc.create_dim("y", out_dims(1));
-    nc.create_dim("ray", out_dims(2));
-    nc.create_dim("col", out_dims(3));
-    nc.create_var<decltype(fp64_copy)::type>("image", {"x", "y", "ray", "col"});
-    nc.enddef();
-    nc.write_all(fp64_copy, "image", starts);
-    nc.close();
-#else
     yakl::SimpleNetCDF nc;
     nc.create("output.nc", NC_CLOBBER);
-    nc.write(fp64_copy, "image", {"wavelength", "x", "y"});
+    
+    auto eta_dims = eta.get_dimensions();
+    fmt::println("J: ({} {} {})", dims(0), dims(1), dims(2));
+    fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
+    nc.write(J, "image", {"wavelength", "x", "y"});
+    if (USE_ATMOSPHERE) {
+        nc.write(eta, "eta", {"x", "y", "chan"});
+        nc.write(chi, "chi", {"x", "y", "chan"});
+        nc.write(wavelengths, "wavelength", {"wavelength"});
+    }
     nc.close();
-#endif
 }
 
 int main(int argc, char** argv) {
@@ -547,6 +538,7 @@ int main(int argc, char** argv) {
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.15), 1024},
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(1.5e3), 64 * 1024}
             );
+            fmt::println("Scale: {} m", state.atmos.voxel_scale);
         }
 
         // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if not using an atmosphere
@@ -568,16 +560,27 @@ int main(int argc, char** argv) {
                 yakl::fence();
             }
             auto J = final_cascade_to_J(state.cascades[0]);
-            save_results(J);
+            FpConst3d dummy_eta, dummy_chi;
+            FpConst1d dummy_wave;
+            save_results(J, dummy_eta, dummy_chi, dummy_wave);
         } else {
             compute_lte_pops(&state);
 
-            for (int la = 0; la < state.atom.wavelength.extent(0); ++la) {
-                fmt::println("Computing wavelength {}", la);
+            auto waves = state.atom.wavelength.createHostCopy();
+            for (int la = 0; la < waves.extent(0); ++la) {
+                fmt::println("Computing wavelength {} ({})", la, waves(la));
                 static_formal_sol_rc(&state, la);
                 final_cascade_to_J(state.cascades[0], &state.J, la);
             }
-            save_results(state.J);
+            int la = 24;
+            static_formal_sol_rc(&state, la);
+            final_cascade_to_J(state.cascades[0], &state.J, la);
+            save_results(
+                state.J, 
+                state.raymarch_state.emission, 
+                state.raymarch_state.absorption, 
+                state.atom.wavelength
+            );
         }
     }
     yakl::finalize();

@@ -4,6 +4,7 @@
 #include "Types.hpp"
 #include "Constants.hpp"
 #include "Utils.hpp"
+#include "State.hpp"
 
 template <typename T=fp_t, typename U=fp_t, int mem_space=yakl::memDevice>
 CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
@@ -316,13 +317,13 @@ void lte_pops(
 /**
  * Computes the LTE populations in state. Assumes state->pops is already allocated.
 */
-void compute_lte_pops(State* state) {
+inline void compute_lte_pops(State* state) {
     // TODO(cmo): This routine/array likely needs to be transposed
     const auto& pops = state->pops;
     const auto& atom = state->atom;
     const auto& temperature = state->atmos.temperature;
-    const auto& ne = state->atmos.temperature;
-    const auto& nhtot = state->atmos.temperature;
+    const auto& ne = state->atmos.ne;
+    const auto& nhtot = state->atmos.nh_tot;
     parallel_for(
         "LTE Pops",
         SimpleBounds<2>(pops.extent(0), pops.extent(1)),

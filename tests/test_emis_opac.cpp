@@ -2,6 +2,7 @@
 #include "CrtafParser.hpp"
 #include "EmisOpac.hpp"
 #include "Utils.hpp"
+#include "State.hpp"
 
 using Catch::Matchers::WithinRel;
 using Catch::Matchers::WithinAbs;

@@ -20,6 +20,7 @@ void compute_cascade_i_2d (
     }
     auto dims = cascade_i.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();
+    auto& atmos = state->atmos;
 
     CascadeRTState rt_state;
     if constexpr (UseMipmaps) {
@@ -31,7 +32,6 @@ void compute_cascade_i_2d (
         rt_state.chi = march_state.absorption;
         rt_state.mipmap_factor = 0;
     }
-    // fmt::println("Cascade {}: Scale: {}", cascade_idx, rt_state.mipmap_factor);
 
     auto az_rays = get_az_rays();
 
@@ -78,6 +78,17 @@ void compute_cascade_i_2d (
             int v_bc = yakl::max(upper_v_bc, 0);
             int u_uc = yakl::min(u_bc+1, (int)upper_dims(0)-1);
             int v_uc = yakl::min(v_bc+1, (int)upper_dims(1)-1);
+            // NOTE(cmo): Edge-most probes should only interpolate the edge-most
+            // probes of the cascade above them, otherwise 3 probes per dimension
+            // (e.g. u = 0, 1, 2) have u_bc = 0, vs 2 for every other u_bc
+            // value. Additionally, this sample in the upper probe "texture"
+            // isn't in the support of u_bc + 1
+            if (u == 0) {
+                u_uc = 0;
+            }
+            if (v == 0) {
+                v_uc = 0;
+            }
 
             fp_t angle = FP(2.0) * FP(M_PI) / num_rays * (ray_idx + FP(0.5));
             vec2 direction;
@@ -110,7 +121,17 @@ void compute_cascade_i_2d (
                 end = start + direction * distance;
             }
 
-            auto sample = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(rt_state, start, end, az_rays);
+            fp_t length_scale = FP(1.0);
+            if (USE_ATMOSPHERE) {
+                length_scale = atmos.voxel_scale;
+            }
+            auto sample = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(
+                rt_state, 
+                start, 
+                end, 
+                az_rays, 
+                length_scale
+            );
             decltype(sample) upper_sample(FP(0.0));
             // NOTE(cmo): Sample upper cascade.
             if (cascade_idx != MAX_LEVEL) {
@@ -177,8 +198,8 @@ void compute_cascade_i_bilinear_fix_2d (
         rt_state.chi = march_state.absorption;
         rt_state.mipmap_factor = 0;
     }
-    fmt::println("Cascade {}: Scale: {}", cascade_idx, rt_state.mipmap_factor);
 
+    auto& atmos = state->atmos;
     auto az_rays = get_az_rays();
 
     std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
@@ -224,6 +245,18 @@ void compute_cascade_i_bilinear_fix_2d (
             int v_bc = yakl::max(upper_v_bc, 0);
             int u_uc = yakl::min(u_bc+1, (int)upper_dims(0)-1);
             int v_uc = yakl::min(v_bc+1, (int)upper_dims(1)-1);
+            // NOTE(cmo): Edge-most probes should only interpolate the edge-most
+            // probes of the cascade above them, otherwise 3 probes per dimension
+            // (e.g. u = 0, 1, 2) have u_bc = 0, vs 2 for every other u_bc
+            // value. Additionally, this sample in the upper probe "texture"
+            // isn't in the support of u_bc + 1
+            if (u == 0) {
+                u_uc = 0;
+            }
+            if (v == 0) {
+                v_uc = 0;
+            }
+
 
             fp_t angle = FP(2.0) * FP(M_PI) / num_rays * (ray_idx + FP(0.5));
             vec2 direction;
@@ -268,7 +301,11 @@ void compute_cascade_i_bilinear_fix_2d (
             vec2 u11_start, u21_start, u12_start, u22_start;
             yakl::SArray<fp_t, 2, NumComponents, NumAz> u11_contrib, u21_contrib, u12_contrib, u22_contrib, upper_sample;
 
-            auto trace_and_merge_with_upper = [&upper_sample, &rt_state, &az_rays, &cascade_ip](
+            fp_t length_scale = FP(1.0);
+            if (USE_ATMOSPHERE) {
+                length_scale = atmos.voxel_scale;
+            }
+            auto trace_and_merge_with_upper = [&upper_sample, &rt_state, &az_rays, &cascade_ip, &length_scale](
                 vec2 start,
                 vec2 end,
                 int u,
@@ -276,7 +313,7 @@ void compute_cascade_i_bilinear_fix_2d (
                 int upper_ray_idx,
                 decltype(upper_sample)& storage
             ) {
-                storage = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(rt_state, start, end, az_rays);
+                storage = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(rt_state, start, end, az_rays, length_scale);
                 for (int i = 0; i < NumComponents; ++i) {
                     for (int r = 0; r < NumAz; ++r) {
                         upper_sample(i, r) = cascade_ip(u, v, upper_ray_idx, i, r);

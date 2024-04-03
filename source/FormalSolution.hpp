@@ -44,7 +44,7 @@ void static_formal_sol_rc(State* state, int la) {
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
     // it, for now, trust the pool allocator
     auto pops_dims = pops.get_dimensions();
-    Fp3d lte_scratch("lte_scratch", pops_dims(1), pops_dims(2), pops_dims(0));
+    Fp3d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1), pops_dims(2));
 
     auto atmos_dims = atmos.temperature.get_dimensions();
     // NOTE(cmo): Compute emis/opac

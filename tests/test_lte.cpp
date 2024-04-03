@@ -2,6 +2,7 @@
 #include "CrtafParser.hpp"
 #include "Populations.hpp"
 #include "Types.hpp"
+#include "State.hpp"
 
 using Catch::Matchers::WithinRel;
 using Catch::Matchers::WithinAbs;

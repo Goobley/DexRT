@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "Utils.hpp"
+#include "State.hpp"
 #include "RayMarching.hpp"
 #include "RadianceIntervals.hpp"
 #include "RadianceCascades.hpp"
