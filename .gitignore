@@ -8,6 +8,10 @@ pnetcdf/*
 !pnetcdf/setup.sh
 !pnetcdf/docker_setup.sh
 
+magma/*
+!magma/docker_setup.sh
+!magma/magma.conf
+
 build/*
 !build/cmake_basic.sh
 !build/cmake_clean.sh

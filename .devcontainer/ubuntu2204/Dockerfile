@@ -2,6 +2,10 @@ FROM ubuntu:latest
 
 RUN apt update && apt install -y build-essential curl libcurl4-openssl-dev libopenmpi-dev cmake wget git
 
+WORKDIR /src/magma
+COPY magma/docker_setup.sh .
+RUN ./docker_setup.sh ""
+
 WORKDIR /src/hdf5
 COPY hdf5/docker_setup.sh .
 RUN ./docker_setup.sh

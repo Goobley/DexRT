@@ -22,6 +22,7 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_voigt.cpp
     test_utils.cpp
     test_emis_opac.cpp
+    test_gesv.cpp
 )
 
 add_executable(dexrt_test 
@@ -32,7 +33,11 @@ if ("${YAKL_ARCH}" STREQUAL "CUDA")
     set_source_files_properties(${UNIT_TEST_SOURCE_FILES} PROPERTIES LANGUAGE CUDA)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CXX_FLAGS}")
 endif()
-target_include_directories(dexrt_test SYSTEM PUBLIC "${GCC_INCLUDE_PATH}" "${MPI_INCLUDE_PATH}")
+target_include_directories(dexrt_test SYSTEM PUBLIC 
+    "${GCC_INCLUDE_PATH}" 
+    "${MPI_INCLUDE_PATH}"
+    "${MAGMA_INCLUDE_PATH}"
+)
 target_include_directories(dexrt_test PUBLIC "../source/")
 target_include_directories(dexrt_test PUBLIC "../YAKL/src")
 target_include_directories(dexrt_test PUBLIC "../yaml-cpp/include")
@@ -60,6 +65,7 @@ target_include_directories(lw_comparison_2d SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}" 
     "${MPI_INCLUDE_PATH}" 
     "${NETCDF_INCLUDE_PATH}"
+    "${MAGMA_INCLUDE_PATH}"
 )
 target_include_directories(lw_comparison_2d PUBLIC "../source/")
 target_include_directories(lw_comparison_2d PUBLIC "../YAKL/src")
@@ -86,6 +92,7 @@ target_include_directories(diffuse_source SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}" 
     "${MPI_INCLUDE_PATH}" 
     "${NETCDF_INCLUDE_PATH}"
+    "${MAGMA_INCLUDE_PATH}"
 )
 target_include_directories(diffuse_source PUBLIC "../source/")
 target_include_directories(diffuse_source PUBLIC "../YAKL/src")
@@ -112,6 +119,7 @@ target_include_directories(solid_source SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}" 
     "${MPI_INCLUDE_PATH}" 
     "${NETCDF_INCLUDE_PATH}"
+    "${MAGMA_INCLUDE_PATH}"
 )
 target_include_directories(solid_source PUBLIC "../source/")
 target_include_directories(solid_source PUBLIC "../YAKL/src")
@@ -138,6 +146,7 @@ target_include_directories(static_lte_fs SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}" 
     "${MPI_INCLUDE_PATH}" 
     "${NETCDF_INCLUDE_PATH}"
+    "${MAGMA_INCLUDE_PATH}"
 )
 target_include_directories(static_lte_fs PUBLIC "../source/")
 target_include_directories(static_lte_fs PUBLIC "../YAKL/src")
