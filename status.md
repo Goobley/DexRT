@@ -14,7 +14,7 @@ Features/ToDo
 - [x] LTE populations (@b54f9ff)
 - [x] Line absorption profile (@c878288)
 - [x] Emission, opacity, source function (@2bf9af7 - not source function, but that's just a ratio!)
-- [ ] LTE formal solution from atmosphere
+- [x] LTE formal solution from atmosphere (@bbddad4 - static only)
 - [ ] LTE background from tabulated atmosphere
 - [ ] LTE with background J iteration
 - [ ] Final formal solution (interactive?)
@@ -27,3 +27,4 @@ Ideas
 =====
 
 - [ ] Move LTE populations to be partition function based (allows for calculation of only the levels of interest)
+- [ ] Use magma to abstract batched LU solved for populations

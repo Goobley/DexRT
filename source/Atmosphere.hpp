@@ -17,7 +17,7 @@ inline Atmosphere load_atmos(const std::string& path) {
 
 
     yakl::SimpleNetCDF nc;
-    nc.open("atmos.nc", yakl::NETCDF_MODE_READ);
+    nc.open(path, yakl::NETCDF_MODE_READ);
     int x_dim = nc.getDimSize("x");
     int z_dim = nc.getDimSize("z");
 

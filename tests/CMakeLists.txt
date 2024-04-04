@@ -131,4 +131,30 @@ endif()
 
 #############################
 
+add_executable(static_lte_fs
+    demos/static_lte_fs/main.cpp
+)
+target_include_directories(static_lte_fs SYSTEM PUBLIC 
+    "${GCC_INCLUDE_PATH}" 
+    "${MPI_INCLUDE_PATH}" 
+    "${NETCDF_INCLUDE_PATH}"
+)
+target_include_directories(static_lte_fs PUBLIC "../source/")
+target_include_directories(static_lte_fs PUBLIC "../YAKL/src")
+target_include_directories(static_lte_fs PUBLIC ../fmt/include)
+target_link_libraries(static_lte_fs "${LDFLAGS}")
+target_link_libraries(static_lte_fs fmt::fmt)
+target_link_libraries(static_lte_fs yaml-cpp::yaml-cpp)
+set_target_properties(static_lte_fs PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS YES
+)
+yakl_process_target(static_lte_fs)
+if ("${YAKL_ARCH}" STREQUAL "CUDA")
+    set_target_properties(static_lte_fs PROPERTIES LINKER_LANGUAGE CXX)
+endif()
+
+#############################
+
 add_test(NAME dexrt_unit_test COMMAND $<TARGET_FILE:dexrt_test>)

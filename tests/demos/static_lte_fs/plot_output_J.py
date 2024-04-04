@@ -7,13 +7,13 @@ from lightweaver.rh_atoms import CaII_atom, H_6_atom
 
 
 if __name__ == "__main__":
-    ds = netCDF4.Dataset("build/output.nc")
+    ds = netCDF4.Dataset("../../build/output.nc")
     dex_J = np.array(ds["image"][...])
     dex_wave = np.array(ds["wavelength"][...])
     dex_eta = np.array(ds["eta"][...])
     dex_chi = np.array(ds["chi"][...])
 
-    ds = netCDF4.Dataset("build/atmos.nc", "r")
+    ds = netCDF4.Dataset("../../build/atmos_static_lte_fs.nc", "r")
     nz = ds.dimensions["z"].size
     z_grid = np.ascontiguousarray((np.arange(nz, dtype=np.float64) * ds["voxel_scale"][...])[::-1])
     temperature = np.ascontiguousarray(ds["temperature"][:, 256][::-1]).astype(np.float64)
