@@ -205,7 +205,7 @@ struct ModelAtom {
     std::vector<InterpCollRate<T>> coll_rates;
 
     /// Compute the wavelength [nm] (lambda0 for lines, lambda_edge for
-    /// continua) for a transition between levels j and i (j > i) 
+    /// continua) for a transition between levels j and i (j > i)
     T transition_wavelength(int j, int i) {
         using namespace ConstantsF64;
         T delta_e = levels[j].energy - levels[i].energy;

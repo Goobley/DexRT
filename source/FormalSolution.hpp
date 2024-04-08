@@ -31,7 +31,159 @@ YAKL_INLINE fp_t nh0_lte(fp_t temperature, fp_t ne, fp_t nh_tot) {
     return result;
 }
 
-void static_formal_sol_rc(State* state, int la) {
+inline void compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
+    using namespace ConstantsFP;
+    auto& atmos = state->atmos;
+    auto atmos_dims = atmos.temperature.get_dimensions();
+    const auto& atom = state->atom;
+    const auto& phi = state->phi;
+    const auto& pops = state->pops;
+    const auto& Gamma = state->Gamma;
+    const auto& alo = state->alo;
+    const auto& I = state->cascades[0];
+    const auto& wavelength = atom.wavelength;
+    auto az_rays = get_az_rays();
+    auto az_weights = get_az_weights();
+    auto I_dims = I.get_dimensions();
+
+    parallel_for(
+        "compute Gamma",
+        SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
+        YAKL_LAMBDA (int x, int y) {
+            AtmosPointParams local_atmos;
+            local_atmos.temperature = atmos.temperature(x, y);
+            local_atmos.ne = atmos.ne(x, y);
+            local_atmos.vturb = atmos.vturb(x, y);
+            local_atmos.nhtot = atmos.nh_tot(x, y);
+            local_atmos.nh0 = nh0_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+
+            fp_t lambda = atom.wavelength(la);
+            for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
+                const auto& l = atom.lines(kr);
+                if (!l.is_active(la)) {
+                    continue;
+                }
+
+                LineParams params;
+                params.dop_width = doppler_width(
+                    l.lambda0,
+                    atom.mass,
+                    local_atmos.temperature,
+                    local_atmos.vturb
+                );
+                params.gamma = gamma_from_broadening(
+                    l,
+                    atom.broadening,
+                    local_atmos.temperature,
+                    local_atmos.ne,
+                    local_atmos.nh0
+                );
+                // TODO(cmo): Come back to this!
+                params.vel = FP(0.0);
+
+                const UV uv = compute_uv(
+                    l,
+                    phi,
+                    params,
+                    lambda
+                );
+
+                const fp_t eta = pops(x, y, l.j) * uv.Uji;
+                const fp_t chi = pops(x, y, l.i) * uv.Vij - pops(x, y, l.j) * uv.Vji;
+                const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
+                fp_t wl_weight = FP(1.0) / hnu_4pi;
+                if (la == 0) {
+                    wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
+                } else if (la == wavelength.extent(0) - 1) {
+                    wl_weight *= FP(0.5) * (
+                        wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
+                    );
+                } else {
+                    wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
+                }
+
+                const fp_t psi_star = alo(x, y) / chi;
+                for (int ray_idx = 0; ray_idx < I_dims(2); ++ray_idx) {
+                    for (int la = 0; la < I_dims(3); ++la) {
+                        for (int r = 0; r < I_dims(4); ++r) {
+                            const fp_t I_eff = I(x, y, ray_idx, la, r) - psi_star * eta;
+                            const fp_t wlamu = wl_weight * FP(1.0) / I_dims(2) * az_weights(r);
+                            fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
+                            // NOTE(cmo): The last 2 axes are transposed relative to Lw due to our batched solver
+                            Gamma(x, y, l.j, l.i) += integrand * wlamu;
+
+                            integrand = uv.Vij * I_eff;
+                            Gamma(x, y, l.i, l.j) += integrand * wlamu;
+                        }
+                    }
+                }
+            }
+            for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+                const auto& cont = atom.continua(kr);
+                if (!cont.is_active(la)) {
+                    continue;
+                }
+
+                ContParams params;
+                params.la = la;
+                params.thermal_ratio = lte_scratch(x, y, cont.i) / lte_scratch(x, y, cont.j) * std::exp(-hc_k_B_nm / (lambda * local_atmos.temperature));
+                params.sigma_grid = get_sigma(atom, cont);
+
+                const UV uv = compute_uv(
+                    cont,
+                    params,
+                    lambda
+                );
+                const fp_t eta = pops(x, y, cont.j) * uv.Uji;
+                const fp_t chi = pops(x, y, cont.i) * uv.Vij - pops(x, y, cont.j) * uv.Vji;
+                const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
+                fp_t wl_weight = FP(1.0) / hnu_4pi;
+                if (la == 0) {
+                    wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
+                } else if (la == wavelength.extent(0) - 1) {
+                    wl_weight *= FP(0.5) * (
+                        wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
+                    );
+                } else {
+                    wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
+                }
+
+                const fp_t psi_star = alo(x, y) / chi;
+                for (int ray_idx = 0; ray_idx < I_dims(2); ++ray_idx) {
+                    for (int la = 0; la < I_dims(3); ++la) {
+                        for (int r = 0; r < I_dims(4); ++r) {
+                            const fp_t I_eff = I(x, y, ray_idx, la, r) - psi_star * eta;
+                            const fp_t wlamu = wl_weight * FP(1.0) / I_dims(2) * az_weights(r);
+                            fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
+                            // NOTE(cmo): The last 2 axes are transposed relative to Lw due to our batched solver
+                            Gamma(x, y, cont.j, cont.i) += integrand * wlamu;
+
+                            integrand = uv.Vij * I_eff;
+                            Gamma(x, y, cont.i, cont.j) += integrand * wlamu;
+                        }
+                    }
+                }
+            }
+        }
+    );
+    yakl::fence();
+    parallel_for(
+        "Gamma fixup",
+        SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
+        YAKL_LAMBDA (int x, int y) {
+            for (int i = 0; i < Gamma.extent(2); ++i) {
+                fp_t diag = FP(0.0);
+                Gamma(x, y, i, i) = FP(0.0);
+                for (int j = 0; j < Gamma.extent(2); ++j) {
+                    diag += Gamma(x, y, i, j);
+                }
+                Gamma(x, y, i, i) = -diag;
+            }
+        }
+    );
+}
+
+inline void static_formal_sol_rc(State* state, int la) {
     auto& march_state = state->raymarch_state;
 
     auto& atmos = state->atmos;
@@ -70,16 +222,8 @@ void static_formal_sol_rc(State* state, int la) {
             chi(x, y, 0) = result.chi;
         }
     );
-    const auto& alo = state->alo;
-    if (alo.initialized()) {
-        parallel_for(
-            "Zero ALO",
-            SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
-            YAKL_LAMBDA (int x, int y) {
-                alo(x, y) = FP(0.0);
-            }
-        );
-    }
+    state->alo = FP(0.0);
+    state->Gamma = FP(0.0);
     yakl::fence();
     // NOTE(cmo): Regenerate mipmaps
     if constexpr (USE_MIPMAPS) {
@@ -109,7 +253,7 @@ void static_formal_sol_rc(State* state, int la) {
     }
     // NOTE(cmo): Compute RC FS
     for (int i = MAX_LEVEL; i >= 0; --i) {
-        const bool compute_alo = ((i == 0) && alo.initialized());
+        const bool compute_alo = ((i == 0) && state->alo.initialized());
         if constexpr (BILINEAR_FIX) {
             compute_cascade_i_bilinear_fix_2d(state, i, compute_alo);
         } else {
@@ -118,6 +262,8 @@ void static_formal_sol_rc(State* state, int la) {
         yakl::fence();
     }
     // NOTE(cmo): J is not computed in this function, but done in main for now
+
+    compute_gamma(state, la, lte_scratch);
 }
 
 #else

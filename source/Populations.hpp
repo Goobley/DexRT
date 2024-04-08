@@ -108,7 +108,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         }
     }
     std::sort(
-        default_grid.begin(), 
+        default_grid.begin(),
         default_grid.end(),
         [](auto a, auto b) {
             return a.wavelength < b.wavelength;
@@ -194,13 +194,13 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     int n_sigma = 0;
     for (int kr = 0; kr < blue_wavelengths.size(); ++kr) {
         auto blue_iter = std::lower_bound(
-            new_grid.begin(), 
-            new_grid.end(), 
+            new_grid.begin(),
+            new_grid.end(),
             blue_wavelengths[kr]
         );
         auto red_iter = std::upper_bound(
-            new_grid.begin(), 
-            new_grid.end(), 
+            new_grid.begin(),
+            new_grid.end(),
             red_wavelengths[kr]
         );
         if (kr < n_lines) {
@@ -219,13 +219,13 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     for (int kr = 0; kr < continua.extent(0); ++kr) {
         const auto& model_cont = model.continua[kr];
         yakl::Array<U const, 1, yakl::memHost> model_wave(
-            "wavelength", 
-            model_cont.wavelength.data(), 
+            "wavelength",
+            model_cont.wavelength.data(),
             model_cont.wavelength.size()
         );
         yakl::Array<U const, 1, yakl::memHost> model_sigma(
-            "sigma", 
-            model_cont.sigma.data(), 
+            "sigma",
+            model_cont.sigma.data(),
             model_cont.sigma.size()
         );
 
@@ -340,6 +340,11 @@ inline void compute_lte_pops(State* state) {
             );
         }
     );
+}
+
+inline void stat_eq(State* state) {
+    // TODO(cmo): Launch batched LU solve
+
 }
 
 #else

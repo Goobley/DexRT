@@ -13,6 +13,7 @@ struct State {
     Fp3d pops; /// [x, y, num_level] TODO(cmo): Update this!
     Fp3d J; /// [num_wave, x, y]
     Fp2d alo; /// [x, y]
+    Fp4d Gamma; /// [x, y, i, j]
 };
 
 #else
