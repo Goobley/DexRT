@@ -566,6 +566,7 @@ int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 #endif
     yakl::init(yakl::InitConfig().set_pool_initial_mb(1.55 * 1024).set_pool_grow_mb(1.55 * 1024));
+    Kokkos::initialize();
     {
         State state;
 
@@ -629,6 +630,7 @@ int main(int argc, char** argv) {
         }
     }
     yakl::finalize();
+    Kokkos::finalize();
 #ifdef HAVE_MPI
     MPI_Finalize();
 #endif

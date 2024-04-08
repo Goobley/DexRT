@@ -4,16 +4,23 @@ project(DexRT CXX)
 add_subdirectory(fmt)
 add_subdirectory(yaml-cpp)
 
+find_package(Kokkos REQUIRED)
+
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
     enable_language(CUDA)
 endif()
 
-SET(CMAKE_CXX_FLAGS "${CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CXX_FLAGS}")
 add_subdirectory(YAKL)
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 84)
 endif()
 include_directories(YAKL)
+
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+endif()
 
 add_executable(dexrt "source/main.cpp")
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
@@ -28,6 +35,10 @@ target_include_directories(dexrt SYSTEM PUBLIC
 target_link_libraries(dexrt "${LDFLAGS}")
 target_link_libraries(dexrt fmt::fmt)
 target_link_libraries(dexrt yaml-cpp::yaml-cpp)
+target_link_libraries(dexrt Kokkos::kokkos)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(dexrt OpenMP::OpenMP_CXX)
+endif()
 set_target_properties(dexrt PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED YES

@@ -1,6 +1,7 @@
 #if !defined(DEXRT_CONFIG_HPP)
 #define DEXRT_CONFIG_HPP
 #include "YAKL.h"
+#include <Kokkos_Core.hpp>
 
 #define DEXRT_SINGLE_PREC
 #ifdef DEXRT_SINGLE_PREC
