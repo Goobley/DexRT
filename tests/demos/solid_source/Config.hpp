@@ -38,6 +38,8 @@ constexpr int NUM_WAVELENGTHS = 3;
 constexpr int NUM_COMPONENTS = 2 * NUM_WAVELENGTHS;
 constexpr int NUM_DIM = 2;
 
+constexpr bool PINGPONG_BUFFERS = false;
+
 #define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_AZ = 1;

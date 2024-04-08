@@ -30,6 +30,8 @@ constexpr bool BILINEAR_FIX = false;
 constexpr bool USE_MIPMAPS = true;
 constexpr int MIPMAP_FACTORS[MAX_LEVEL+1] = {0, 0, 1, 1, 1};
 
+constexpr bool PINGPONG_BUFFERS = false;
+
 // #define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_AZ = 1;
