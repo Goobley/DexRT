@@ -338,29 +338,71 @@ void init_state (State* state) {
         cascade_0_x_probes = MODEL_X / PROBE0_SPACING;
         cascade_0_z_probes = MODEL_Y / PROBE0_SPACING;
     }
-    
-    // NOTE(cmo): Allocate cascades
-    for (int l = 0; l < MAX_LEVEL + 1; ++l) {
-        state->cascades.push_back(
-            Fp5d(
-                "cascade",
-                cascade_0_x_probes / (1 << l),
-                cascade_0_z_probes / (1 << l),
-                PROBE0_NUM_RAYS * (1 << (l * CASCADE_BRANCHING_FACTOR)),
-                NUM_COMPONENTS,
-                NUM_AZ
-            )
-        );
 
-        auto casc = state->cascades[l];
-        auto dims = casc.get_dimensions();
-        fp_t prev_radius = 0;
-        if (l != 0) {
-            prev_radius = PROBE0_LENGTH * (1 << ((l-1) * CASCADE_BRANCHING_FACTOR));
+    // NOTE(cmo): Allocate cascades
+    if constexpr (PINGPONG_BUFFERS) {
+        int64_t cascade_alloc_entries = int64_t(cascade_0_x_probes) * int64_t(cascade_0_z_probes) * PROBE0_NUM_RAYS * NUM_COMPONENTS * NUM_AZ;
+        for (int l = 0; l < MAX_LEVEL + 1; ++l) {
+            int64_t x_dim = cascade_0_x_probes / (1 << l);
+            int64_t z_dim = cascade_0_z_probes / (1 << l);
+            int64_t ray_dim = PROBE0_NUM_RAYS * (1 << (l * CASCADE_BRANCHING_FACTOR));
+            int64_t cascade_size = (
+                x_dim *
+                z_dim *
+                ray_dim *
+                NUM_COMPONENTS * NUM_AZ
+            );
+            if (cascade_size > cascade_alloc_entries) {
+                throw std::runtime_error(fmt::format(
+                    "Cascade {} (with {} entries), too large for pingpong buffer ({} entries). Use a power of 2 size!",
+                    l,
+                    cascade_size,
+                    cascade_alloc_entries
+                ));
+            }
+            fp_t prev_radius = 0;
+            if (l != 0) {
+                prev_radius = PROBE0_LENGTH * (1 << ((l-1) * CASCADE_BRANCHING_FACTOR));
+            }
+            fp_t radius = PROBE0_LENGTH * (1 << (l * CASCADE_BRANCHING_FACTOR));
+            fmt::print("[{}, {}, {}, {}->{}]\n", x_dim, z_dim, ray_dim, prev_radius, radius);
         }
-        fp_t radius = PROBE0_LENGTH * (1 << (l * CASCADE_BRANCHING_FACTOR));
-        fmt::print("[{}, {}, {}, {}, {}->{}]\n", dims(0), dims(1), dims(2), dims(3), prev_radius, radius);
-        casc = FP(0.0);
+        for (int i = 0; i < 2; ++i) {
+            state->cascades.push_back(
+                Fp5d(
+                    "cascade",
+                    cascade_0_x_probes,
+                    cascade_0_z_probes,
+                    PROBE0_NUM_RAYS,
+                    NUM_COMPONENTS,
+                    NUM_AZ
+                )
+            );
+            state->cascades.back() = FP(0.0);
+        }
+    } else {
+        for (int l = 0; l < MAX_LEVEL + 1; ++l) {
+            state->cascades.push_back(
+                Fp5d(
+                    "cascade",
+                    cascade_0_x_probes / (1 << l),
+                    cascade_0_z_probes / (1 << l),
+                    PROBE0_NUM_RAYS * (1 << (l * CASCADE_BRANCHING_FACTOR)),
+                    NUM_COMPONENTS,
+                    NUM_AZ
+                )
+            );
+
+            auto casc = state->cascades[l];
+            auto dims = casc.get_dimensions();
+            fp_t prev_radius = 0;
+            if (l != 0) {
+                prev_radius = PROBE0_LENGTH * (1 << ((l-1) * CASCADE_BRANCHING_FACTOR));
+            }
+            fp_t radius = PROBE0_LENGTH * (1 << (l * CASCADE_BRANCHING_FACTOR));
+            fmt::print("[{}, {}, {}, {}->{}]\n", dims(0), dims(1), dims(2), prev_radius, radius);
+            casc = FP(0.0);
+        }
     }
 
     auto& march_state = state->raymarch_state;
@@ -503,7 +545,7 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
 
     yakl::SimpleNetCDF nc;
     nc.create("output.nc", NC_CLOBBER);
-    
+
     auto eta_dims = eta.get_dimensions();
     fmt::println("J: ({} {} {})", dims(0), dims(1), dims(2));
     fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
@@ -576,9 +618,9 @@ int main(int argc, char** argv) {
             static_formal_sol_rc(&state, la);
             final_cascade_to_J(state.cascades[0], &state.J, la);
             save_results(
-                state.J, 
-                state.raymarch_state.emission, 
-                state.raymarch_state.absorption, 
+                state.J,
+                state.raymarch_state.emission,
+                state.raymarch_state.absorption,
                 state.atom.wavelength
             );
         }

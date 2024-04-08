@@ -13,10 +13,36 @@ void compute_cascade_i_2d (
     int cascade_idx
 ) {
     const auto march_state = state->raymarch_state;
-    const auto& cascade_i = state->cascades[cascade_idx];
+    int cascade_lookup_idx = cascade_idx;
+    int cascade_lookup_idx_p = cascade_idx + 1;
+    if constexpr (PINGPONG_BUFFERS) {
+        if (cascade_idx & 1) {
+            cascade_lookup_idx = 1;
+            cascade_lookup_idx_p = 0;
+        } else {
+            cascade_lookup_idx = 0;
+            cascade_lookup_idx_p = 1;
+        }
+    }
+    int x_dim = march_state.emission.extent(0) / (1 << cascade_idx);
+    int z_dim = march_state.emission.extent(1) / (1 << cascade_idx);
+    int ray_dim = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
+    const auto& cascade_i = state->cascades[cascade_lookup_idx].reshape<5>({
+        x_dim,
+        z_dim,
+        ray_dim,
+        NumComponents,
+        NumAz
+    });
     FpConst5d cascade_ip = cascade_i;
     if (cascade_idx != MAX_LEVEL) {
-        cascade_ip = state->cascades[cascade_idx + 1];
+        cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>({
+            x_dim / 2,
+            z_dim / 2,
+            ray_dim * CASCADE_BRANCHING_FACTOR,
+            NumComponents,
+            NumAz
+        });
     }
     auto dims = cascade_i.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();
@@ -126,10 +152,10 @@ void compute_cascade_i_2d (
                 length_scale = atmos.voxel_scale;
             }
             auto sample = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(
-                rt_state, 
-                start, 
-                end, 
-                az_rays, 
+                rt_state,
+                start,
+                end,
+                az_rays,
                 length_scale
             );
             decltype(sample) upper_sample(FP(0.0));
@@ -180,10 +206,36 @@ void compute_cascade_i_bilinear_fix_2d (
     }
 
     const auto march_state = state->raymarch_state;
-    const auto& cascade_i = state->cascades[cascade_idx];
+    int cascade_lookup_idx = cascade_idx;
+    int cascade_lookup_idx_p = cascade_idx + 1;
+    if constexpr (PINGPONG_BUFFERS) {
+        if (cascade_idx & 1) {
+            cascade_lookup_idx = 1;
+            cascade_lookup_idx_p = 0;
+        } else {
+            cascade_lookup_idx = 0;
+            cascade_lookup_idx_p = 1;
+        }
+    }
+    int x_dim = march_state.emission.extent(0) / (1 << cascade_idx);
+    int z_dim = march_state.emission.extent(1) / (1 << cascade_idx);
+    int ray_dim = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
+    const auto& cascade_i = state->cascades[cascade_lookup_idx].reshape<5>({
+        x_dim,
+        z_dim,
+        ray_dim,
+        NumComponents,
+        NumAz
+    });
     FpConst5d cascade_ip = cascade_i;
     if (cascade_idx != MAX_LEVEL) {
-        cascade_ip = state->cascades[cascade_idx + 1];
+        cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>({
+            x_dim / 2,
+            z_dim / 2,
+            ray_dim * CASCADE_BRANCHING_FACTOR,
+            NumComponents,
+            NumAz
+        });
     }
     auto dims = cascade_i.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();

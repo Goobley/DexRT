@@ -22,7 +22,7 @@ if __name__ == "__main__":
     vturb = np.ascontiguousarray(ds["vturb"][:, 256][::-1]).astype(np.float64)
 
     atmos = lw.Atmosphere.make_1d(
-        lw.ScaleType.Geometric, 
+        lw.ScaleType.Geometric,
         z_grid,
         temperature,
         vlos=np.zeros_like(z_grid),
@@ -57,5 +57,5 @@ if __name__ == "__main__":
     dex_interp = np.interp(ctx.spect.wavelength, dex_wave, dex_J[:, 255, 255])
     ax[1].plot(ctx.spect.wavelength, dex_interp / J_slice, label="dex / lw")
     ax[1].set_xlabel(r"$\lambda$ [nm]")
-    ax[1].set_ylim(0.8)
+    ax[1].set_ylim(0.70)
     ax[1].legend()
