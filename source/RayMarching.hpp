@@ -184,6 +184,8 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     vec2 ray_start,
     vec2 ray_end,
     yakl::SArray<fp_t, 1, NumAz> az_rays,
+    yakl::SArray<fp_t, 1, NumAz> az_weights,
+    const Fp2d& alo,
     fp_t distance_scale = FP(1.0)
 ) {
     auto domain_dims = domain.get_dimensions();
@@ -232,13 +234,21 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
             chi_sample(i) = chi(sample_coord(0), sample_coord(1), i) + FP(1e-20);
         }
 
+        const bool final_step = (s.t == s.max_t);
+        const bool accumulate_alo = (final_step && alo.initialized());
+
         for (int i = 0; i < NumWavelengths; ++i) {
             fp_t tau = chi_sample(i) * s.dt * distance_scale;
             fp_t source_fn = sample(i) / chi_sample(i);
 
             for (int r = 0; r < NumAz; ++r) {
+                const fp_t weight = FP(1.0) / (PROBE0_NUM_RAYS) * az_weights(r);
                 if (az_rays(r) == FP(0.0)) {
                     result(2*i, r) = source_fn;
+                    if (accumulate_alo) {
+                        // NOTE(cmo): We add the local weight since tau is infinite, i.e. one_m_edt == 1.0
+                        yakl::atomicAdd(alo(sample_coord(0), sample_coord(1)), weight);
+                    }
                 } else {
                     fp_t mu = az_rays(r);
                     fp_t tau_mu = tau / mu;
@@ -252,6 +262,9 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
                     }
                     result(2*i+1, r) += tau_mu;
                     result(2*i, r) = result(2*i, r) * edt + source_fn * one_m_edt;
+                    if (accumulate_alo) {
+                        yakl::atomicAdd(alo(sample_coord(0), sample_coord(1)), weight * one_m_edt);
+                    }
                 }
             }
         }
@@ -266,6 +279,8 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     vec2 ray_start,
     vec2 ray_end,
     const yakl::SArray<fp_t, 1, NumAz>& az_rays,
+    const yakl::SArray<fp_t, 1, NumAz>& az_weights,
+    const Fp2d& alo,
     fp_t length_scale = FP(1.0)
 ) {
     // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe
@@ -283,7 +298,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     const FpConst3d& eta = state.eta;
     const FpConst3d& chi = state.chi;
 
-    return dda_raymarch_2d<NumWavelengths, NumAz, NumComponents>(eta, chi, ray_end, ray_start, az_rays, factor);
+    return dda_raymarch_2d<NumWavelengths, NumAz, NumComponents>(eta, chi, ray_end, ray_start, az_rays, az_weights, alo, factor);
 }
 
 #else

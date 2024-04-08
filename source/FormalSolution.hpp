@@ -59,9 +59,9 @@ void static_formal_sol_rc(State* state, int la) {
             local_atmos.nhtot = atmos.nh_tot(x, y);
             local_atmos.nh0 = nh0_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
             auto result = emis_opac(
-                atom, 
-                phi, 
-                la, 
+                atom,
+                phi,
+                la,
                 pops.slice<1>({x, y, yakl::COLON}),
                 lte_scratch.slice<1>({x, y, yakl::COLON}),
                 local_atmos
@@ -70,6 +70,16 @@ void static_formal_sol_rc(State* state, int la) {
             chi(x, y, 0) = result.chi;
         }
     );
+    const auto& alo = state->alo;
+    if (alo.initialized()) {
+        parallel_for(
+            "Zero ALO",
+            SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
+            YAKL_LAMBDA (int x, int y) {
+                alo(x, y) = FP(0.0);
+            }
+        );
+    }
     yakl::fence();
     // NOTE(cmo): Regenerate mipmaps
     if constexpr (USE_MIPMAPS) {
@@ -99,10 +109,11 @@ void static_formal_sol_rc(State* state, int la) {
     }
     // NOTE(cmo): Compute RC FS
     for (int i = MAX_LEVEL; i >= 0; --i) {
+        const bool compute_alo = ((i == 0) && alo.initialized());
         if constexpr (BILINEAR_FIX) {
-            compute_cascade_i_bilinear_fix_2d(state, i);
+            compute_cascade_i_bilinear_fix_2d(state, i, compute_alo);
         } else {
-            compute_cascade_i_2d(state, i);
+            compute_cascade_i_2d(state, i, compute_alo);
         }
         yakl::fence();
     }

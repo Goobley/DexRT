@@ -55,7 +55,6 @@ TEST_CASE("Magma solve", "[magma]") {
     yakl::finalize();
 }
 
-// TODO(cmo): Batched test
 TEST_CASE("Magma batched solve", "[magma]") {
     yakl::init();
     magma_init();

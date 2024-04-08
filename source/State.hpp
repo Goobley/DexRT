@@ -10,8 +10,9 @@ struct State {
     Atmosphere atmos;
     CompAtom<fp_t> atom;
     VoigtProfile<fp_t, false> phi;
-    Fp3d pops; // [x, y, num_level] TODO(cmo): Update this!
-    Fp3d J; // [num_wave, x, y]
+    Fp3d pops; /// [x, y, num_level] TODO(cmo): Update this!
+    Fp3d J; /// [num_wave, x, y]
+    Fp2d alo; /// [x, y]
 };
 
 #else

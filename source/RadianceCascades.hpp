@@ -10,7 +10,8 @@
 template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 void compute_cascade_i_2d (
     State* state,
-    int cascade_idx
+    int cascade_idx,
+    bool compute_alo = false
 ) {
     const auto march_state = state->raymarch_state;
     int cascade_lookup_idx = cascade_idx;
@@ -60,6 +61,9 @@ void compute_cascade_i_2d (
     }
 
     auto az_rays = get_az_rays();
+    auto az_weights = get_az_weights();
+
+    const auto& alo = state->alo;
 
     std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(cascade_name.c_str());
@@ -156,6 +160,8 @@ void compute_cascade_i_2d (
                 start,
                 end,
                 az_rays,
+                az_weights,
+                alo,
                 length_scale
             );
             decltype(sample) upper_sample(FP(0.0));
@@ -199,7 +205,8 @@ void compute_cascade_i_2d (
 template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 void compute_cascade_i_bilinear_fix_2d (
     State* state,
-    int cascade_idx
+    int cascade_idx,
+    bool compute_alo = false
 ) {
     if (cascade_idx == MAX_LEVEL) {
         return compute_cascade_i_2d(state, cascade_idx);
@@ -253,6 +260,9 @@ void compute_cascade_i_bilinear_fix_2d (
 
     auto& atmos = state->atmos;
     auto az_rays = get_az_rays();
+    auto az_weights = get_az_weights();
+
+    const auto& alo = state->alo;
 
     std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(cascade_name.c_str());
@@ -357,7 +367,7 @@ void compute_cascade_i_bilinear_fix_2d (
             if (USE_ATMOSPHERE) {
                 length_scale = atmos.voxel_scale;
             }
-            auto trace_and_merge_with_upper = [&upper_sample, &rt_state, &az_rays, &cascade_ip, &length_scale](
+            auto trace_and_merge_with_upper = [&upper_sample, &rt_state, &az_rays, &cascade_ip, &length_scale, &az_weights, &alo](
                 vec2 start,
                 vec2 end,
                 int u,
@@ -365,7 +375,15 @@ void compute_cascade_i_bilinear_fix_2d (
                 int upper_ray_idx,
                 decltype(upper_sample)& storage
             ) {
-                storage = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(rt_state, start, end, az_rays, length_scale);
+                storage = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(
+                    rt_state,
+                    start,
+                    end,
+                    az_rays,
+                    az_weights,
+                    alo,
+                    length_scale
+                );
                 for (int i = 0; i < NumComponents; ++i) {
                     for (int r = 0; r < NumAz; ++r) {
                         upper_sample(i, r) = cascade_ip(u, v, upper_ray_idx, i, r);

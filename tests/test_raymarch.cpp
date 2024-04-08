@@ -261,7 +261,6 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     REQUIRE(!next_intersection(&marcher));
 }
 
-#ifdef FLATLAND
 TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
     yakl::init();
     using yakl::c::parallel_for;
@@ -292,6 +291,7 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
     yakl::fence();
     fp_t expected_soln = eta_wall / chi_wall;
 
+    Fp2d alo;
     yakl::ScalarLiveOut<fp_t> intensity_full_res(FP(0.0));
     CascadeRTState rt_state;
     rt_state.chi = chi;
@@ -300,7 +300,8 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
     parallel_for(
         SimpleBounds<1>(1),
         YAKL_LAMBDA (int x) {
-            yakl::SArray<fp_t, 1, 1> az_rays(FP(1.0));
+            yakl::SArray<fp_t, 1, NUM_AZ> az_rays(FP(1.0));
+            yakl::SArray<fp_t, 1, NUM_AZ> az_weights(FP(1.0));
             vec2 ray_start;
             ray_start(0) = FP(0.0);
             ray_start(1) = FP(512.0);
@@ -308,7 +309,7 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
             ray_end(0) = FP(1024.0);
             ray_end(1) = FP(512.0);
 
-            auto result = raymarch_2d<true, NUM_WAVELENGTHS, 1, 2 * NUM_WAVELENGTHS>(rt_state, ray_start, ray_end, az_rays);
+            auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(rt_state, ray_start, ray_end, az_rays, az_weights, alo);
             intensity_full_res = result(0, 0);
         }
     );
@@ -344,7 +345,8 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
     parallel_for(
         SimpleBounds<1>(1),
         YAKL_LAMBDA (int x) {
-            yakl::SArray<fp_t, 1, 1> az_rays(FP(1.0));
+            yakl::SArray<fp_t, 1, NUM_AZ> az_rays(FP(1.0));
+            yakl::SArray<fp_t, 1, NUM_AZ> az_weights(FP(1.0));
             // NOTE(cmo): In voxel "world" space, rather than mipmap space - conversion happens in the raymarch fn
             vec2 ray_start;
             ray_start(0) = FP(0.0);
@@ -353,7 +355,7 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
             ray_end(0) = FP(1024.0);
             ray_end(1) = FP(512.0);
 
-            auto result = raymarch_2d<true, NUM_WAVELENGTHS, 1, 2 * NUM_WAVELENGTHS>(rt_state, ray_start, ray_end, az_rays);
+            auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(rt_state, ray_start, ray_end, az_rays, az_weights, alo);
             intensity_mipped = result(0, 0);
         }
     );
@@ -366,4 +368,3 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
 
     yakl::finalize();
 }
-#endif

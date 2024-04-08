@@ -507,6 +507,9 @@ void init_state (State* state) {
             }
         }
     }
+
+    // NOTE(cmo): Allocate ALO array - this should only be when we're using the static fast path
+    state->alo = Fp2d("ALO", space_x, space_y);
 }
 
 FpConst3d final_cascade_to_J(const FpConst5d& final_cascade, const Fp3d* J_current=nullptr, int J_offset=0) {
