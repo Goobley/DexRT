@@ -30,8 +30,10 @@ ARG USERNAME=devcontainer
 ARG USER_UID=5000
 ARG USER_GID=$USER_UID
 
+RUN apt install -y sudo
+
 RUN groupadd --gid $USER_GID $USERNAME \
-    && adduser --uid $USER_UID --gid $USER_GID $USERNAME \
+    && adduser --disabled-password --gecos "" --uid $USER_UID --gid $USER_GID $USERNAME \
     && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
