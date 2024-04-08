@@ -8,7 +8,9 @@
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
+#include <cassert>
 #include "Types.hpp"
+
 
 template <typename T=fp_t>
 inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
@@ -102,7 +104,7 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
                 throw std::runtime_error(fmt::format("Got unexpected broadening type {}\n", type));
             }
         }
-        
+
         const auto q = l["wavelength_grid"];
         std::string grid_type = q["type"].as<std::string>();
         if (grid_type == "Linear") {
@@ -137,7 +139,7 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
 
         if (type != "Tabulated") {
             throw std::runtime_error(fmt::format("Can only parse Tabulated continua, got {}\n", type));
-        } 
+        }
 
         int n_lambda = c["value"].size();
         AtomicContinuum<T> new_cont;
