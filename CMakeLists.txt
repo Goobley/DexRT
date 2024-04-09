@@ -24,6 +24,7 @@ target_include_directories(dexrt SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
+    "${MAGMA_INCLUDE_PATH}"
 )
 target_link_libraries(dexrt "${LDFLAGS}")
 target_link_libraries(dexrt fmt::fmt)

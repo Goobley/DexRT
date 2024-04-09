@@ -40,7 +40,7 @@ void compute_cascade_i_2d (
         cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>({
             x_dim / 2,
             z_dim / 2,
-            ray_dim * CASCADE_BRANCHING_FACTOR,
+            ray_dim * (1 << CASCADE_BRANCHING_FACTOR),
             NumComponents,
             NumAz
         });
@@ -63,7 +63,10 @@ void compute_cascade_i_2d (
     auto az_rays = get_az_rays();
     auto az_weights = get_az_weights();
 
-    const auto& alo = state->alo;
+    Fp2d alo;
+    if (compute_alo) {
+        alo = state->alo;
+    }
 
     std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(cascade_name.c_str());
@@ -262,7 +265,10 @@ void compute_cascade_i_bilinear_fix_2d (
     auto az_rays = get_az_rays();
     auto az_weights = get_az_weights();
 
-    const auto& alo = state->alo;
+    Fp2d alo;
+    if (compute_alo) {
+        alo = state->alo;
+    }
 
     std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(cascade_name.c_str());

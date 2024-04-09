@@ -11,6 +11,30 @@ def collisionless_CaII():
     lw.reconfigure_atom(ca)
     return ca
 
+class FixedXBc(lw.BoundaryCondition):
+    def __init__(self, mode):
+        modes = ['lower', 'upper']
+        if not any(mode == m for m in modes):
+            raise ValueError('Invalid mode')
+
+        self.mode = mode
+        # NOTE(cmo): This data needs to be in (mu, toObs) order, i.e. mu[0]
+        # down, mu[0] up, mu[1] down...
+        # self.I = I1d.reshape(I1d.shape[0], -1, I1d.shape[-1])
+        self.I = None
+
+    def set_bc(self, I1d):
+        # Shape [Nwave, Nmu, Nspace]
+        self.I = I1d
+
+    def compute_bc(self, atmos, spect):
+        # if spect.wavelength.shape[0] != self.I.shape[0]:
+        #     result = np.ones((spect.wavelength.shape[0], spect.I.shape[1], atmos.Nz))
+        # else:
+        if self.I is None:
+            raise ValueError('I has not been set (x%sBc)' % self.mode)
+        result = np.copy(self.I)
+        return result
 if __name__ == "__main__":
     ds = netCDF4.Dataset("build/output.nc")
     dex_J = np.array(ds["image"][...])
@@ -28,30 +52,35 @@ if __name__ == "__main__":
     nhtot = np.ascontiguousarray(ds["nh_tot"][:, sample_idx][::-1]).astype(np.float64)
     vturb = np.ascontiguousarray(ds["vturb"][:, sample_idx][::-1]).astype(np.float64)
 
-    atmos = lw.Atmosphere.make_1d(
-        lw.ScaleType.Geometric,
-        z_grid,
-        temperature,
-        vlos=np.zeros_like(z_grid),
-        vturb=vturb,
-        ne=ne,
-        nHTot=nhtot,
-        lowerBc=lw.ZeroRadiation(),
-        upperBc=lw.ZeroRadiation(),
+    atmos = lw.Atmosphere.make_2d(
+        height=z_grid,
+        x=z_grid[::-1].copy(),
+        temperature=np.ones((nz, nz))*temperature[0],
+        vx=np.zeros((nz, nz)),
+        vz=np.zeros((nz, nz)),
+        vturb=np.ones((nz, nz))*vturb[0],
+        ne=np.ones((nz, nz))*ne[0],
+        nHTot=np.ones((nz, nz))*nhtot[0],
+        xLowerBc=FixedXBc("lower"),
+        xUpperBc=FixedXBc("upper"),
+        zLowerBc=lw.ZeroRadiation(),
+        zUpperBc=lw.ZeroRadiation(),
     )
-    atmos.quadrature(5)
+    atmos.quadrature(10)
 
     a_set = lw.RadiativeSet([H_6_atom(), collisionless_CaII()])
     a_set.set_active("Ca")
     eq_pops = a_set.compute_eq_pops(atmos)
     spect = a_set.compute_wavelength_grid(lambdaReference=CaII_atom().lines[-1].lambda0 - 1.0)
+    atmos.xLowerBc.set_bc(np.zeros((spect.wavelength.shape[0], atmos.muz.shape[0], nz)))
+    atmos.xUpperBc.set_bc(np.zeros((spect.wavelength.shape[0], atmos.muz.shape[0], nz)))
 
-    ctx = lw.Context(atmos, spect, eq_pops, formalSolver="piecewise_linear_1d")
+    ctx = lw.Context(atmos, spect, eq_pops, formalSolver="piecewise_linear_2d", Nthreads=16)
     ctx.background.eta[...] = 0.0
     ctx.background.chi[...] = 0.0
     ctx.background.sca[...] = 0.0
-    ctx.depthData.fill = True
-    ctx.formal_sol_gamma_matrices()
+    # ctx.depthData.fill = True
+    # ctx.formal_sol_gamma_matrices()
     lw.iterate_ctx_se(ctx, popsTol=5e-2, JTol=1.0)
     slice_idx = 128
     J_slice = (ctx.spect.J[:, slice_idx] << u.Unit("W / (m2 Hz sr)")).to("kW / (m2 nm sr)", equivalencies=u.spectral_density(ctx.spect.wavelength * u.nm))

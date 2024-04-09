@@ -4,7 +4,7 @@ import lightweaver as lw
 if __name__ == '__main__':
     atmos = ncdf.Dataset("build/atmos.nc", "w", format="NETCDF4")
 
-    atmos_size = 512
+    atmos_size = 256
     x_dim = atmos.createDimension("x", atmos_size)
     z_dim = atmos.createDimension("z", atmos_size)
     temperature = atmos.createVariable("temperature", "f4", ("x", "z"))

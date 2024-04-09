@@ -103,20 +103,29 @@ inline void compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
                 }
 
                 const fp_t psi_star = alo(x, y) / chi;
+                fp_t G_ij = FP(0.0);
+                fp_t G_ji = FP(0.0);
                 for (int ray_idx = 0; ray_idx < I_dims(2); ++ray_idx) {
-                    for (int la = 0; la < I_dims(3); ++la) {
+                    for (int batch_la = 0; batch_la < I_dims(3) / 2; ++batch_la) {
                         for (int r = 0; r < I_dims(4); ++r) {
-                            const fp_t I_eff = I(x, y, ray_idx, la, r) - psi_star * eta;
-                            const fp_t wlamu = wl_weight * FP(1.0) / I_dims(2) * az_weights(r);
+                            const fp_t I_eff = I(x, y, ray_idx, 2 * batch_la, r) - psi_star * eta;
+                            const fp_t wlamu = wl_weight * FP(1.0) / fp_t(I_dims(2)) * az_weights(r);
                             fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
-                            // NOTE(cmo): The last 2 axes are transposed relative to Lw due to our batched solver
-                            Gamma(x, y, l.j, l.i) += integrand * wlamu;
+                            G_ij += integrand * wlamu;
+                            // if (x == 0 && y == 255 && G_ij < FP(0.0)) {
+                            //     printf("neg: int %e, wla %e, alo %e, Ieff %e\n", integrand, wlamu, alo(x, y), I_eff);
+                            // }
 
                             integrand = uv.Vij * I_eff;
-                            Gamma(x, y, l.i, l.j) += integrand * wlamu;
+                            G_ji += integrand * wlamu;
+                            // if (x == 0 && y == 255 && G_ji < FP(0.0)) {
+                            //     printf("neg: int %e, wla %e, alo %e, Ieff %e\n", integrand, wlamu, alo(x, y), I_eff);
+                            // }
                         }
                     }
                 }
+                Gamma(l.i, l.j, x, y) += G_ij;
+                Gamma(l.j, l.i, x, y) += G_ji;
             }
             for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
                 const auto& cont = atom.continua(kr);
@@ -149,20 +158,23 @@ inline void compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
                 }
 
                 const fp_t psi_star = alo(x, y) / chi;
+                fp_t G_ij = FP(0.0);
+                fp_t G_ji = FP(0.0);
                 for (int ray_idx = 0; ray_idx < I_dims(2); ++ray_idx) {
-                    for (int la = 0; la < I_dims(3); ++la) {
+                    for (int batch_la = 0; batch_la < I_dims(3) / 2; ++batch_la) {
                         for (int r = 0; r < I_dims(4); ++r) {
-                            const fp_t I_eff = I(x, y, ray_idx, la, r) - psi_star * eta;
-                            const fp_t wlamu = wl_weight * FP(1.0) / I_dims(2) * az_weights(r);
+                            const fp_t I_eff = I(x, y, ray_idx, 2 * batch_la, r) - psi_star * eta;
+                            const fp_t wlamu = wl_weight * FP(1.0) / fp_t(I_dims(2)) * az_weights(r);
                             fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
-                            // NOTE(cmo): The last 2 axes are transposed relative to Lw due to our batched solver
-                            Gamma(x, y, cont.j, cont.i) += integrand * wlamu;
+                            G_ij += integrand * wlamu;
 
                             integrand = uv.Vij * I_eff;
-                            Gamma(x, y, cont.i, cont.j) += integrand * wlamu;
+                            G_ji += integrand * wlamu;
                         }
                     }
                 }
+                Gamma(cont.i, cont.j, x, y) += G_ij;
+                Gamma(cont.j, cont.i, x, y) += G_ji;
             }
         }
     );
@@ -171,16 +183,17 @@ inline void compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
         "Gamma fixup",
         SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
         YAKL_LAMBDA (int x, int y) {
-            for (int i = 0; i < Gamma.extent(2); ++i) {
+            for (int i = 0; i < Gamma.extent(1); ++i) {
                 fp_t diag = FP(0.0);
-                Gamma(x, y, i, i) = FP(0.0);
-                for (int j = 0; j < Gamma.extent(2); ++j) {
-                    diag += Gamma(x, y, i, j);
+                Gamma(i, i, x, y) = FP(0.0);
+                for (int j = 0; j < Gamma.extent(0); ++j) {
+                    diag += Gamma(j, i, x, y);
                 }
-                Gamma(x, y, i, i) = -diag;
+                Gamma(i, i, x, y) = -diag;
             }
         }
     );
+    yakl::fence();
 }
 
 inline void static_formal_sol_rc(State* state, int la) {
@@ -223,7 +236,6 @@ inline void static_formal_sol_rc(State* state, int la) {
         }
     );
     state->alo = FP(0.0);
-    state->Gamma = FP(0.0);
     yakl::fence();
     // NOTE(cmo): Regenerate mipmaps
     if constexpr (USE_MIPMAPS) {

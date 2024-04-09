@@ -1,5 +1,6 @@
 #include <math.h>
 #include <limits>
+#include <magma_v2.h>
 #include "Config.hpp"
 #include "Types.hpp"
 #include "State.hpp"
@@ -511,7 +512,7 @@ void init_state (State* state) {
     // NOTE(cmo): Allocate ALO array - this should only be when we're using the static fast path
     state->alo = Fp2d("ALO", space_x, space_y);
     const int n_level = state->atom.energy.extent(0);
-    state->Gamma = Fp4d("Gamma", space_x, space_y, n_level, n_level);
+    state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
 }
 
 FpConst3d final_cascade_to_J(const FpConst5d& final_cascade, const Fp3d* J_current=nullptr, int J_offset=0) {
@@ -535,16 +536,13 @@ FpConst3d final_cascade_to_J(const FpConst5d& final_cascade, const Fp3d* J_curre
         SimpleBounds<5>(dims(0), dims(1), dims(2), dims(3) / 2, dims(4)),
         YAKL_LAMBDA (int x, int y, int ray_idx, int la, int r) {
             fp_t ray_weight = angular_weight * az_weights(r);
-            if (x == 0 && y == 0 && ray_idx == 0 && J_offset == 278) {
-                printf("weight: %f\n", ray_weight);
-            }
             yakl::atomicAdd(J(la, x, y), ray_weight * final_cascade(x, y, ray_idx, 2 * la, r));
         }
     );
     return J;
 }
 
-void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths) {
+void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops) {
     fmt::print("Saving output...\n");
     auto dims = J.get_dimensions();
 
@@ -559,6 +557,7 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
         nc.write(eta, "eta", {"x", "y", "chan"});
         nc.write(chi, "chi", {"x", "y", "chan"});
         nc.write(wavelengths, "wavelength", {"wavelength"});
+        nc.write(pops, "pops", {"x", "y", "level"});
     }
     nc.close();
 }
@@ -568,8 +567,10 @@ int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 #endif
     yakl::init(yakl::InitConfig().set_pool_initial_mb(1.55 * 1024).set_pool_grow_mb(1.55 * 1024));
+    magma_init();
     {
         State state;
+        magma_queue_create(0, &state.magma_queue);
 
         if constexpr (USE_ATMOSPHERE) {
             static_assert(NUM_WAVELENGTHS == 1, "More than one wavelength per batch with USE_ATMOSPHERE - vectorisation is probably poor.");
@@ -607,17 +608,25 @@ int main(int argc, char** argv) {
                 yakl::fence();
             }
             auto J = final_cascade_to_J(state.cascades[0]);
-            FpConst3d dummy_eta, dummy_chi;
+            FpConst3d dummy_eta, dummy_chi, dummy_pops;
             FpConst1d dummy_wave;
-            save_results(J, dummy_eta, dummy_chi, dummy_wave);
+            save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         } else {
             compute_lte_pops(&state);
 
             auto waves = state.atom.wavelength.createHostCopy();
-            for (int la = 0; la < waves.extent(0); ++la) {
-                fmt::println("Computing wavelength {} ({})", la, waves(la));
-                static_formal_sol_rc(&state, la);
-                final_cascade_to_J(state.cascades[0], &state.J, la);
+            fp_t max_change = FP(1.0);
+            while (max_change > FP(5e-2)) {
+                fmt::println("FS");
+                state.Gamma = FP(0.0);
+                yakl::fence();
+                for (int la = 0; la < waves.extent(0); ++la) {
+                    // fmt::println("Computing wavelength {} ({})", la, waves(la));
+                    static_formal_sol_rc(&state, la);
+                    final_cascade_to_J(state.cascades[0], &state.J, la);
+                }
+                fmt::println("Stat eq");
+                max_change = stat_eq(&state);
             }
             int la = 24;
             static_formal_sol_rc(&state, la);
@@ -626,10 +635,13 @@ int main(int argc, char** argv) {
                 state.J,
                 state.raymarch_state.emission,
                 state.raymarch_state.absorption,
-                state.atom.wavelength
+                state.atom.wavelength,
+                state.pops
             );
         }
+        magma_queue_destroy(state.magma_queue);
     }
+    magma_finalize();
     yakl::finalize();
 #ifdef HAVE_MPI
     MPI_Finalize();

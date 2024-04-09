@@ -3,6 +3,7 @@
 
 #include "Types.hpp"
 #include "Voigt.hpp"
+#include <magma_v2.h>
 
 struct State {
     std::vector<Fp5d> cascades;
@@ -13,7 +14,8 @@ struct State {
     Fp3d pops; /// [x, y, num_level] TODO(cmo): Update this!
     Fp3d J; /// [num_wave, x, y]
     Fp2d alo; /// [x, y]
-    Fp4d Gamma; /// [x, y, i, j]
+    Fp4d Gamma; /// [i, j, x, y]
+    magma_queue_t magma_queue;
 };
 
 #else

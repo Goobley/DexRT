@@ -342,9 +342,146 @@ inline void compute_lte_pops(State* state) {
     );
 }
 
-inline void stat_eq(State* state) {
-    // TODO(cmo): Launch batched LU solve
+inline fp_t stat_eq(State* state) {
+    auto Gamma_host = state->Gamma.createHostCopy();
+    const auto& Gamma = state->Gamma.reshape<3>({
+        state->Gamma.extent(0),
+        state->Gamma.extent(1),
+        state->Gamma.extent(2) * state->Gamma.extent(3)
+    });
+    Fp3d GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
+    yakl::Array<fp_t*, 1, yakl::memDevice> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0));
+    const auto& pops = state->pops.reshape<2>({
+        state->pops.extent(0) * state->pops.extent(1),
+        state->pops.extent(2),
+    });
+    Fp2d new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));
+    yakl::Array<fp_t*, 1, yakl::memDevice> new_pops_ptrs("new_pops_ptrs", GammaT.extent(0));
+    yakl::Array<i32, 1, yakl::memDevice> i_elim("i_elim", GammaT.extent(0));
+    yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", new_pops.extent(0), new_pops.extent(1));
+    yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", new_pops.extent(0));
+    yakl::Array<i32, 1, yakl::memDevice> info("info", new_pops.extent(0));
+    parallel_for(
+        "Max Pops",
+        SimpleBounds<1>(pops.extent(0)),
+        YAKL_LAMBDA (int k) {
+            fp_t n_max = pops(k, 0);
+            i_elim(k) = 0;
+            for (int i = 1; i < pops.extent(1); ++i) {
+                fp_t n = pops(k, i);
+                if (n > n_max) {
+                    i_elim(k) = i;
+                }
+            }
+        }
+    );
+    yakl::fence();
 
+    parallel_for(
+        "Transpose Gamma",
+        SimpleBounds<3>(Gamma.extent(2), Gamma.extent(1), Gamma.extent(0)),
+        YAKL_LAMBDA (int k, int i, int j) {
+            if (i_elim(k) == i) {
+                GammaT(k, j, i) = FP(1.0);
+            } else {
+                GammaT(k, j, i) = Gamma(i, j, k);
+            }
+        }
+    );
+    parallel_for(
+        "Transpose Pops",
+        SimpleBounds<2>(pops.extent(0), pops.extent(1)),
+        YAKL_LAMBDA (int k, int i) {
+            if (i_elim(k) == i) {
+                fp_t n_total = FP(0.0);
+                for (int ii = 0; ii < pops.extent(1); ++ii) {
+                    n_total += pops(k, ii);
+                }
+                new_pops(k, i) = n_total;
+            } else {
+                new_pops(k, i) = FP(0.0);
+            }
+        }
+    );
+    parallel_for(
+        "Setup pointers",
+        SimpleBounds<1>(GammaT_ptrs.extent(0)),
+        YAKL_LAMBDA (int k) {
+            GammaT_ptrs(k) = &GammaT(k, 0, 0);
+            new_pops_ptrs(k) = &new_pops(k, 0);
+            ipiv_ptrs(k) = &ipivs(k, 0);
+        }
+    );
+    auto GammaT_host = GammaT.createHostCopy();
+    for (int i = 0; i < GammaT_host.extent(2); ++i) {
+        for (int j = 0; j < GammaT_host.extent(1); ++j) {
+            fmt::print("{}, ", GammaT_host(255, j, i));
+        }
+        fmt::print("\n");
+    }
+
+    yakl::fence();
+
+#ifdef DEXRT_SINGLE_PREC
+    magma_sgesv_batched_small(
+        GammaT.extent(1),
+        1,
+        GammaT_ptrs.get_data(),
+        GammaT.extent(1),
+        ipiv_ptrs.get_data(),
+        new_pops_ptrs.get_data(),
+        new_pops.extent(1),
+        info.get_data(),
+        GammaT.extent(0),
+        state->magma_queue
+    );
+#else
+    magma_dgesv_batched_small(
+        GammaT.extent(1),
+        1,
+        GammaT_ptrs.get_data(),
+        GammaT.extent(1),
+        ipiv_ptrs.get_data(),
+        new_pops_ptrs.get_data(),
+        new_pops.extent(1),
+        info.get_data(),
+        GammaT.extent(0),
+        state->magma_queue
+    );
+#endif
+    magma_queue_sync(state->magma_queue);
+    yakl::fence();
+    parallel_for(
+        "info check",
+        SimpleBounds<1>(info.extent(0)),
+        YAKL_LAMBDA (int k) {
+            if (info(k) != 0) {
+                printf("%d: %d\n", k, info(k));
+            }
+        }
+    );
+
+    Fp2d max_rel_change("max rel change", new_pops.extent(0), new_pops.extent(1));
+    parallel_for(
+        "Compute max change",
+        SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
+        YAKL_LAMBDA (int k, int i) {
+            fp_t change = std::abs(FP(1.0) - pops(k, i) / new_pops(k, i));
+            max_rel_change(k, i) = change;
+        }
+    );
+    yakl::fence();
+    parallel_for(
+        "Copy pops",
+        SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
+        YAKL_LAMBDA (int k, int i) {
+            pops(k, i) = new_pops(k, i);
+        }
+    );
+    fp_t max_change = yakl::intrinsics::maxval(max_rel_change);
+    yakl::fence();
+    fmt::println("Max Change: {}", max_change);
+    return max_change;
 }
 
 #else
