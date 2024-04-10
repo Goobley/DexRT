@@ -291,7 +291,7 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
     yakl::fence();
     fp_t expected_soln = eta_wall / chi_wall;
 
-    Fp2d alo;
+    Fp3d alo;
     yakl::ScalarLiveOut<fp_t> intensity_full_res(FP(0.0));
     CascadeRTState rt_state;
     rt_state.chi = chi;

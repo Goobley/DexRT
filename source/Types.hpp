@@ -269,6 +269,20 @@ struct CompCont {
     }
 };
 
+template <typename T=fp_t>
+struct CompColl {
+    /// Upper level index
+    int j;
+    /// Lower level index
+    int i;
+    /// Collision type
+    CollRateType type;
+    /// Temperature/rate start index
+    int start_idx;
+    /// Temperature/rate end index
+    int end_idx;
+};
+
 template <typename T=fp_t, int mem_space=memDevice>
 struct CompAtom {
     T mass;
@@ -288,7 +302,9 @@ struct CompAtom {
     yakl::Array<CompCont<T> const, 1, mem_space> continua;
     yakl::Array<T const, 1, mem_space> sigma;
 
-    // TODO(cmo): Voigts, Collisions etc.
+    yakl::Array<CompColl<T> const, 1, mem_space> collisions;
+    yakl::Array<T const, 1, mem_space> temperature;
+    yakl::Array<T const, 1, mem_space> coll_rates;
 };
 
 #else

@@ -27,7 +27,7 @@ constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e8);
 constexpr bool BRANCH_RAYS = false;
 constexpr bool BILINEAR_FIX = false;
 
-constexpr bool USE_MIPMAPS = true;
+constexpr bool USE_MIPMAPS = false;
 constexpr int MIPMAP_FACTORS[MAX_LEVEL+1] = {0, 0, 1, 1, 1};
 
 constexpr bool PINGPONG_BUFFERS = true;
@@ -59,8 +59,8 @@ constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.11846344), FP(0.23931434), FP(0.284444
 constexpr bool USE_ATMOSPHERE = true;
 constexpr int MODEL_X = 1024;
 constexpr int MODEL_Y = 1024;
-#define LIGHT_MODEL model_E_emission
-#define ABSORPTION_MODEL model_E_absorption
+#define LIGHT_MODEL model_F_emission
+#define ABSORPTION_MODEL model_F_absorption
 
 /// Number of wavelengths in an RGB batch
 constexpr int NUM_WAVELENGTHS = USE_ATMOSPHERE ? 1 : 3;

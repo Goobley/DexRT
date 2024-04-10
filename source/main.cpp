@@ -11,6 +11,7 @@
 #include "RadianceIntervals.hpp"
 #include "RadianceCascades.hpp"
 #include "CrtafParser.hpp"
+#include "Collisions.hpp"
 #include "Voigt.hpp"
 #include "EmisOpac.hpp"
 #include "FormalSolution.hpp"
@@ -317,6 +318,57 @@ YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
     draw_disk(chi, c, 40, color, x, y);
 }
 
+YAKL_INLINE void model_F_emission(const Fp3d& eta, int x, int y) {
+    auto dims = eta.get_dimensions();
+    vec2 c;
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
+    int centre = int(dims(0) / 2);
+    c(0) = centre;
+    c(1) = centre;
+    fp_t eta_scale = FP(20.0) / FP(60.0);
+    color(0) = eta_scale;
+    color(1) = FP(0.0);
+    color(2) = eta_scale;
+    draw_disk(eta, c, FP(30.0), color, x, y);
+}
+
+YAKL_INLINE void model_F_absorption(const Fp3d& chi, int x, int y) {
+    auto dims = chi.get_dimensions();
+    vec2 c;
+    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
+    int centre = int(dims(0) / 2);
+    fp_t bg = FP(1e-20);
+    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
+        chi(x, y, i) = bg;
+    }
+
+    c(0) = centre;
+    c(1) = centre;
+    fp_t chi_scale = FP(1.0) / FP(60.0);
+    color(0) = chi_scale;
+    color(1) = bg;
+    color(2) = chi_scale;
+    draw_disk(chi, c, FP(30.0), color, x, y);
+
+    fp_t blocker = FP(1.0);
+    color(0) = blocker;
+    color(1) = blocker;
+    color(2) = blocker;
+
+    int x_step = dims(0) / 12;
+    int y_step = dims(1) / 12;
+    for (int xx = 0; xx < 10; ++xx) {
+        for (int yy = 0; yy < 10; ++yy) {
+            if (xx >= 4 && xx <= 6 && yy >= 4 && yy <= 6) {
+                continue;
+            }
+            c(0) = (xx + 1) * x_step;
+            c(1) = (yy + 1) * y_step;
+            draw_disk(chi, c, FP(5.0), color, x, y);
+        }
+    }
+}
+
 void init_state (State* state) {
     const Atmosphere& atmos = state->atmos;
     int cascade_0_x_probes, cascade_0_z_probes;
@@ -572,9 +624,7 @@ int main(int argc, char** argv) {
         State state;
         magma_queue_create(0, &state.magma_queue);
 
-        if constexpr (USE_ATMOSPHERE) {
-            static_assert(NUM_WAVELENGTHS == 1, "More than one wavelength per batch with USE_ATMOSPHERE - vectorisation is probably poor.");
-        }
+        static_assert((!USE_ATMOSPHERE) || (USE_ATMOSPHERE && NUM_WAVELENGTHS == 1), "More than one wavelength per batch with USE_ATMOSPHERE - vectorisation is probably poor.");
 
         if constexpr (USE_ATMOSPHERE) {
             Atmosphere atmos = load_atmos("atmos.nc");
@@ -618,7 +668,7 @@ int main(int argc, char** argv) {
             fp_t max_change = FP(1.0);
             while (max_change > FP(5e-2)) {
                 fmt::println("FS");
-                state.Gamma = FP(0.0);
+                compute_collisions_to_gamma(&state);
                 yakl::fence();
                 for (int la = 0; la < waves.extent(0); ++la) {
                     // fmt::println("Computing wavelength {} ({})", la, waves(la));

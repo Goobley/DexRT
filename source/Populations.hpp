@@ -247,6 +247,31 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     host_atom.continua = continua;
     host_atom.sigma = sigma;
 
+    int n_temperature = 0;
+    for (int i = 0; i < model.coll_rates.size(); ++i) {
+        n_temperature += model.coll_rates[i].temperature.size();
+    }
+    yakl::Array<T, 1, yakl::memHost> temperature("temperature grid", n_temperature);
+    yakl::Array<T, 1, yakl::memHost> coll_rates("coll rates grid", n_temperature);
+    yakl::Array<CompColl<T>, 1, yakl::memHost> collisions("collisions", model.coll_rates.size());
+    int temp_offset = 0;
+    for (int i = 0; i < model.coll_rates.size(); ++i) {
+        const auto& coll = model.coll_rates[i];
+        collisions(i).type = coll.type;
+        collisions(i).j = coll.j;
+        collisions(i).i = coll.i;
+        collisions(i).start_idx = temp_offset;
+        for (int temp_idx = 0; temp_idx < coll.temperature.size(); ++temp_idx) {
+            temperature(temp_offset + temp_idx) = coll.temperature[temp_idx];
+            coll_rates(temp_offset + temp_idx) = coll.data[temp_idx];
+        }
+        temp_offset += coll.temperature.size();
+        collisions(i).end_idx = temp_offset;
+    }
+    host_atom.temperature = temperature;
+    host_atom.coll_rates = coll_rates;
+    host_atom.collisions = collisions;
+
     if constexpr (mem_space == yakl::memDevice) {
         CompAtom<T, mem_space> result;
         result.mass = host_atom.mass;
@@ -261,6 +286,9 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         result.wavelength = host_atom.wavelength.createDeviceCopy();
         result.continua = host_atom.continua.createDeviceCopy();
         result.sigma = host_atom.sigma.createDeviceCopy();
+        result.temperature = host_atom.temperature.createDeviceCopy();
+        result.coll_rates = host_atom.coll_rates.createDeviceCopy();
+        result.collisions = host_atom.collisions.createDeviceCopy();
 
         return result;
     } else {
