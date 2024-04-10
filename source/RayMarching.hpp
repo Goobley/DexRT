@@ -185,7 +185,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     vec2 ray_end,
     yakl::SArray<fp_t, 1, NumAz> az_rays,
     yakl::SArray<fp_t, 1, NumAz> az_weights,
-    const Fp2d& alo,
+    const Fp3d& alo,
     fp_t distance_scale = FP(1.0)
 ) {
     auto domain_dims = domain.get_dimensions();
@@ -242,12 +242,12 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
             fp_t source_fn = sample(i) / chi_sample(i);
 
             for (int r = 0; r < NumAz; ++r) {
-                const fp_t weight = FP(1.0) / (PROBE0_NUM_RAYS) * az_weights(r);
+                const fp_t weight = FP(1.0) / PROBE0_NUM_RAYS;
                 if (az_rays(r) == FP(0.0)) {
                     result(2*i, r) = source_fn;
                     if (accumulate_alo) {
                         // NOTE(cmo): We add the local weight since tau is infinite, i.e. one_m_edt == 1.0
-                        yakl::atomicAdd(alo(sample_coord(0), sample_coord(1)), weight);
+                        yakl::atomicAdd(alo(sample_coord(0), sample_coord(1), r), weight);
                     }
                 } else {
                     fp_t mu = az_rays(r);
@@ -263,7 +263,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
                     result(2*i+1, r) += tau_mu;
                     result(2*i, r) = result(2*i, r) * edt + source_fn * one_m_edt;
                     if (accumulate_alo) {
-                        yakl::atomicAdd(alo(sample_coord(0), sample_coord(1)), weight * one_m_edt);
+                        yakl::atomicAdd(alo(sample_coord(0), sample_coord(1), r), weight * one_m_edt);
                     }
                 }
             }
@@ -280,7 +280,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     vec2 ray_end,
     const yakl::SArray<fp_t, 1, NumAz>& az_rays,
     const yakl::SArray<fp_t, 1, NumAz>& az_weights,
-    const Fp2d& alo,
+    const Fp3d& alo,
     fp_t length_scale = FP(1.0)
 ) {
     // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe

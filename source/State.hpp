@@ -13,7 +13,7 @@ struct State {
     VoigtProfile<fp_t, false> phi;
     Fp3d pops; /// [x, y, num_level] TODO(cmo): Update this!
     Fp3d J; /// [num_wave, x, y]
-    Fp2d alo; /// [x, y]
+    Fp3d alo; /// [x, y, az]
     Fp4d Gamma; /// [i, j, x, y]
     magma_queue_t magma_queue;
 };

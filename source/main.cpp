@@ -510,7 +510,7 @@ void init_state (State* state) {
     }
 
     // NOTE(cmo): Allocate ALO array - this should only be when we're using the static fast path
-    state->alo = Fp2d("ALO", space_x, space_y);
+    state->alo = Fp3d("ALO", space_x, space_y, NUM_AZ);
     const int n_level = state->atom.energy.extent(0);
     state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
 }

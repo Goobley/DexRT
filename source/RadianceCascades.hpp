@@ -63,7 +63,7 @@ void compute_cascade_i_2d (
     auto az_rays = get_az_rays();
     auto az_weights = get_az_weights();
 
-    Fp2d alo;
+    Fp3d alo;
     if (compute_alo) {
         alo = state->alo;
     }
@@ -265,7 +265,7 @@ void compute_cascade_i_bilinear_fix_2d (
     auto az_rays = get_az_rays();
     auto az_weights = get_az_weights();
 
-    Fp2d alo;
+    Fp3d alo;
     if (compute_alo) {
         alo = state->alo;
     }

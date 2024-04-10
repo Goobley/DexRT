@@ -102,12 +102,12 @@ inline void compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
                     wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
                 }
 
-                const fp_t psi_star = alo(x, y) / chi;
                 fp_t G_ij = FP(0.0);
                 fp_t G_ji = FP(0.0);
                 for (int ray_idx = 0; ray_idx < I_dims(2); ++ray_idx) {
                     for (int batch_la = 0; batch_la < I_dims(3) / 2; ++batch_la) {
                         for (int r = 0; r < I_dims(4); ++r) {
+                            const fp_t psi_star = alo(x, y, r) / chi;
                             const fp_t I_eff = I(x, y, ray_idx, 2 * batch_la, r) - psi_star * eta;
                             const fp_t wlamu = wl_weight * FP(1.0) / fp_t(I_dims(2)) * az_weights(r);
                             fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
@@ -157,12 +157,12 @@ inline void compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
                     wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
                 }
 
-                const fp_t psi_star = alo(x, y) / chi;
                 fp_t G_ij = FP(0.0);
                 fp_t G_ji = FP(0.0);
                 for (int ray_idx = 0; ray_idx < I_dims(2); ++ray_idx) {
                     for (int batch_la = 0; batch_la < I_dims(3) / 2; ++batch_la) {
                         for (int r = 0; r < I_dims(4); ++r) {
+                            const fp_t psi_star = alo(x, y, r) / chi;
                             const fp_t I_eff = I(x, y, ray_idx, 2 * batch_la, r) - psi_star * eta;
                             const fp_t wlamu = wl_weight * FP(1.0) / fp_t(I_dims(2)) * az_weights(r);
                             fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
