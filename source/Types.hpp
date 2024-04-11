@@ -92,6 +92,18 @@ struct Box {
     vec2 dims[NUM_DIM];
 };
 
+template <int NumAz=NUM_AZ>
+struct Raymarch2dStaticArgs {
+    const FpConst3d& eta;
+    const FpConst3d& chi;
+    vec2 ray_start;
+    vec2 ray_end;
+    yakl::SArray<fp_t, 1, NumAz> az_rays;
+    yakl::SArray<fp_t, 1, NumAz> az_weights;
+    Fp3d alo = Fp3d();
+    fp_t distance_scale = FP(1.0);
+};
+
 template <typename T=fp_t>
 struct Element {
     std::string symbol;

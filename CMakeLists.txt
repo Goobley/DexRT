@@ -30,7 +30,7 @@ target_link_libraries(dexrt "${LDFLAGS}")
 target_link_libraries(dexrt fmt::fmt)
 target_link_libraries(dexrt yaml-cpp::yaml-cpp)
 set_target_properties(dexrt PROPERTIES
-    CXX_STANDARD 17
+    CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS YES
 )

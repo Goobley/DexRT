@@ -2,6 +2,7 @@
 #define DEXRT_RAYMARCHING_HPP
 #include "Types.hpp"
 #include "Utils.hpp"
+#include "JasPP.hpp"
 #include <optional>
 
 using yakl::intrinsics::minloc;
@@ -178,17 +179,12 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> empty_hit() {
 
 template <int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
-    // eta in volumetric
-    const FpConst3d& domain,
-    const FpConst3d& chi,
-    vec2 ray_start,
-    vec2 ray_end,
-    yakl::SArray<fp_t, 1, NumAz> az_rays,
-    yakl::SArray<fp_t, 1, NumAz> az_weights,
-    const Fp3d& alo,
-    fp_t distance_scale = FP(1.0)
+    const Raymarch2dStaticArgs<NumAz>& args
 ) {
-    auto domain_dims = domain.get_dimensions();
+    JasUnpack(args, eta, chi, ray_start, ray_end, az_rays, az_weights);
+    JasUnpack(args, alo, distance_scale);
+
+    auto domain_dims = eta.get_dimensions();
     ivec2 domain_size;
     domain_size(0) = domain_dims(0);
     domain_size(1) = domain_dims(1);
@@ -228,7 +224,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
         }
 
         for (int i = 0; i < NumWavelengths; ++i) {
-            sample(i) = domain(sample_coord(0), sample_coord(1), i);
+            sample(i) = eta(sample_coord(0), sample_coord(1), i);
         }
         for (int i = 0; i < NumWavelengths; ++i) {
             chi_sample(i) = chi(sample_coord(0), sample_coord(1), i) + FP(1e-20);
@@ -298,7 +294,18 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     const FpConst3d& eta = state.eta;
     const FpConst3d& chi = state.chi;
 
-    return dda_raymarch_2d<NumWavelengths, NumAz, NumComponents>(eta, chi, ray_end, ray_start, az_rays, az_weights, alo, factor);
+    return dda_raymarch_2d<NumWavelengths, NumAz, NumComponents>(
+        Raymarch2dStaticArgs<NumAz>{
+            .eta = eta,
+            .chi = chi,
+            .ray_start = ray_end,
+            .ray_end = ray_start,
+            .az_rays = az_rays,
+            .az_weights = az_weights,
+            .alo = alo,
+            .distance_scale = length_scale
+        }
+    );
 }
 
 #else
