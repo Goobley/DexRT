@@ -198,8 +198,8 @@ YAKL_INLINE EmisOpac emis_opac(
     JasUnpack(args, atom, profile, la, n, n_star_scratch, atmos, mode);
     EmisOpac result{FP(0.0), FP(0.0)};
     fp_t lambda = atom.wavelength(la);
-    const bool lines = (mode == EmisOpacMode::All) || (EmisOpacMode::DynamicOnly);
-    const bool conts = (mode == EmisOpacMode::All) || (EmisOpacMode::StaticOnly);
+    const bool lines = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::DynamicOnly);
+    const bool conts = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::StaticOnly);
 
     if (lines) {
         for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
