@@ -198,12 +198,14 @@ void static_formal_sol_rc(State* state, int la) {
             local_atmos.nhtot = atmos.nh_tot(x, y);
             local_atmos.nh0 = nh0_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
             auto result = emis_opac(
-                atom,
-                phi,
-                la,
-                pops.slice<1>({x, y, yakl::COLON}),
-                lte_scratch.slice<1>({x, y, yakl::COLON}),
-                local_atmos
+                EmisOpacState<fp_t>{
+                    .atom = atom,
+                    .profile = phi,
+                    .la = la,
+                    .n = pops.slice<1>({x, y, yakl::COLON}),
+                    .n_star_scratch = lte_scratch.slice<1>({x, y, yakl::COLON}),
+                    .atmos = local_atmos
+                }
             );
             eta(x, y, 0) = result.eta;
             chi(x, y, 0) = result.chi;

@@ -97,12 +97,14 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
 
                 for (int i = 0; i < sizeof(atmos_idx) / sizeof(atmos_idx[0]); ++i) {
                     auto result = emis_opac<fp_t, yakl::memDevice>(
-                        atom,
-                        profile,
-                        las(i),
-                        lte.slice<1>({atmos_idx[i], yakl::COLON}),
-                        n_star_scratch.slice<1>({atmos_idx[i], yakl::COLON}),
-                        atmos[atmos_idx[i]]
+                        EmisOpacState<fp_t>{
+                            .atom = atom,
+                            .profile = profile,
+                            .la = las(i),
+                            .n = lte.slice<1>({atmos_idx[i], yakl::COLON}),
+                            .n_star_scratch = n_star_scratch.slice<1>({atmos_idx[i], yakl::COLON}),
+                            .atmos = atmos[atmos_idx[i]]
+                        }
                     );
                     eta(i) = result.eta;
                     chi(i) = result.chi;

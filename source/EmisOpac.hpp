@@ -5,10 +5,20 @@
 #include "Types.hpp"
 #include "Voigt.hpp"
 #include "Populations.hpp"
+#include "JasPP.hpp"
 
 struct EmisOpac {
     fp_t eta;
     fp_t chi;
+};
+
+enum class EmisOpacMode {
+    /// Accumulate background + continua
+    StaticOnly,
+    /// Accumulate the Doppler shifted lines
+    DynamicOnly,
+    /// Accumulate everything
+    All
 };
 
 struct UV {
@@ -33,6 +43,17 @@ struct AtmosPointParams {
     fp_t nhtot;
     /// Neutral H density
     fp_t nh0;
+};
+
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+struct EmisOpacState {
+    const CompAtom<T, mem_space>& atom;
+    const VoigtProfile<T, false, mem_space>& profile;
+    int la;
+    const yakl::Array<fp_t const, 1, mem_space>& n;
+    const yakl::Array<fp_t, 1, mem_space>& n_star_scratch;
+    const AtmosPointParams& atmos;
+    EmisOpacMode mode = EmisOpacMode::All;
 };
 
 template <int mem_space=yakl::memDevice>
@@ -131,8 +152,8 @@ YAKL_INLINE fp_t gamma_from_broadening(
 
 template <int mem_space=yakl::memDevice>
 YAKL_INLINE UV compute_uv(
-    const CompLine<fp_t>& l, 
-    const VoigtProfile<fp_t, false, mem_space>& phi, 
+    const CompLine<fp_t>& l,
+    const VoigtProfile<fp_t, false, mem_space>& phi,
     const LineParams& params,
     fp_t lambda
 ) {
@@ -151,11 +172,11 @@ YAKL_INLINE UV compute_uv(
     // [kW / (nm sr)]
     result.Uji = hnu_4pi * l.Aji * p;
     return result;
-} 
+}
 
 template <int mem_space=yakl::memDevice>
 YAKL_INLINE UV compute_uv(
-    const CompCont<fp_t>& cont, 
+    const CompCont<fp_t>& cont,
     const ContParams<mem_space>& params,
     fp_t lambda
 ) {
@@ -172,83 +193,72 @@ YAKL_INLINE UV compute_uv(
 
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
-    const CompAtom<T, mem_space>& atom, 
-    const VoigtProfile<T, false, mem_space>& profile,
-    int la, 
-    yakl::Array<fp_t const, 1, mem_space> n,
-    const yakl::Array<fp_t, 1, mem_space>& n_star_scratch,
-    const AtmosPointParams& atmos
+    const EmisOpacState<T, mem_space>& args
 ) {
+    JasUnpack(args, atom, profile, la, n, n_star_scratch, atmos, mode);
     EmisOpac result{FP(0.0), FP(0.0)};
-
     fp_t lambda = atom.wavelength(la);
-    for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
-        const auto& l = atom.lines(kr);
-        if (!l.is_active(la)) {
-            continue;
+    const bool lines = (mode == EmisOpacMode::All) || (EmisOpacMode::DynamicOnly);
+    const bool conts = (mode == EmisOpacMode::All) || (EmisOpacMode::StaticOnly);
+
+    if (lines) {
+        for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
+            const auto& l = atom.lines(kr);
+            if (!l.is_active(la)) {
+                continue;
+            }
+
+            LineParams params;
+            params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
+            params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
+            // TODO(cmo): Come back to this!
+            params.vel = FP(0.0);
+
+            const UV uv = compute_uv(
+                l,
+                profile,
+                params,
+                lambda
+            );
+            result.eta += n(l.j) * uv.Uji;
+            result.chi += n(l.i) * uv.Vij - n(l.j) * uv.Vji;
         }
-
-        LineParams params;
-        params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
-        params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
-        // TODO(cmo): Come back to this!
-        params.vel = FP(0.0);
-
-        const UV uv = compute_uv(
-            l,
-            profile,
-            params,
-            lambda
-        );
-        result.eta += n(l.j) * uv.Uji;
-        result.chi += n(l.i) * uv.Vij - n(l.j) * uv.Vji;
     }
 
-    auto& n_star = n_star_scratch;
-    lte_pops<T, fp_t, mem_space>(
-        atom.energy, 
-        atom.g, 
-        atom.stage, 
-        atmos.temperature,
-        atmos.ne,
-        atom.abundance * atmos.nhtot,
-        n_star
-    );
-    for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
-        const auto& cont = atom.continua(kr);
-        if (!cont.is_active(la)) {
-            continue;
-        }
-
-        using namespace ConstantsFP;
-        ContParams<mem_space> params;
-        params.la = la;
-        params.thermal_ratio = n_star(cont.i) / n_star(cont.j) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
-        params.sigma_grid = get_sigma<mem_space>(atom, cont);
-
-        const UV uv = compute_uv<mem_space>(
-            cont,
-            params,
-            lambda
+    if (conts) {
+        auto& n_star = n_star_scratch;
+        lte_pops<T, fp_t, mem_space>(
+            atom.energy,
+            atom.g,
+            atom.stage,
+            atmos.temperature,
+            atmos.ne,
+            atom.abundance * atmos.nhtot,
+            n_star
         );
-        result.eta += n(cont.j) * uv.Uji;
-        result.chi += n(cont.i) * uv.Vij - n(cont.j) * uv.Vji;
+        for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+            const auto& cont = atom.continua(kr);
+            if (!cont.is_active(la)) {
+                continue;
+            }
+
+            using namespace ConstantsFP;
+            ContParams<mem_space> params;
+            params.la = la;
+            params.thermal_ratio = n_star(cont.i) / n_star(cont.j) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
+            params.sigma_grid = get_sigma<mem_space>(atom, cont);
+
+            const UV uv = compute_uv<mem_space>(
+                cont,
+                params,
+                lambda
+            );
+            result.eta += n(cont.j) * uv.Uji;
+            result.chi += n(cont.i) * uv.Vij - n(cont.j) * uv.Vji;
+        }
     }
 
     return result;
-}
-
-template <typename T=fp_t, int mem_space=yakl::memDevice>
-YAKL_INLINE EmisOpac emis_opac(
-    const CompAtom<T, mem_space>& atom, 
-    const VoigtProfile<T, false, mem_space>& profile,
-    int la, 
-    const yakl::Array<fp_t, 1, mem_space>& n,
-    const yakl::Array<fp_t, 1, mem_space>& n_star_scratch,
-    const AtmosPointParams& atmos
-) {
-    const yakl::Array<fp_t const, 1, mem_space> const_n(n);
-    return emis_opac(atom, profile, la, const_n, n_star_scratch, atmos);
 }
 
 #else
