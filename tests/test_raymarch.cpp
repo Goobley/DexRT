@@ -291,7 +291,6 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
     yakl::fence();
     fp_t expected_soln = eta_wall / chi_wall;
 
-    Fp3d alo;
     yakl::ScalarLiveOut<fp_t> intensity_full_res(FP(0.0));
     CascadeRTState rt_state;
     rt_state.chi = chi;
@@ -309,7 +308,15 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
             ray_end(0) = FP(1024.0);
             ray_end(1) = FP(512.0);
 
-            auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(rt_state, ray_start, ray_end, az_rays, az_weights, alo);
+            auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(
+                rt_state,
+                Raymarch2dStaticArgs<NUM_AZ>{
+                    .ray_start = ray_start,
+                    .ray_end = ray_end,
+                    .az_rays = az_rays,
+                    .az_weights = az_weights
+                }
+            );
             intensity_full_res = result(0, 0);
         }
     );
@@ -355,7 +362,16 @@ TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
             ray_end(0) = FP(1024.0);
             ray_end(1) = FP(512.0);
 
-            auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(rt_state, ray_start, ray_end, az_rays, az_weights, alo);
+
+            auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(rt_state,
+                Raymarch2dStaticArgs<NUM_AZ>{
+                    .ray_start = ray_start,
+                    .ray_end = ray_end,
+                    .az_rays = az_rays,
+                    .az_weights = az_weights
+                }
+            );
+
             intensity_mipped = result(0, 0);
         }
     );

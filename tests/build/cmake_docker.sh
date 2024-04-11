@@ -14,7 +14,7 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DCMAKE_Fortran_COMPILER=gfortran \
       -DYAKL_DEBUG="On"               \
       -DYAKL_ARCH="CUDA"              \
-      -DYAKL_CUDA_FLAGS="-O0 -g -G --ptxas-options=-v" \
+      -DYAKL_CUDA_FLAGS="-O0 -g -G" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DMPI_INCLUDE_PATH="${MPI_INCLUDE_PATH}" \
       -DMAGMA_INCLUDE_PATH="${MAGMA_INCLUDE_PATH}" \

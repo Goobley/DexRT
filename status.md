@@ -27,4 +27,5 @@ Ideas
 =====
 
 - [ ] Move LTE populations to be partition function based (allows for calculation of only the levels of interest)
-- [ ] Use magma to abstract batched LU solved for populations
+- [x] Use magma to abstract batched LU solved for populations
+    - [ ] Needs non-GPU alternative

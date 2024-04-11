@@ -15,9 +15,17 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
 endif()
 include_directories(YAKL)
 
-add_executable(dexrt "source/main.cpp")
+list(APPEND DEX_SOURCE_FILES
+    "source/main.cpp"
+    "source/StaticFormalSolution.cpp"
+    "source/DynamicFormalSolution.cpp"
+)
+
+add_executable(dexrt
+    "${DEX_SOURCE_FILES}"
+)
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
-    set_source_files_properties("source/main.cpp" PROPERTIES LANGUAGE CUDA)
+    set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES LANGUAGE CUDA)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CXX_FLAGS}")
 endif()
 target_include_directories(dexrt SYSTEM PUBLIC

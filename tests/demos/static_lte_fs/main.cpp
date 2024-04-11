@@ -12,7 +12,7 @@
 #include "CrtafParser.hpp"
 #include "Voigt.hpp"
 #include "EmisOpac.hpp"
-#include "FormalSolution.hpp"
+#include "StaticFormalSolution.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else
@@ -338,7 +338,7 @@ void init_state (State* state) {
         cascade_0_x_probes = MODEL_X / PROBE0_SPACING;
         cascade_0_z_probes = MODEL_Y / PROBE0_SPACING;
     }
-    
+
     // NOTE(cmo): Allocate cascades
     for (int l = 0; l < MAX_LEVEL + 1; ++l) {
         state->cascades.push_back(
@@ -503,7 +503,7 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
 
     yakl::SimpleNetCDF nc;
     nc.create("output.nc", NC_CLOBBER);
-    
+
     auto eta_dims = eta.get_dimensions();
     fmt::println("J: ({} {} {})", dims(0), dims(1), dims(2));
     fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
@@ -576,9 +576,9 @@ int main(int argc, char** argv) {
             static_formal_sol_rc(&state, la);
             final_cascade_to_J(state.cascades[0], &state.J, la);
             save_results(
-                state.J, 
-                state.raymarch_state.emission, 
-                state.raymarch_state.absorption, 
+                state.J,
+                state.raymarch_state.emission,
+                state.raymarch_state.absorption,
                 state.atom.wavelength
             );
         }

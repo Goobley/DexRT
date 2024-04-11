@@ -2,7 +2,7 @@
 #define DEXRT_COLLISIONS_HPP
 #include "Types.hpp"
 #include "Utils.hpp"
-#include "FormalSolution.hpp"
+#include "LteHPops.hpp"
 
 YAKL_INLINE fp_t interp_rates(
     const Atmosphere& atmos,

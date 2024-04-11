@@ -15,6 +15,11 @@ if ("${YAKL_ARCH}" STREQUAL "CUDA")
 endif()
 include_directories(${YAKL_PATH})
 
+list(APPEND DEX_SOURCE_FILES
+    "../source/StaticFormalSolution.cpp"
+    "../source/DynamicFormalSolution.cpp"
+)
+
 list(APPEND UNIT_TEST_SOURCE_FILES
     test_raymarch.cpp
     test_crtaf.cpp
@@ -25,16 +30,17 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_gesv.cpp
 )
 
-add_executable(dexrt_test 
+add_executable(dexrt_test
     catch_amalgamated.cpp
     ${UNIT_TEST_SOURCE_FILES}
+    ${DEX_SOURCE_FILES}
 )
 if ("${YAKL_ARCH}" STREQUAL "CUDA")
     set_source_files_properties(${UNIT_TEST_SOURCE_FILES} PROPERTIES LANGUAGE CUDA)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CXX_FLAGS}")
 endif()
-target_include_directories(dexrt_test SYSTEM PUBLIC 
-    "${GCC_INCLUDE_PATH}" 
+target_include_directories(dexrt_test SYSTEM PUBLIC
+    "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
 )
@@ -60,10 +66,11 @@ endif()
 
 add_executable(lw_comparison_2d
     demos/lightweaver_comparison_2d/main.cpp
+    ${DEX_SOURCE_FILES}
 )
-target_include_directories(lw_comparison_2d SYSTEM PUBLIC 
-    "${GCC_INCLUDE_PATH}" 
-    "${MPI_INCLUDE_PATH}" 
+target_include_directories(lw_comparison_2d SYSTEM PUBLIC
+    "${GCC_INCLUDE_PATH}"
+    "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
 )
@@ -87,10 +94,11 @@ endif()
 
 add_executable(diffuse_source
     demos/diffuse_source/main.cpp
+    ${DEX_SOURCE_FILES}
 )
-target_include_directories(diffuse_source SYSTEM PUBLIC 
-    "${GCC_INCLUDE_PATH}" 
-    "${MPI_INCLUDE_PATH}" 
+target_include_directories(diffuse_source SYSTEM PUBLIC
+    "${GCC_INCLUDE_PATH}"
+    "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
 )
@@ -114,10 +122,11 @@ endif()
 
 add_executable(solid_source
     demos/solid_source/main.cpp
+    ${DEX_SOURCE_FILES}
 )
-target_include_directories(solid_source SYSTEM PUBLIC 
-    "${GCC_INCLUDE_PATH}" 
-    "${MPI_INCLUDE_PATH}" 
+target_include_directories(solid_source SYSTEM PUBLIC
+    "${GCC_INCLUDE_PATH}"
+    "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
 )
@@ -141,10 +150,11 @@ endif()
 
 add_executable(static_lte_fs
     demos/static_lte_fs/main.cpp
+    ${DEX_SOURCE_FILES}
 )
-target_include_directories(static_lte_fs SYSTEM PUBLIC 
-    "${GCC_INCLUDE_PATH}" 
-    "${MPI_INCLUDE_PATH}" 
+target_include_directories(static_lte_fs SYSTEM PUBLIC
+    "${GCC_INCLUDE_PATH}"
+    "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
 )

@@ -109,11 +109,15 @@ endmacro(yakl_process_cuda_source_files)
 macro(yakl_process_target tname)
   get_target_property(files ${tname} SOURCES)
   yakl_get_lang_from_list("${files}" "CXX" cxxfiles)
-
   yakl_process_cxx_source_files("${cxxfiles}")
+  message("files ${files}")
+  message("CXX ${cxxfiles}")
 
   yakl_get_lang_from_list("${files}" "CUDA" cudafiles)
   yakl_process_cuda_source_files("${cudafiles}")
+  message("files ${files}")
+  message("CXX ${cxxfiles}")
+  message("CUDA ${cudafiles}")
 
   set_property(TARGET ${tname} PROPERTY CXX_STANDARD 20)
 

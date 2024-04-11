@@ -272,19 +272,15 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
 template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     const CascadeRTState& state,
-    vec2 ray_start,
-    vec2 ray_end,
-    const yakl::SArray<fp_t, 1, NumAz>& az_rays,
-    const yakl::SArray<fp_t, 1, NumAz>& az_weights,
-    const Fp3d& alo,
-    fp_t length_scale = FP(1.0)
+    const Raymarch2dStaticArgs<NumAz>& args
 ) {
     // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe
     // and go the other way, dropping out of the march early if we have
     // traversed sufficient optical depth.
-    fp_t factor = length_scale;
+    fp_t factor = args.distance_scale;
     if constexpr (UseMipmaps) {
         fp_t mip_factor = (1 << state.mipmap_factor);
+        JasUnpack(args, ray_start, ray_end);
         ray_start(0) = ray_start(0) / mip_factor;
         ray_start(1) = ray_start(1) / mip_factor;
         ray_end(0) = ray_end(0) / mip_factor;
@@ -298,12 +294,12 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
         Raymarch2dStaticArgs<NumAz>{
             .eta = eta,
             .chi = chi,
-            .ray_start = ray_end,
-            .ray_end = ray_start,
-            .az_rays = az_rays,
-            .az_weights = az_weights,
-            .alo = alo,
-            .distance_scale = length_scale
+            .ray_start = args.ray_end,
+            .ray_end = args.ray_start,
+            .az_rays = args.az_rays,
+            .az_weights = args.az_weights,
+            .alo = args.alo,
+            .distance_scale = factor
         }
     );
 }

@@ -7,14 +7,11 @@
 #include "Utils.hpp"
 #include "Atmosphere.hpp"
 #include "Populations.hpp"
-#include "RayMarching.hpp"
-#include "RadianceIntervals.hpp"
 #include "RadianceCascades.hpp"
 #include "CrtafParser.hpp"
 #include "Collisions.hpp"
 #include "Voigt.hpp"
-#include "EmisOpac.hpp"
-#include "FormalSolution.hpp"
+#include "StaticFormalSolution.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else

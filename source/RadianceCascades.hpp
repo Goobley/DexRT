@@ -2,6 +2,7 @@
 #define DEXRT_RADIANCE_CASCADES_HPP
 #include "Config.hpp"
 #include "Types.hpp"
+#include "State.hpp"
 #include "Utils.hpp"
 #include "RayMarching.hpp"
 #include "RadianceIntervals.hpp"
@@ -160,12 +161,14 @@ void compute_cascade_i_2d (
             }
             auto sample = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(
                 rt_state,
-                start,
-                end,
-                az_rays,
-                az_weights,
-                alo,
-                length_scale
+                Raymarch2dStaticArgs<NumAz>{
+                    .ray_start = start,
+                    .ray_end = end,
+                    .az_rays = az_rays,
+                    .az_weights = az_weights,
+                    .alo = alo,
+                    .distance_scale = length_scale
+                }
             );
             decltype(sample) upper_sample(FP(0.0));
             // NOTE(cmo): Sample upper cascade.
@@ -383,12 +386,14 @@ void compute_cascade_i_bilinear_fix_2d (
             ) {
                 storage = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(
                     rt_state,
-                    start,
-                    end,
-                    az_rays,
-                    az_weights,
-                    alo,
-                    length_scale
+                    Raymarch2dStaticArgs<NumAz>{
+                        .ray_start = start,
+                        .ray_end = end,
+                        .az_rays = az_rays,
+                        .az_weights = az_weights,
+                        .alo = alo,
+                        .distance_scale = length_scale
+                    }
                 );
                 for (int i = 0; i < NumComponents; ++i) {
                     for (int r = 0; r < NumAz; ++r) {

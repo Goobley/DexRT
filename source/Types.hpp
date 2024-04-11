@@ -94,8 +94,8 @@ struct Box {
 
 template <int NumAz=NUM_AZ>
 struct Raymarch2dStaticArgs {
-    const FpConst3d& eta;
-    const FpConst3d& chi;
+    FpConst3d eta = Fp3d();
+    FpConst3d chi = Fp3d();
     vec2 ray_start;
     vec2 ray_end;
     yakl::SArray<fp_t, 1, NumAz> az_rays;
