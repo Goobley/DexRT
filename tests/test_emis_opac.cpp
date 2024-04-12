@@ -75,8 +75,8 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
 
         Fp1d eta("eta", las.extent(0));
         Fp1d chi("chi", las.extent(0));
-        Fp2d lte("lte", 3, atom.energy.extent(0));
-        Fp2d n_star_scratch("scratch", 3, atom.energy.extent(0));
+        Fp2d lte("lte", atom.energy.extent(0), 3);
+        Fp2d n_star_scratch("scratch", atom.energy.extent(0), 3);
 
         parallel_for(
             "Compute Emis Opac",
@@ -91,7 +91,8 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
                         a.temperature,
                         a.ne,
                         atom.abundance * a.nhtot,
-                        lte.slice<1>({i, yakl::COLON})
+                        lte,
+                        i
                     );
                 }
 
@@ -101,8 +102,9 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
                             .atom = atom,
                             .profile = profile,
                             .la = las(i),
-                            .n = lte.slice<1>({atmos_idx[i], yakl::COLON}),
-                            .n_star_scratch = n_star_scratch.slice<1>({atmos_idx[i], yakl::COLON}),
+                            .n = lte,
+                            .n_star_scratch = n_star_scratch,
+                            .k = atmos_idx[i],
                             .atmos = atmos[atmos_idx[i]]
                         }
                     );

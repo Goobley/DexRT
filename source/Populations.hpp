@@ -307,7 +307,8 @@ void lte_pops(
     fp_t temperature,
     fp_t ne,
     fp_t ntot,
-    const yakl::Array<T, 1, mem_space>& pops
+    const yakl::Array<T, 2, mem_space>& pops,
+    int64_t x
 ) {
     using namespace ConstantsF64;
     // NOTE(cmo): Rearranged for fp_t stability
@@ -330,59 +331,66 @@ void lte_pops(
             pop_i /= saha_term;
         }
         sum += pop_i;
-        pops(i) = pop_i;
+        pops(i, x) = pop_i;
     }
     const FPT pop_0 = ntot / sum;
-    pops(0) = pop_0;
+    pops(0, x) = pop_0;
 
     for (int i = 1; i < n_level; ++i) {
-        FPT pop_i = pops(i) * pop_0;
+        FPT pop_i = pops(i, x) * pop_0;
         pop_i = yakl::max(pop_i, std::numeric_limits<FPT>::min());
-        pops(i) = pop_i;
+        pops(i, x) = pop_i;
     }
+}
+
+inline void compute_lte_pops_flat(
+    const CompAtom<fp_t>& atom, 
+    const Atmosphere& atmos,
+    const Fp2d& pops
+) {
+    const auto& temperature = atmos.temperature.collapse();
+    const auto& ne = atmos.ne.collapse();
+    const auto& nhtot = atmos.nh_tot.collapse();
+    parallel_for(
+        "LTE Pops",
+        SimpleBounds<1>(pops.extent(1)),
+        YAKL_LAMBDA (int64_t k) {
+            lte_pops(
+                atom.energy,
+                atom.g,
+                atom.stage,
+                temperature(k),
+                ne(k),
+                atom.abundance * nhtot(k),
+                pops,
+                k
+            );
+        }
+    );
 }
 
 /**
  * Computes the LTE populations in state. Assumes state->pops is already allocated.
 */
 inline void compute_lte_pops(State* state) {
-    // TODO(cmo): This routine/array likely needs to be transposed
-    const auto& pops = state->pops;
-    const auto& atom = state->atom;
-    const auto& temperature = state->atmos.temperature;
-    const auto& ne = state->atmos.ne;
-    const auto& nhtot = state->atmos.nh_tot;
-    parallel_for(
-        "LTE Pops",
-        SimpleBounds<2>(pops.extent(0), pops.extent(1)),
-        YAKL_LAMBDA (int x, int y) {
-            auto pops_slice = pops.slice<1>({x, y, yakl::COLON});
-            lte_pops(
-                atom.energy,
-                atom.g,
-                atom.stage,
-                temperature(x, y),
-                ne(x, y),
-                atom.abundance * nhtot(x, y),
-                pops_slice
-            );
-        }
-    );
+    auto pops_dims = state->pops.get_dimensions();
+    const auto& pops = state->pops.reshape<2>(Dims(pops_dims(0), pops_dims(1) * pops_dims(2)));
+    compute_lte_pops_flat(state->atom, state->atmos, pops);
 }
 
 inline fp_t stat_eq(State* state) {
     auto Gamma_host = state->Gamma.createHostCopy();
-    const auto& Gamma = state->Gamma.reshape<3>({
+    const auto& Gamma = state->Gamma.reshape<3>(Dims(
         state->Gamma.extent(0),
         state->Gamma.extent(1),
         state->Gamma.extent(2) * state->Gamma.extent(3)
-    });
+    ));
     Fp3d GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
     yakl::Array<fp_t*, 1, yakl::memDevice> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0));
-    const auto& pops = state->pops.reshape<2>({
-        state->pops.extent(0) * state->pops.extent(1),
-        state->pops.extent(2),
-    });
+    const auto& pops = state->pops.reshape<2>(Dims(
+        state->pops.extent(0),
+        state->pops.extent(1) * state->pops.extent(2)
+    ));
     Fp2d new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));
     yakl::Array<fp_t*, 1, yakl::memDevice> new_pops_ptrs("new_pops_ptrs", GammaT.extent(0));
     yakl::Array<i32, 1, yakl::memDevice> i_elim("i_elim", GammaT.extent(0));
@@ -391,12 +399,12 @@ inline fp_t stat_eq(State* state) {
     yakl::Array<i32, 1, yakl::memDevice> info("info", new_pops.extent(0));
     parallel_for(
         "Max Pops",
-        SimpleBounds<1>(pops.extent(0)),
-        YAKL_LAMBDA (int k) {
-            fp_t n_max = pops(k, 0);
+        SimpleBounds<1>(pops.extent(1)),
+        YAKL_LAMBDA (int64_t k) {
+            fp_t n_max = pops(0, k);
             i_elim(k) = 0;
-            for (int i = 1; i < pops.extent(1); ++i) {
-                fp_t n = pops(k, i);
+            for (int i = 1; i < pops.extent(0); ++i) {
+                fp_t n = pops(i, k);
                 if (n > n_max) {
                     i_elim(k) = i;
                 }
@@ -419,11 +427,11 @@ inline fp_t stat_eq(State* state) {
     parallel_for(
         "Transpose Pops",
         SimpleBounds<2>(pops.extent(0), pops.extent(1)),
-        YAKL_LAMBDA (int k, int i) {
+        YAKL_LAMBDA (int i, int64_t k) {
             if (i_elim(k) == i) {
                 fp_t n_total = FP(0.0);
-                for (int ii = 0; ii < pops.extent(1); ++ii) {
-                    n_total += pops(k, ii);
+                for (int ii = 0; ii < pops.extent(0); ++ii) {
+                    n_total += pops(ii, k);
                 }
                 new_pops(k, i) = n_total;
             } else {
@@ -434,7 +442,7 @@ inline fp_t stat_eq(State* state) {
     parallel_for(
         "Setup pointers",
         SimpleBounds<1>(GammaT_ptrs.extent(0)),
-        YAKL_LAMBDA (int k) {
+        YAKL_LAMBDA (int64_t k) {
             GammaT_ptrs(k) = &GammaT(k, 0, 0);
             new_pops_ptrs(k) = &new_pops(k, 0);
             ipiv_ptrs(k) = &ipivs(k, 0);
@@ -493,17 +501,17 @@ inline fp_t stat_eq(State* state) {
     parallel_for(
         "Compute max change",
         SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
-        YAKL_LAMBDA (int k, int i) {
-            fp_t change = std::abs(FP(1.0) - pops(k, i) / new_pops(k, i));
+        YAKL_LAMBDA (int64_t k, int i) {
+            fp_t change = std::abs(FP(1.0) - pops(i, k) / new_pops(k, i));
             max_rel_change(k, i) = change;
         }
     );
     yakl::fence();
     parallel_for(
-        "Copy pops",
-        SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
-        YAKL_LAMBDA (int k, int i) {
-            pops(k, i) = new_pops(k, i);
+        "Copy & transpose pops",
+        SimpleBounds<2>(pops.extent(0), pops.extent(1)),
+        YAKL_LAMBDA (int i, int64_t k) {
+            pops(i, k) = new_pops(k, i);
         }
     );
     fp_t max_change = yakl::intrinsics::maxval(max_rel_change);

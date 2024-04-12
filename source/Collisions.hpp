@@ -36,7 +36,7 @@ YAKL_INLINE void collision_omega(
     using namespace ConstantsFP;
     const fp_t rate = interp_rates(atmos, atom, coll, x, y);
     const fp_t Cdown = seaton_c0 * atmos.ne(x, y) * rate / (atom.g(coll.j) * std::sqrt(atmos.temperature(x, y)));
-    const fp_t Cup = Cdown * n_star(x, y, coll.j) / n_star(x, y, coll.i);
+    const fp_t Cup = Cdown * n_star(coll.j, x, y) / n_star(coll.i, x, y);
     C(coll.i, coll.j, x, y) += Cdown;
     C(coll.j, coll.i, x, y) += Cup;
 }
@@ -60,7 +60,7 @@ YAKL_INLINE void collision_ci(
             * std::sqrt(atmos.temperature(x, y))
         )
     );
-    const fp_t Cdown = Cup * n_star(x, y, coll.i) / n_star(x, y, coll.j);
+    const fp_t Cdown = Cup * n_star(coll.i, x, y) / n_star(coll.j, x, y);
     C(coll.i, coll.j, x, y) += Cdown;
     C(coll.j, coll.i, x, y) += Cup;
 }
@@ -78,7 +78,7 @@ YAKL_INLINE void collision_ce(
     const fp_t rate = interp_rates(atmos, atom, coll, x, y);
     const fp_t gij = atom.g(coll.i) / atom.g(coll.j);
     const fp_t Cdown = (rate * atmos.ne(x, y)) * gij * std::sqrt(atmos.temperature(x, y));
-    const fp_t Cup = Cdown * n_star(x, y, coll.j) / n_star(x, y, coll.i);
+    const fp_t Cup = Cdown * n_star(coll.j, x, y) / n_star(coll.i, x, y);
     C(coll.i, coll.j, x, y) += Cdown;
     C(coll.j, coll.i, x, y) += Cup;
 }
@@ -98,7 +98,7 @@ YAKL_INLINE void collision_cp(
     fp_t n_hii;
     nh0_lte(atmos.temperature(x, y), atmos.ne(x, y), atmos.nh_tot(x, y), &n_hii);
     const fp_t Cdown = rate * n_hii;
-    const fp_t Cup = Cdown * n_star(x, y, coll.j) / n_star(x, y, coll.i);
+    const fp_t Cup = Cdown * n_star(coll.j, x, y) / n_star(coll.i, x, y);
     C(coll.i, coll.j, x, y) += Cdown;
     C(coll.j, coll.i, x, y) += Cup;
 }
@@ -117,7 +117,7 @@ YAKL_INLINE void collision_ch(
     // TODO(cmo): This is only LTE!
     const fp_t nh0 = nh0_lte(atmos.temperature(x, y), atmos.ne(x, y), atmos.nh_tot(x, y));
     const fp_t Cup = rate * nh0;
-    const fp_t Cdown = Cup * n_star(x, y, coll.i) / n_star(x, y, coll.j);
+    const fp_t Cdown = Cup * n_star(coll.i, x, y) / n_star(coll.j, x, y);
     C(coll.i, coll.j, x, y) += Cdown;
     C(coll.j, coll.i, x, y) += Cup;
 }
@@ -201,23 +201,10 @@ inline void compute_collisions_to_gamma(State* state) {
 
     // TODO(cmo): Get rid of this!
     auto n_star = state->pops.createDeviceObject();
+    auto n_star_flat = n_star.reshape<2>(Dims(n_star.extent(0), n_star.extent(1) * n_star.extent(2)));
     // NOTE(cmo): Zero Gamma before we start to refill it.
     Gamma = FP(0.0);
-    parallel_for(
-        "lte pops",
-        SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
-        YAKL_LAMBDA (int x, int y) {
-            lte_pops(
-                atom.energy,
-                atom.g,
-                atom.stage,
-                atmos.temperature(x,y),
-                atmos.ne(x, y),
-                atom.abundance * atmos.nh_tot(x, y),
-                n_star.slice<1>({x, y, yakl::COLON})
-            );
-        }
-    );
+    compute_lte_pops_flat(atom, atmos, n_star_flat);
     yakl::fence();
 
     parallel_for(

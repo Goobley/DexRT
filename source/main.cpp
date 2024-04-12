@@ -379,7 +379,7 @@ void init_state (State* state) {
         // TODO(cmo): Need to decide whether to allow non-probe 1 spacing... it
         // probably doesn't make sense for us to have any interest in the level
         // populations not on a probe - we don't have any way to compute this outside LTE.
-        state->pops = Fp3d("pops", space_x, space_y, state->atom.energy.extent(0));
+        state->pops = Fp3d("pops", state->atom.energy.extent(0), space_x, space_y);
         state->J = Fp3d("J", state->atom.wavelength.extent(0), space_x, space_y);
         state->J = FP(0.0);
     } else {
@@ -606,7 +606,7 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
         nc.write(eta, "eta", {"x", "y", "chan"});
         nc.write(chi, "chi", {"x", "y", "chan"});
         nc.write(wavelengths, "wavelength", {"wavelength"});
-        nc.write(pops, "pops", {"x", "y", "level"});
+        nc.write(pops, "pops", {"level", "x", "y"});
     }
     nc.close();
 }

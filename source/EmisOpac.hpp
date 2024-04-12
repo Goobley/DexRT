@@ -50,8 +50,9 @@ struct EmisOpacState {
     const CompAtom<T, mem_space>& atom;
     const VoigtProfile<T, false, mem_space>& profile;
     int la;
-    const yakl::Array<fp_t const, 1, mem_space>& n;
-    const yakl::Array<fp_t, 1, mem_space>& n_star_scratch;
+    const yakl::Array<fp_t const, 2, mem_space>& n;
+    const yakl::Array<fp_t, 2, mem_space>& n_star_scratch;
+    int64_t k;
     const AtmosPointParams& atmos;
     EmisOpacMode mode = EmisOpacMode::All;
 };
@@ -195,7 +196,7 @@ template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacState<T, mem_space>& args
 ) {
-    JasUnpack(args, atom, profile, la, n, n_star_scratch, atmos, mode);
+    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode);
     EmisOpac result{FP(0.0), FP(0.0)};
     fp_t lambda = atom.wavelength(la);
     const bool lines = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::DynamicOnly);
@@ -220,8 +221,10 @@ YAKL_INLINE EmisOpac emis_opac(
                 params,
                 lambda
             );
-            result.eta += n(l.j) * uv.Uji;
-            result.chi += n(l.i) * uv.Vij - n(l.j) * uv.Vji;
+            const fp_t nj = n(l.j, k);
+            const fp_t ni = n(l.i, k);
+            result.eta += nj * uv.Uji;
+            result.chi += ni * uv.Vij - nj * uv.Vji;
         }
     }
 
@@ -234,7 +237,8 @@ YAKL_INLINE EmisOpac emis_opac(
             atmos.temperature,
             atmos.ne,
             atom.abundance * atmos.nhtot,
-            n_star
+            n_star,
+            k
         );
         for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
             const auto& cont = atom.continua(kr);
@@ -245,7 +249,7 @@ YAKL_INLINE EmisOpac emis_opac(
             using namespace ConstantsFP;
             ContParams<mem_space> params;
             params.la = la;
-            params.thermal_ratio = n_star(cont.i) / n_star(cont.j) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
+            params.thermal_ratio = n_star(cont.i, k) / n_star(cont.j, k) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
             params.sigma_grid = get_sigma<mem_space>(atom, cont);
 
             const UV uv = compute_uv<mem_space>(
@@ -253,8 +257,10 @@ YAKL_INLINE EmisOpac emis_opac(
                 params,
                 lambda
             );
-            result.eta += n(cont.j) * uv.Uji;
-            result.chi += n(cont.i) * uv.Vij - n(cont.j) * uv.Vji;
+            const fp_t nj = n(cont.j, k);
+            const fp_t ni = n(cont.i, k);
+            result.eta += nj * uv.Uji;
+            result.chi += ni * uv.Vij - nj * uv.Vji;
         }
     }
 

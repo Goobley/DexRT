@@ -13,6 +13,7 @@ typedef double fp_t;
 typedef float f32;
 typedef double f64;
 typedef int32_t i32;
+typedef int64_t i64;
 
 constexpr fp_t PROBE0_LENGTH = FP(2.0);
 constexpr int PROBE0_NUM_RAYS = 4;

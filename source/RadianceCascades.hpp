@@ -29,22 +29,22 @@ void compute_cascade_i_2d (
     int x_dim = march_state.emission.extent(0) / (1 << cascade_idx);
     int z_dim = march_state.emission.extent(1) / (1 << cascade_idx);
     int ray_dim = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
-    const auto& cascade_i = state->cascades[cascade_lookup_idx].reshape<5>({
+    const auto& cascade_i = state->cascades[cascade_lookup_idx].reshape<5>(Dims(
         x_dim,
         z_dim,
         ray_dim,
         NumComponents,
         NumAz
-    });
+    ));
     FpConst5d cascade_ip = cascade_i;
     if (cascade_idx != MAX_LEVEL) {
-        cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>({
+        cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>(Dims(
             x_dim / 2,
             z_dim / 2,
             ray_dim * (1 << CASCADE_BRANCHING_FACTOR),
             NumComponents,
             NumAz
-        });
+        ));
     }
     auto dims = cascade_i.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();
@@ -233,22 +233,22 @@ void compute_cascade_i_bilinear_fix_2d (
     int x_dim = march_state.emission.extent(0) / (1 << cascade_idx);
     int z_dim = march_state.emission.extent(1) / (1 << cascade_idx);
     int ray_dim = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
-    const auto& cascade_i = state->cascades[cascade_lookup_idx].reshape<5>({
+    const auto& cascade_i = state->cascades[cascade_lookup_idx].reshape<5>(Dims(
         x_dim,
         z_dim,
         ray_dim,
         NumComponents,
         NumAz
-    });
+    ));
     FpConst5d cascade_ip = cascade_i;
     if (cascade_idx != MAX_LEVEL) {
-        cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>({
+        cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>(Dims(
             x_dim / 2,
             z_dim / 2,
             ray_dim * CASCADE_BRANCHING_FACTOR,
             NumComponents,
             NumAz
-        });
+        ));
     }
     auto dims = cascade_i.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();

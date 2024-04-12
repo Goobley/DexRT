@@ -28,6 +28,7 @@ typedef yakl::SArray<int32_t, 1, 2> ivec2;
 
 using yakl::c::parallel_for;
 using yakl::c::SimpleBounds;
+using yakl::Dims;
 
 struct Atmosphere {
     fp_t voxel_scale;

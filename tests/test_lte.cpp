@@ -280,7 +280,7 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
     yakl::init();
     {
         CompAtom<fp_t> atom = to_comp_atom(model);
-        yakl::Array<fp_t, 1, yakl::memDevice> n_star("n_star", model.levels.size());
+        yakl::Array<fp_t, 2, yakl::memDevice> n_star("n_star", model.levels.size(), 1);
 
         using namespace ConstantsF64;
         fp_t temperature = FP(5000.0);
@@ -292,7 +292,7 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
         parallel_for(
             SimpleBounds<1>(1),
             YAKL_LAMBDA (int x) {
-                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star);
+                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star, 0);
             }
         );
         yakl::fence();
@@ -305,7 +305,7 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
             1.67793086e+14
         };
         for (int i = 0; i < n_star_h.extent(0); ++i) {
-            REQUIRE_THAT(n_star_h(i), WithinRel(expected_soln[i], FP(1e-4)));
+            REQUIRE_THAT(n_star_h(i, 0), WithinRel(expected_soln[i], FP(1e-4)));
         }
 
         temperature = FP(10000.0);
@@ -316,7 +316,7 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
         parallel_for(
             SimpleBounds<1>(1),
             YAKL_LAMBDA (int x) {
-                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star);
+                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star, 0);
             }
         );
         yakl::fence();
@@ -329,7 +329,7 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
             6.58323816e+17
         };
         for (int i = 0; i < n_star_h.extent(0); ++i) {
-            REQUIRE_THAT(n_star_h(i), WithinRel(expected_soln_2[i], FP(1e-4)));
+            REQUIRE_THAT(n_star_h(i, 0), WithinRel(expected_soln_2[i], FP(1e-4)));
         }
 
         temperature = FP(5000.0) * FP(100.0);
@@ -340,7 +340,7 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
         parallel_for(
             SimpleBounds<1>(1),
             YAKL_LAMBDA (int x) {
-                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star);
+                lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star, 0);
             }
         );
         yakl::fence();
@@ -353,7 +353,7 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
             1.31690376e+16
         };
         for (int i = 0; i < n_star_h.extent(0); ++i) {
-            REQUIRE_THAT(n_star_h(i), WithinRel(expected_soln_3[i], FP(1e-4)));
+            REQUIRE_THAT(n_star_h(i, 0), WithinRel(expected_soln_3[i], FP(1e-4)));
         }
 
 

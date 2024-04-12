@@ -62,8 +62,8 @@ void static_compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
                     lambda
                 );
 
-                const fp_t eta = pops(x, y, l.j) * uv.Uji;
-                const fp_t chi = pops(x, y, l.i) * uv.Vij - pops(x, y, l.j) * uv.Vji;
+                const fp_t eta = pops(l.j, x, y) * uv.Uji;
+                const fp_t chi = pops(l.i, x, y) * uv.Vij - pops(l.j, x, y) * uv.Vji;
                 const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
                 fp_t wl_weight = FP(1.0) / hnu_4pi;
                 if (la == 0) {
@@ -109,7 +109,7 @@ void static_compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
 
                 ContParams params;
                 params.la = la;
-                params.thermal_ratio = lte_scratch(x, y, cont.i) / lte_scratch(x, y, cont.j) * std::exp(-hc_k_B_nm / (lambda * local_atmos.temperature));
+                params.thermal_ratio = lte_scratch(cont.i, x, y) / lte_scratch(cont.j, x, y) * std::exp(-hc_k_B_nm / (lambda * local_atmos.temperature));
                 params.sigma_grid = get_sigma(atom, cont);
 
                 const UV uv = compute_uv(
@@ -117,8 +117,8 @@ void static_compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
                     params,
                     lambda
                 );
-                const fp_t eta = pops(x, y, cont.j) * uv.Uji;
-                const fp_t chi = pops(x, y, cont.i) * uv.Vij - pops(x, y, cont.j) * uv.Vji;
+                const fp_t eta = pops(cont.j, x, y) * uv.Uji;
+                const fp_t chi = pops(cont.i, x, y) * uv.Vij - pops(cont.j, x, y) * uv.Vji;
                 const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
                 fp_t wl_weight = FP(1.0) / hnu_4pi;
                 if (la == 0) {
@@ -185,33 +185,43 @@ void static_formal_sol_rc(State* state, int la) {
     auto pops_dims = pops.get_dimensions();
     Fp3d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1), pops_dims(2));
 
-    auto atmos_dims = atmos.temperature.get_dimensions();
+    auto flat_temperature = atmos.temperature.collapse();
+    auto flat_ne = atmos.ne.collapse();
+    auto flat_vturb = atmos.vturb.collapse();
+    auto flat_nhtot = atmos.nh_tot.collapse();
+    auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
+    auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
+    auto flat_chi = chi.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
     // NOTE(cmo): Compute emis/opac
     parallel_for(
         "Compute eta, chi",
-        SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
-        YAKL_LAMBDA (int x, int y) {
+        SimpleBounds<1>(flat_temperature.extent(0)),
+        YAKL_LAMBDA (int64_t k) {
             AtmosPointParams local_atmos;
-            local_atmos.temperature = atmos.temperature(x, y);
-            local_atmos.ne = atmos.ne(x, y);
-            local_atmos.vturb = atmos.vturb(x, y);
-            local_atmos.nhtot = atmos.nh_tot(x, y);
+            local_atmos.temperature = flat_temperature(k);
+            local_atmos.ne = flat_ne(k);
+            local_atmos.vturb = flat_vturb(k);
+            local_atmos.nhtot = flat_nhtot(k);
             local_atmos.nh0 = nh0_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
             auto result = emis_opac(
                 EmisOpacState<fp_t>{
                     .atom = atom,
                     .profile = phi,
                     .la = la,
-                    .n = pops.slice<1>({x, y, yakl::COLON}),
-                    .n_star_scratch = lte_scratch.slice<1>({x, y, yakl::COLON}),
+                    .n = flat_pops,
+                    .n_star_scratch = flat_n_star,
+                    .k = k,
                     .atmos = local_atmos
                 }
             );
-            eta(x, y, 0) = result.eta;
-            chi(x, y, 0) = result.chi;
+            flat_eta(k, 0) = result.eta;
+            flat_chi(k, 0) = result.chi;
         }
     );
-    state->alo = FP(0.0);
+    if (state->alo.initialized()) {
+        state->alo = FP(0.0);
+    }
     yakl::fence();
     // NOTE(cmo): Regenerate mipmaps
     if constexpr (USE_MIPMAPS) {
@@ -251,5 +261,7 @@ void static_formal_sol_rc(State* state, int la) {
     }
     // NOTE(cmo): J is not computed in this function, but done in main for now
 
-    static_compute_gamma(state, la, lte_scratch);
+    if (state->alo.initialized()) {
+        static_compute_gamma(state, la, lte_scratch);
+    }
 }
