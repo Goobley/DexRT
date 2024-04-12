@@ -37,6 +37,9 @@ struct Atmosphere {
     Fp2d ne;
     Fp2d nh_tot;
     Fp2d vturb;
+    Fp2d vx;
+    Fp2d vy;
+    Fp2d vz;
 };
 
 struct MipmapState {

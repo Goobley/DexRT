@@ -72,8 +72,8 @@ void compute_cascade_i_2d (
     std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(cascade_name.c_str());
     parallel_for(
-        SimpleBounds<3>(dims(2), dims(0), dims(1)),
-        YAKL_LAMBDA (int ray_idx, int u, int v) {
+        SimpleBounds<3>(dims(0), dims(1), dims(2)),
+        YAKL_LAMBDA (int u, int v, int ray_idx) {
             // NOTE(cmo): u, v probe indices
             // NOTE(cmo): x, y world coords
             for (int i = 0; i < NumComponents; ++i) {
@@ -276,8 +276,8 @@ void compute_cascade_i_bilinear_fix_2d (
     std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(cascade_name.c_str());
     parallel_for(
-        SimpleBounds<3>(dims(2), dims(0), dims(1)),
-        YAKL_LAMBDA (int ray_idx, int u, int v) {
+        SimpleBounds<3>(dims(0), dims(1), dims(2)),
+        YAKL_LAMBDA (int u, int v, int ray_idx) {
             // NOTE(cmo): u, v probe indices
             // NOTE(cmo): x, y world coords
             for (int i = 0; i < NumComponents; ++i) {

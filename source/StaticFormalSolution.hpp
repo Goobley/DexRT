@@ -1,5 +1,5 @@
-#if !defined(DEXRT_FORMAL_SOLUTION_HPP)
-#define DEXRT_FORMAL_SOLUTION_HPP
+#if !defined(DEXRT_STATIC_FORMAL_SOLUTION_HPP)
+#define DEXRT_STATIC_FORMAL_SOLUTION_HPP
 
 #include "Types.hpp"
 #include "Utils.hpp"

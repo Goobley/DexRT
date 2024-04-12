@@ -12,6 +12,7 @@
 #include "Collisions.hpp"
 #include "Voigt.hpp"
 #include "StaticFormalSolution.hpp"
+#include "DynamicFormalSolution.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else
@@ -558,7 +559,8 @@ void init_state (State* state) {
         }
     }
 
-    // NOTE(cmo): Allocate ALO array - this should only be when we're using the static fast path
+    // NOTE(cmo): Allocate ALO array
+    // TODO(cmo): this should only be when we're using the static fast path
     state->alo = Fp3d("ALO", space_x, space_y, NUM_AZ);
     const int n_level = state->atom.energy.extent(0);
     state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
@@ -633,6 +635,7 @@ int main(int argc, char** argv) {
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.15), 1024},
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(1.5e3), 64 * 1024}
             );
+            state.nh_lte = HPartFn();
             fmt::println("Scale: {} m", state.atmos.voxel_scale);
         }
 
@@ -660,24 +663,37 @@ int main(int argc, char** argv) {
             save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         } else {
             compute_lte_pops(&state);
+            const bool static_soln = false;
 
             auto waves = state.atom.wavelength.createHostCopy();
             fp_t max_change = FP(1.0);
-            while (max_change > FP(5e-2)) {
-                fmt::println("FS");
-                compute_collisions_to_gamma(&state);
-                yakl::fence();
+            if (static_soln) {
+                while (max_change > FP(5e-2)) {
+                    fmt::println("FS");
+                    compute_collisions_to_gamma(&state);
+                    yakl::fence();
+                    for (int la = 0; la < waves.extent(0); ++la) {
+                        // fmt::println("Computing wavelength {} ({})", la, waves(la));
+                        static_formal_sol_rc(&state, la);
+                        final_cascade_to_J(state.cascades[0], &state.J, la);
+                        break;
+                    }
+                    fmt::println("Stat eq");
+                    max_change = stat_eq(&state);
+                }
+                int la = 24;
+                static_formal_sol_rc(&state, la);
+                final_cascade_to_J(state.cascades[0], &state.J, la);
+            } else {
                 for (int la = 0; la < waves.extent(0); ++la) {
-                    // fmt::println("Computing wavelength {} ({})", la, waves(la));
-                    static_formal_sol_rc(&state, la);
+                    fmt::println("Computing wavelength {} ({})", la, waves(la));
+                    dynamic_formal_sol_rc(&state, la);
                     final_cascade_to_J(state.cascades[0], &state.J, la);
                 }
-                fmt::println("Stat eq");
-                max_change = stat_eq(&state);
+                int la = 24;
+                dynamic_formal_sol_rc(&state, la);
+                final_cascade_to_J(state.cascades[0], &state.J, la);
             }
-            int la = 24;
-            static_formal_sol_rc(&state, la);
-            final_cascade_to_J(state.cascades[0], &state.J, la);
             save_results(
                 state.J,
                 state.raymarch_state.emission,

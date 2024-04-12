@@ -7,11 +7,15 @@ if __name__ == '__main__':
     atmos_size = 256
     x_dim = atmos.createDimension("x", atmos_size)
     z_dim = atmos.createDimension("z", atmos_size)
-    temperature = atmos.createVariable("temperature", "f4", ("x", "z"))
-    ne = atmos.createVariable("ne", "f4", ("x", "z"))
-    nh_tot = atmos.createVariable("nh_tot", "f4", ("x", "z"))
-    vturb = atmos.createVariable("vturb", "f4", ("x", "z"))
-    pressure = atmos.createVariable("pressure", "f4", ("x", "z"))
+    index_order = ("z", "x")
+    temperature = atmos.createVariable("temperature", "f4", index_order)
+    ne = atmos.createVariable("ne", "f4", index_order)
+    nh_tot = atmos.createVariable("nh_tot", "f4", index_order)
+    vturb = atmos.createVariable("vturb", "f4", index_order)
+    pressure = atmos.createVariable("pressure", "f4", index_order)
+    vx = atmos.createVariable("vx", "f4", index_order)
+    vy = atmos.createVariable("vy", "f4", index_order)
+    vz = atmos.createVariable("vz", "f4", index_order)
     scale = atmos.createVariable("voxel_scale", "f4")
 
     scale[...] = 30e6 / atmos_size
@@ -25,5 +29,9 @@ if __name__ == '__main__':
     nh_tot[...] = nh_val
     ne[...] = X * nh_val
     vturb[...] = 5e3
+
+    vx[...] = 0.0
+    vy[...] = 0.0
+    vz[...] = 0.0
 
     atmos.close()

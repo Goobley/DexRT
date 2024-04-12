@@ -37,12 +37,13 @@ struct LineParams {
 };
 
 struct AtmosPointParams {
-    fp_t temperature;
-    fp_t ne;
-    fp_t vturb;
-    fp_t nhtot;
+    fp_t temperature = FP(0.0);
+    fp_t ne = FP(0.0);
+    fp_t vturb = FP(0.0);
+    fp_t nhtot = FP(0.0);
+    fp_t vel = FP(0.0);
     /// Neutral H density
-    fp_t nh0;
+    fp_t nh0 = FP(0.0);
 };
 
 template <typename T=fp_t, int mem_space=yakl::memDevice>
@@ -54,6 +55,7 @@ struct EmisOpacState {
     const yakl::Array<fp_t, 2, mem_space>& n_star_scratch;
     int64_t k;
     const AtmosPointParams& atmos;
+    const yakl::Array<i32 const, 1, mem_space>& active_set = {};
     EmisOpacMode mode = EmisOpacMode::All;
 };
 
@@ -196,39 +198,69 @@ template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacState<T, mem_space>& args
 ) {
-    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode);
+    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
     EmisOpac result{FP(0.0), FP(0.0)};
     fp_t lambda = atom.wavelength(la);
     const bool lines = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::DynamicOnly);
     const bool conts = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::StaticOnly);
 
     if (lines) {
-        for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
-            const auto& l = atom.lines(kr);
-            if (!l.is_active(la)) {
-                continue;
+        if (active_set.initialized()) {
+            for (int kr = 0; kr < active_set.extent(0); ++kr) {
+                const auto& l = atom.lines(active_set(kr));
+
+                LineParams params;
+                params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
+                params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
+                params.vel = atmos.vel;
+
+                const UV uv = compute_uv(
+                    l,
+                    profile,
+                    params,
+                    lambda
+                );
+                const fp_t nj = n(l.j, k);
+                const fp_t ni = n(l.i, k);
+                result.eta += nj * uv.Uji;
+                result.chi += ni * uv.Vij - nj * uv.Vji;
             }
+        } else {
+            for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
+                const auto& l = atom.lines(kr);
+                if (!l.is_active(la)) {
+                    continue;
+                }
 
-            LineParams params;
-            params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
-            params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
-            // TODO(cmo): Come back to this!
-            params.vel = FP(0.0);
+                LineParams params;
+                params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
+                params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
+                params.vel = atmos.vel;
 
-            const UV uv = compute_uv(
-                l,
-                profile,
-                params,
-                lambda
-            );
-            const fp_t nj = n(l.j, k);
-            const fp_t ni = n(l.i, k);
-            result.eta += nj * uv.Uji;
-            result.chi += ni * uv.Vij - nj * uv.Vji;
+                const UV uv = compute_uv(
+                    l,
+                    profile,
+                    params,
+                    lambda
+                );
+                const fp_t nj = n(l.j, k);
+                const fp_t ni = n(l.i, k);
+                result.eta += nj * uv.Uji;
+                result.chi += ni * uv.Vij - nj * uv.Vji;
+            }
         }
     }
 
     if (conts) {
+        bool any_active = false;
+        for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+            const auto& cont = atom.continua(kr);
+            any_active = any_active || cont.is_active(la);
+        }
+        if (!any_active) {
+            return result;
+        }
+
         auto& n_star = n_star_scratch;
         lte_pops<T, fp_t, mem_space>(
             atom.energy,

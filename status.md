@@ -29,3 +29,14 @@ Ideas
 - [ ] Move LTE populations to be partition function based (allows for calculation of only the levels of interest)
 - [x] Use magma to abstract batched LU solved for populations
     - [ ] Needs non-GPU alternative
+- [ ] Store rays per cascade pre-averaged (groups of 4) - should reduce bandwidth and storage requirements, but requires atomic operation
+
+
+Notes
+=====
+
+Formalising coordinate system
+------------------------------
+- z up, x default perpendicular axis, y as per right-hand rule
+- Storage is as [z, x] or [z, y, x]
+- These correspond to probes v, u in 2D, and w, v, u in 3D.

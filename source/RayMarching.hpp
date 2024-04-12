@@ -89,7 +89,9 @@ YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
 
     auto& s = *state;
     const fp_t prev_t = s.t;
-    s.curr_coord = s.next_coord;
+    for (int d = 0; d < NUM_DIM; ++d) {
+        s.curr_coord(d) = s.next_coord(d);
+    }
 
     int axis = minloc(s.next_hit);
     fp_t new_t = s.next_hit(axis);
@@ -115,7 +117,7 @@ YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
     return new_t <= s.max_t;
 }
 
-template <int NumDim=2>
+template <int NumDim=NUM_DIM>
 YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
     Box box;
     for (int d = 0; d < NumDim; ++d) {
@@ -200,7 +202,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     yakl::SArray<fp_t, 1, NumWavelengths> chi_sample;
 
     do {
-        auto sample_coord = s.curr_coord;
+        const auto& sample_coord(s.curr_coord);
 
         if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
             auto hit = s.p0 + s.t * s.direction;

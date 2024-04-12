@@ -15,6 +15,7 @@ void static_compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
     const auto& alo = state->alo;
     const auto& I = state->cascades[0];
     const auto& wavelength = atom.wavelength;
+    const auto& nh_lte = state->nh_lte;
     auto az_rays = get_az_rays();
     auto az_weights = get_az_weights();
     auto I_dims = I.get_dimensions();
@@ -29,7 +30,7 @@ void static_compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
             local_atmos.ne = atmos.ne(x, y);
             local_atmos.vturb = atmos.vturb(x, y);
             local_atmos.nhtot = atmos.nh_tot(x, y);
-            local_atmos.nh0 = nh0_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
 
             fp_t lambda = atom.wavelength(la);
             for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
@@ -179,6 +180,7 @@ void static_formal_sol_rc(State* state, int la) {
     auto& atom = state->atom;
     auto& eta = march_state.emission;
     auto& chi = march_state.absorption;
+    const auto& nh_lte = state->nh_lte;
 
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
     // it, for now, trust the pool allocator
@@ -203,7 +205,7 @@ void static_formal_sol_rc(State* state, int la) {
             local_atmos.ne = flat_ne(k);
             local_atmos.vturb = flat_vturb(k);
             local_atmos.nhtot = flat_nhtot(k);
-            local_atmos.nh0 = nh0_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
             auto result = emis_opac(
                 EmisOpacState<fp_t>{
                     .atom = atom,

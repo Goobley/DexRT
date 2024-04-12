@@ -3,6 +3,7 @@
 
 #include "Types.hpp"
 #include "Voigt.hpp"
+#include "LteHPops.hpp"
 #include <magma_v2.h>
 
 struct State {
@@ -11,6 +12,7 @@ struct State {
     Atmosphere atmos;
     CompAtom<fp_t> atom;
     VoigtProfile<fp_t, false> phi;
+    HPartFn<> nh_lte;
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y]
     Fp3d alo; /// [x, y, az]
