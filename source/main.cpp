@@ -663,11 +663,12 @@ int main(int argc, char** argv) {
             save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         } else {
             compute_lte_pops(&state);
+            const bool non_lte = false;
             const bool static_soln = false;
 
             auto waves = state.atom.wavelength.createHostCopy();
             fp_t max_change = FP(1.0);
-            if (static_soln) {
+            if (non_lte) {
                 while (max_change > FP(5e-2)) {
                     fmt::println("FS");
                     compute_collisions_to_gamma(&state);
@@ -676,7 +677,6 @@ int main(int argc, char** argv) {
                         // fmt::println("Computing wavelength {} ({})", la, waves(la));
                         static_formal_sol_rc(&state, la);
                         final_cascade_to_J(state.cascades[0], &state.J, la);
-                        break;
                     }
                     fmt::println("Stat eq");
                     max_change = stat_eq(&state);
@@ -685,13 +685,17 @@ int main(int argc, char** argv) {
                 static_formal_sol_rc(&state, la);
                 final_cascade_to_J(state.cascades[0], &state.J, la);
             } else {
+                auto fn = dynamic_formal_sol_rc;
+                if (static_soln) {
+                    fn = static_formal_sol_rc;
+                }
                 for (int la = 0; la < waves.extent(0); ++la) {
                     fmt::println("Computing wavelength {} ({})", la, waves(la));
-                    dynamic_formal_sol_rc(&state, la);
+                    fn(&state, la);
                     final_cascade_to_J(state.cascades[0], &state.J, la);
                 }
                 int la = 24;
-                dynamic_formal_sol_rc(&state, la);
+                fn(&state, la);
                 final_cascade_to_J(state.cascades[0], &state.J, la);
             }
             save_results(

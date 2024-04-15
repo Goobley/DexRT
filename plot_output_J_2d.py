@@ -68,7 +68,7 @@ if __name__ == "__main__":
     )
     atmos.quadrature(10)
 
-    a_set = lw.RadiativeSet([H_6_atom(), collisionless_CaII()])
+    a_set = lw.RadiativeSet([H_6_atom(), CaII_atom()])
     a_set.set_active("Ca")
     eq_pops = a_set.compute_eq_pops(atmos)
     spect = a_set.compute_wavelength_grid(lambdaReference=CaII_atom().lines[-1].lambda0 - 1.0)

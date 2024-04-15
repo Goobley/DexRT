@@ -33,6 +33,8 @@ constexpr int MIPMAP_FACTORS[MAX_LEVEL+1] = {0, 0, 1, 1, 1};
 
 constexpr bool PINGPONG_BUFFERS = true;
 
+constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
+
 // #define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_AZ = 1;

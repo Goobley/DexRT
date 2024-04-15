@@ -98,14 +98,24 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
         const int64_t k = sample_coord(1) * atmos.temperature.extent(1) + sample_coord(0);
         fp_t eta_s = eta.get_data()[k];
         fp_t chi_s = chi.get_data()[k] + FP(1e-20);
-        if (active_set.extent(0) > 0) {
+
+        fp_t v_norm = std::sqrt(
+                square(atmos.vx.get_data()[k])
+                + square(atmos.vy.get_data()[k])
+                + square(atmos.vz.get_data()[k])
+        );
+        fp_t temperature = atmos.temperature.get_data()[k];
+        if (
+            active_set.extent(0) > 0 
+            && v_norm > ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(atom.mass, temperature)
+        ) {
             fp_t vel = (
                 atmos.vx.get_data()[k] * mux
                 + atmos.vy.get_data()[k] * muy
                 + atmos.vz.get_data()[k] * muz
             );
             AtmosPointParams local_atmos{
-                .temperature = atmos.temperature.get_data()[k],
+                .temperature = temperature,
                 .ne = atmos.ne.get_data()[k],
                 .vturb = atmos.vturb.get_data()[k],
                 .nhtot = atmos.nh_tot.get_data()[k],

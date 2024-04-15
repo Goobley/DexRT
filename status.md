@@ -19,6 +19,7 @@ Features/ToDo
 - [ ] LTE with background J iteration
 - [ ] Final formal solution (interactive?)
 - [ ] Non-LTE iteration
+    - [ ] Add line profile normalisation in final cascade (`wphi`)
 - [ ] Boundary conditions
 - [ ] Multiple atoms - basically splat everything SOA a la MULTI and like is done for the one atom here.
 
@@ -30,6 +31,8 @@ Ideas
 - [x] Use magma to abstract batched LU solved for populations
     - [ ] Needs non-GPU alternative
 - [ ] Store rays per cascade pre-averaged (groups of 4) - should reduce bandwidth and storage requirements, but requires atomic operation
+- [x] Avoid local memory in dda ray traversal -- seems to be causing stalls
+    - Implemented fully register-based approach using the switch/template method from nanovdb - big perf difference.
 
 
 Notes

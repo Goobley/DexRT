@@ -1,4 +1,5 @@
 #include "DynamicFormalSolution.hpp"
+#include "RadianceCascades.hpp"
 #include "DynamicRadianceCascades.hpp"
 #include "Populations.hpp"
 #include "EmisOpac.hpp"
@@ -33,6 +34,9 @@ void dynamic_formal_sol_rc(State* state, int la) {
     auto flat_ne = atmos.ne.collapse();
     auto flat_vturb = atmos.vturb.collapse();
     auto flat_nhtot = atmos.nh_tot.collapse();
+    auto flat_vx = atmos.vx.collapse();
+    auto flat_vy = atmos.vy.collapse();
+    auto flat_vz = atmos.vz.collapse();
     auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
     auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
@@ -51,6 +55,15 @@ void dynamic_formal_sol_rc(State* state, int la) {
             local_atmos.vturb = flat_vturb(k);
             local_atmos.nhtot = flat_nhtot(k);
             local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+
+            fp_t vel = std::sqrt(square(flat_vx(k)) + square(flat_vy(k)) + square(flat_vz(k)));
+            auto mode = EmisOpacMode::StaticOnly;
+            if (
+                vel <= ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(atom.mass, local_atmos.temperature)
+            ) {
+                mode = EmisOpacMode::All;
+            }
+
             auto result = emis_opac(
                 EmisOpacState<fp_t>{
                     .atom = atom,
@@ -60,7 +73,7 @@ void dynamic_formal_sol_rc(State* state, int la) {
                     .n_star_scratch = flat_n_star,
                     .k = k,
                     .atmos = local_atmos,
-                    .mode = EmisOpacMode::StaticOnly
+                    .mode = mode
                 }
             );
             flat_nh0(k) = local_atmos.nh0;
@@ -70,25 +83,33 @@ void dynamic_formal_sol_rc(State* state, int la) {
     );
 
     yakl::Array<i32, 1, yakl::memHost> active_host("active set", lines.extent(0));
-    int ptr = 0;
+    int num_active_lines = 0;
     for (int line_idx = 0; line_idx < lines.extent(0); ++line_idx) {
         const auto& line = lines(line_idx);
         if (line.is_active(la)) {
-            active_host(ptr) = line_idx;
-            ptr += 1;
+            active_host(num_active_lines) = line_idx;
+            num_active_lines += 1;
         }
     }
-    yakl::Array<i32, 1, yakl::memHost>active_host_cut("active set", active_host.get_data(), ptr);
+    yakl::Array<i32, 1, yakl::memHost>active_host_cut("active set", active_host.get_data(), num_active_lines);
     auto active_set = active_host_cut.createDeviceCopy();
     yakl::fence();
 
-    // TOOD(cmo): We know at this point exactly which lines are active... use this information!
-
     // NOTE(cmo): Compute RC FS
-    for (int i = MAX_LEVEL; i >= 0; --i) {
-        // const bool compute_alo = ((i == 0) && state->alo.initialized());
-        compute_dynamic_cascade_i_2d(state, lte_scratch, nh0, i, la, active_set, false);
+    if (num_active_lines == 0) {
+        // NOTE(cmo): Use the static solver
+        for (int i = MAX_LEVEL; i >= 0; --i) {
+            compute_cascade_i_2d(state, i, false);
+            yakl::fence();
+        }
+    } else {
         yakl::fence();
+        for (int i = MAX_LEVEL; i >= 0; --i) {
+            // const bool compute_alo = ((i == 0) && state->alo.initialized());
+            compute_dynamic_cascade_i_2d(state, lte_scratch, nh0, i, la, active_set, false);
+            yakl::fence();
+        }
     }
-    yakl::fence();
+
+
 }

@@ -86,6 +86,17 @@ YAKL_INLINE SigmaInterp<mem_space> get_sigma(const CompAtom<fp_t, mem_space>& at
     return result;
 }
 
+/** Compute mean thermal velocity
+ * \param mass [u]
+ * \param temperature [K]
+ * \return mean thermal velocity [m/s]
+*/
+YAKL_INLINE fp_t thermal_vel(fp_t mass, fp_t temperature) {
+    using namespace ConstantsFP;
+    constexpr fp_t two_k_B_u = FP(2.0) * k_B_u;
+    return std::sqrt(two_k_B_u * temperature / mass);
+}
+
 /** Compute doppler width
  * \param lambda0 wavelength [nm]
  * \param mass [u]
@@ -94,7 +105,6 @@ YAKL_INLINE SigmaInterp<mem_space> get_sigma(const CompAtom<fp_t, mem_space>& at
  * \return Doppler width [nm]
 */
 YAKL_INLINE fp_t doppler_width(fp_t lambda0, fp_t mass, fp_t temperature, fp_t vturb) {
-
     using namespace ConstantsFP;
     constexpr fp_t two_k_B_u = FP(2.0) * k_B_u;
     return lambda0 * std::sqrt(two_k_B_u * temperature / mass + square(vturb)) / c;

@@ -83,6 +83,32 @@ YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box)
     return result;
 }
 
+// NOTE(cmo): Based on Nanovdb templated implementation
+template <int axis>
+YAKL_INLINE fp_t step_marcher(RayMarchState2d* state) {
+    auto& s = *state;
+    fp_t new_t = s.next_hit(axis);
+    s.next_hit(axis) += s.delta(axis);
+    s.next_coord(axis) += s.step(axis);
+    return new_t;
+}
+
+YAKL_INLINE fp_t step_marcher(RayMarchState2d* state) {
+    auto& s = *state;
+    int axis = 0;
+    if (s.next_hit(1) < s.next_hit(0)) {
+        axis = 1;
+    }
+    switch (axis) {
+        case 0: {
+            return step_marcher<0>(state);
+        } break;
+        case 1: {
+            return step_marcher<1>(state);
+        } break;
+    }
+}
+
 YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
     using namespace yakl::componentwise;
     using yakl::intrinsics::sum;
@@ -93,10 +119,7 @@ YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
         s.curr_coord(d) = s.next_coord(d);
     }
 
-    int axis = minloc(s.next_hit);
-    fp_t new_t = s.next_hit(axis);
-    s.next_hit(axis) += s.delta(axis);
-    s.next_coord(axis) += s.step(axis);
+    fp_t new_t = step_marcher(state);
 
     if (new_t > s.max_t && prev_t < s.max_t) {
         // NOTE(cmo): The end point is in the box we have just stepped through
