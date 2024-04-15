@@ -8,7 +8,7 @@
 #include "RadianceIntervals.hpp"
 #include <fmt/core.h>
 
-template <int NumWavelengths=NUM_WAVELENGTHS, int NumComponents=NUM_COMPONENTS>
+template <bool compute_alo=false, int NumWavelengths=NUM_WAVELENGTHS, int NumComponents=NUM_COMPONENTS>
 void compute_dynamic_cascade_i_2d (
     State* state,
     const Fp3d& lte_scratch,
@@ -16,7 +16,7 @@ void compute_dynamic_cascade_i_2d (
     int cascade_idx,
     int la,
     const yakl::Array<i32, 1, yakl::memDevice>& active_set,
-    bool compute_alo = false
+    fp_t wl_ray_weight
 ) {
     static_assert(USE_ATMOSPHERE);
     static_assert(NumComponents == 2);
@@ -63,13 +63,13 @@ void compute_dynamic_cascade_i_2d (
     };
     FpConst2d eta(
         "eta",
-        rt_state.eta.get_data(), 
+        rt_state.eta.get_data(),
         rt_state.eta.extent(0),
         rt_state.eta.extent(1)
     );
     FpConst2d chi(
         "chi",
-        rt_state.chi.get_data(), 
+        rt_state.chi.get_data(),
         rt_state.chi.extent(0),
         rt_state.chi.extent(1)
     );
@@ -80,8 +80,13 @@ void compute_dynamic_cascade_i_2d (
     const auto& atom = state->atom;
     const auto& phi = state->phi;
     const auto& pops = state->pops;
-    const auto& n_flat = state->pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
-    const auto& lte_scratch_flat = lte_scratch.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    const auto n_flat = state->pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    const auto lte_scratch_flat = lte_scratch.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    const auto Gamma_flat = state->Gamma.reshape<3>(Dims(
+        state->Gamma.extent(0),
+        state->Gamma.extent(1),
+        state->Gamma.extent(2) * state->Gamma.extent(3)
+    ));
     const auto& atmos = state->atmos;
 
     std::string cascade_name = fmt::format("Dynamic Cascade {}", cascade_idx);
@@ -174,29 +179,11 @@ void compute_dynamic_cascade_i_2d (
             if (USE_ATMOSPHERE) {
                 length_scale = atmos.voxel_scale;
             }
-            DynamicRadianceInterval sample = dynamic_raymarch_2d(
-                Raymarch2dDynamicArgs{
-                    .eta = eta,
-                    .chi = chi,
-                    .ray_start = start,
-                    .ray_end = end,
-                    .mux = direction(0) * incl_factor,
-                    .muy = az_rays(r),
-                    .muz = direction(1) * incl_factor,
-                    .muy_weight = az_weights(r),
-                    .distance_scale = length_scale,
-                    .atmos = atmos,
-                    .atom = atom,
-                    .active_set = active_set,
-                    .phi = phi,
-                    .nh0 = nh0,
-                    .n = n_flat,
-                    .n_star_scratch = lte_scratch_flat,
-                    .la = la
-                }
-            );
+
             DynamicRadianceInterval upper_sample{};
-            // NOTE(cmo): Sample upper cascade.
+            // NOTE(cmo): Sample upper cascade. This is done _before_ the
+            // raymarch here, so we can compute the entries to Gamma using the
+            // correct radiation field.
             if (cascade_idx != MAX_LEVEL && az_rays(r) != FP(0.0)) {
                 for (
                     int upper_ray_idx = upper_ray_start_idx;
@@ -223,7 +210,32 @@ void compute_dynamic_cascade_i_2d (
                     upper_sample.tau += ray_weight * tau_interp;
                 }
             }
-            DynamicRadianceInterval merged = merge_intervals(sample, upper_sample);
+
+            // NOTE(cmo): This variant of the raymarcher does the merge internally
+            DynamicRadianceInterval merged = dynamic_raymarch_2d<compute_alo>(
+                Raymarch2dDynamicArgs{
+                    .eta = eta,
+                    .chi = chi,
+                    .ray_start = start,
+                    .ray_end = end,
+                    .mux = direction(0) * incl_factor,
+                    .muy = az_rays(r),
+                    .muz = direction(1) * incl_factor,
+                    .muy_weight = az_weights(r),
+                    .distance_scale = length_scale,
+                    .atmos = atmos,
+                    .atom = atom,
+                    .active_set = active_set,
+                    .phi = phi,
+                    .nh0 = nh0,
+                    .n = n_flat,
+                    .n_star_scratch = lte_scratch_flat,
+                    .upper_sample = upper_sample,
+                    .Gamma = Gamma_flat,
+                    .wl_ray_weight = wl_ray_weight,
+                    .la = la
+                }
+            );
             cascade_i(v, u, ray_idx, 0, r) = merged.I;
             cascade_i(v, u, ray_idx, 1, r) = merged.tau;
         }
