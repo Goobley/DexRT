@@ -7,7 +7,24 @@
 #include "EmisOpac.hpp"
 #include "LteHPops.hpp"
 #include "Voigt.hpp"
+#include "GammaMatrix.hpp"
 #include <optional>
+
+struct DynamicRadianceInterval {
+    fp_t I = FP(0.0);
+    fp_t tau = FP(0.0);
+};
+
+YAKL_INLINE DynamicRadianceInterval merge_intervals(
+    DynamicRadianceInterval closer,
+    DynamicRadianceInterval further
+) {
+    // Assumes muy is never 1.0
+    fp_t transmission = std::exp(-closer.tau);
+    closer.I += transmission * further.I;
+    closer.tau += further.tau;
+    return closer;
+}
 
 struct Raymarch2dDynamicArgs {
     FpConst2d eta = Fp2d();
@@ -27,29 +44,86 @@ struct Raymarch2dDynamicArgs {
     const Fp2d& nh0;
     const Fp2d& n;
     const Fp2d& n_star_scratch;
+    const DynamicRadianceInterval& upper_sample = {};
+    const Fp3d& Gamma;
+    fp_t wl_ray_weight;
     int la;
 };
 
-struct DynamicRadianceInterval {
-    fp_t I = FP(0.0);
-    fp_t tau = FP(0.0);
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+struct AccumulateTransToGammaState {
+    const EmisOpacState<T, mem_space>& emis_opac_state;
+    const Fp3d& Gamma;
+    i64 k;
+    fp_t alo;
+    fp_t I;
+    fp_t wlamu;
 };
-
-YAKL_INLINE DynamicRadianceInterval merge_intervals(
-    DynamicRadianceInterval closer,
-    DynamicRadianceInterval further
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE void accumulate_transitions_to_Gamma(
+    const AccumulateTransToGammaState<T, mem_space>& args
 ) {
-    // Assumes muy is never 1.0
-    fp_t transmission = std::exp(-closer.tau);
-    closer.I += transmission * further.I;
-    closer.tau += further.tau;
-    return closer;
+    JasUnpack(args, emis_opac_state, Gamma, k, alo, I, wlamu);
+    JasUnpack(emis_opac_state, atom, active_set, la, n);
+
+    for (int kr = 0; kr < active_set.extent(0); ++kr) {
+        const auto& l = atom.lines(active_set(kr));
+        const UV uv = compute_uv_line(
+            emis_opac_state,
+            active_set(kr)
+        );
+        const fp_t nj = n(l.j, k);
+        const fp_t ni = n(l.i, k);
+        const fp_t eta = nj * uv.Uji;
+        const fp_t chi = ni * uv.Vij - nj * uv.Vji;
+        add_to_gamma<true>(GammaAccumState{
+            .eta = eta,
+            .chi = chi,
+            .uv = uv,
+            .I = I,
+            .alo = alo,
+            .wlamu = wlamu,
+            .Gamma = Gamma,
+            .i = l.i,
+            .j = l.j,
+            .k = k
+        });
+    }
+
+    for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+        const auto& cont = atom.continua(kr);
+        if (!cont.is_active(la)) {
+            continue;
+        }
+
+        const UV uv = compute_uv_cont(
+            emis_opac_state,
+            kr
+        );
+        const fp_t nj = n(cont.j, k);
+        const fp_t ni = n(cont.i, k);
+        const fp_t eta = nj * uv.Uji;
+        const fp_t chi = ni * uv.Vij - nj * uv.Vji;
+        add_to_gamma<true>(GammaAccumState{
+            .eta = eta,
+            .chi = chi,
+            .uv = uv,
+            .I = I,
+            .alo = alo,
+            .wlamu = wlamu,
+            .Gamma = Gamma,
+            .i = cont.i,
+            .j = cont.j,
+            .k = k
+        });
+    }
 }
 
+template <bool compute_alo=false>
 YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
     const Raymarch2dDynamicArgs& args
 ) {
-    JasUnpack(args, eta, chi, ray_start, ray_end, mux, muy, muz, muy_weight);
+    JasUnpack(args, eta, chi, ray_start, ray_end, mux, muy, muz, muy_weight, wl_ray_weight, Gamma);
     JasUnpack(args, distance_scale, atom, phi, atmos, n, n_star_scratch, la, nh0, active_set);
 
     DynamicRadianceInterval ri{
@@ -104,48 +178,44 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
                 + square(atmos.vy.get_data()[k])
                 + square(atmos.vz.get_data()[k])
         );
-        fp_t temperature = atmos.temperature.get_data()[k];
+        fp_t vel = (
+            atmos.vx.get_data()[k] * mux
+            + atmos.vy.get_data()[k] * muy
+            + atmos.vz.get_data()[k] * muz
+        );
+        AtmosPointParams local_atmos{
+            .temperature = atmos.temperature.get_data()[k],
+            .ne = atmos.ne.get_data()[k],
+            .vturb = atmos.vturb.get_data()[k],
+            .nhtot = atmos.nh_tot.get_data()[k],
+            .vel = vel,
+            .nh0 = nh0.get_data()[k]
+        };
+        auto emis_opac_state = EmisOpacState<fp_t>{
+            .atom = atom,
+            .profile = phi,
+            .la = la,
+            .n = n,
+            .n_star_scratch = n_star_scratch,
+            .k = k,
+            .atmos = local_atmos,
+            .active_set = active_set,
+            .mode = EmisOpacMode::DynamicOnly
+        };
         if (
-            active_set.extent(0) > 0 
-            && v_norm > ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(atom.mass, temperature)
+            active_set.extent(0) > 0
+            && v_norm > ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(atom.mass, local_atmos.temperature)
         ) {
-            fp_t vel = (
-                atmos.vx.get_data()[k] * mux
-                + atmos.vy.get_data()[k] * muy
-                + atmos.vz.get_data()[k] * muz
-            );
-            AtmosPointParams local_atmos{
-                .temperature = temperature,
-                .ne = atmos.ne.get_data()[k],
-                .vturb = atmos.vturb.get_data()[k],
-                .nhtot = atmos.nh_tot.get_data()[k],
-                .vel = vel,
-                .nh0 = nh0.get_data()[k]
-            };
-
-            auto lines = emis_opac(EmisOpacState<fp_t>{
-                .atom = atom,
-                .profile = phi,
-                .la = la,
-                .n = n,
-                .n_star_scratch = n_star_scratch,
-                .k = k,
-                .atmos = local_atmos,
-                .active_set = active_set,
-                .mode = EmisOpacMode::DynamicOnly
-            });
+            auto lines = emis_opac(emis_opac_state);
             eta_s += lines.eta;
             chi_s += lines.chi;
         }
 
-        const bool final_step = (s.t == s.max_t);
-        const bool compute_rates = final_step && (args.compute_rates);
 
         fp_t tau_s = chi_s * s.dt * distance_scale;
         // TODO(cmo): Add background scattering
         fp_t source_fn = eta_s / chi_s;
 
-        const fp_t weight = FP(1.0) / PROBE0_NUM_RAYS;
         if (muy == FP(0.0)) {
             ri.I = source_fn;
         } else {
@@ -160,8 +230,22 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
             }
             ri.tau += tau_mu;
             ri.I = ri.I * edt + source_fn * one_m_edt;
-            if (compute_rates) {
-
+            const bool final_step = (s.t == s.max_t);
+            if (final_step) {
+                ri = merge_intervals(ri, args.upper_sample);
+                if constexpr (compute_alo) {
+                    const fp_t alo = one_m_edt;
+                    accumulate_transitions_to_Gamma(
+                        AccumulateTransToGammaState<>{
+                            .emis_opac_state = emis_opac_state,
+                            .Gamma = Gamma,
+                            .k = k,
+                            .alo = alo,
+                            .I = ri.I,
+                            .wlamu = wl_ray_weight * muy_weight
+                        }
+                    );
+                }
             }
         }
     } while (next_intersection(&s));
@@ -169,7 +253,7 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
     return ri;
 }
 
-template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool compute_alo=false>
 YAKL_INLINE  DynamicRadianceInterval dynamic_raymarch_2d(
     const Raymarch2dDynamicArgs& args
 ) {
@@ -183,7 +267,7 @@ YAKL_INLINE  DynamicRadianceInterval dynamic_raymarch_2d(
     args.ray_end(0) = sx;
     args.ray_end(1) = sy;
 
-    return dynamic_dda_raymarch_2d(args);
+    return dynamic_dda_raymarch_2d<compute_alo>(args);
 }
 
 #else

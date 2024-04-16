@@ -13,6 +13,7 @@ struct State {
     CompAtom<fp_t> atom;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
+    FpConst1dHost wavelength_h;
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y]
     Fp3d alo; /// [x, y, az]

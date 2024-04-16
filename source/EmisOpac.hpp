@@ -205,6 +205,54 @@ YAKL_INLINE UV compute_uv(
 }
 
 template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE UV compute_uv_line(
+    const EmisOpacState<T, mem_space>& args,
+    int line_idx
+) {
+    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
+    const fp_t lambda = atom.wavelength(la);
+    const auto& l = atom.lines(line_idx);
+
+    LineParams params;
+    params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
+    params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
+    params.vel = atmos.vel;
+
+    const UV uv = compute_uv(
+        l,
+        profile,
+        params,
+        lambda
+    );
+    return uv;
+}
+
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE UV compute_uv_cont(
+    const EmisOpacState<T, mem_space>& args,
+    int cont_idx
+) {
+    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
+    const auto& n_star = args.n_star_scratch;
+    const fp_t lambda = atom.wavelength(la);
+    const auto& cont = atom.continua(cont_idx);
+
+    using namespace ConstantsFP;
+    ContParams<mem_space> params;
+    params.la = la;
+    params.thermal_ratio = n_star(cont.i, k) / n_star(cont.j, k) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
+    params.sigma_grid = get_sigma<mem_space>(atom, cont);
+
+    const UV uv = compute_uv<mem_space>(
+        cont,
+        params,
+        lambda
+    );
+    return uv;
+}
+
+
+template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacState<T, mem_space>& args
 ) {
@@ -218,17 +266,9 @@ YAKL_INLINE EmisOpac emis_opac(
         if (active_set.initialized()) {
             for (int kr = 0; kr < active_set.extent(0); ++kr) {
                 const auto& l = atom.lines(active_set(kr));
-
-                LineParams params;
-                params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
-                params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
-                params.vel = atmos.vel;
-
-                const UV uv = compute_uv(
-                    l,
-                    profile,
-                    params,
-                    lambda
+                const UV uv = compute_uv_line(
+                    args,
+                    active_set(kr)
                 );
                 const fp_t nj = n(l.j, k);
                 const fp_t ni = n(l.i, k);
@@ -241,17 +281,9 @@ YAKL_INLINE EmisOpac emis_opac(
                 if (!l.is_active(la)) {
                     continue;
                 }
-
-                LineParams params;
-                params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
-                params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
-                params.vel = atmos.vel;
-
-                const UV uv = compute_uv(
-                    l,
-                    profile,
-                    params,
-                    lambda
+                const UV uv = compute_uv_line(
+                    args,
+                    kr
                 );
                 const fp_t nj = n(l.j, k);
                 const fp_t ni = n(l.i, k);
@@ -288,16 +320,9 @@ YAKL_INLINE EmisOpac emis_opac(
                 continue;
             }
 
-            using namespace ConstantsFP;
-            ContParams<mem_space> params;
-            params.la = la;
-            params.thermal_ratio = n_star(cont.i, k) / n_star(cont.j, k) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
-            params.sigma_grid = get_sigma<mem_space>(atom, cont);
-
-            const UV uv = compute_uv<mem_space>(
-                cont,
-                params,
-                lambda
+            const UV uv = compute_uv_cont(
+                args,
+                kr
             );
             const fp_t nj = n(cont.j, k);
             const fp_t ni = n(cont.i, k);

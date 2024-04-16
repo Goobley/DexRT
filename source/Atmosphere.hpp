@@ -44,5 +44,29 @@ inline Atmosphere load_atmos(const std::string& path) {
     return result;
 }
 
+template <typename T=fp_t>
+FlatAtmosphere<T> flatten(const Atmosphere& atmos) {
+    FlatAtmosphere<T> result;
+    result.voxel_scale = atmos.voxel_scale;
+    result.temperature = atmos.temperature.collapse();
+    result.pressure = atmos.pressure.collapse();
+    result.ne = atmos.ne.collapse();
+    result.nh_tot = atmos.nh_tot.collapse();
+    result.vturb = atmos.vturb.collapse();
+    result.vx = atmos.vx.collapse();
+    result.vy = atmos.vy.collapse();
+    result.vz = atmos.vz.collapse();
+    return result;
+}
+
+template <typename T>
+YAKL_INLINE fp_t compute_vnorm(const FlatAtmosphere<T>& atmos, i64 k) {
+    return std::sqrt(
+        square(atmos.vx(k))
+        + square(atmos.vy(k))
+        + square(atmos.vz(k))
+    );
+}
+
 #else
 #endif

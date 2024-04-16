@@ -3,104 +3,106 @@
 #include "Populations.hpp"
 #include "EmisOpac.hpp"
 #include "LteHPops.hpp"
+#include "GammaMatrix.hpp"
+#include "Atmosphere.hpp"
 
 void static_compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
     using namespace ConstantsFP;
-    auto& atmos = state->atmos;
-    auto atmos_dims = atmos.temperature.get_dimensions();
+    const auto flat_atmos = flatten<const fp_t>(state->atmos);
     const auto& atom = state->atom;
     const auto& phi = state->phi;
     const auto& pops = state->pops;
+    const auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    const auto flat_lte_pops = lte_scratch.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     const auto& Gamma = state->Gamma;
-    const auto& alo = state->alo;
-    const auto& I = state->cascades[0];
-    const auto& wavelength = atom.wavelength;
+    const auto flat_Gamma = Gamma.reshape<3>(Dims(
+        Gamma.extent(0),
+        Gamma.extent(1),
+        Gamma.extent(2) * Gamma.extent(3)
+    ));
+    const auto& alo = state->alo.reshape<2>(Dims(
+        state->alo.extent(0) * state->alo.extent(1),
+        state->alo.extent(2)
+    ));
+    const auto casc_dims = state->cascades[0].get_dimensions();
+    const auto& I = state->cascades[0].reshape<4>(Dims(
+        casc_dims(0) * casc_dims(1),
+        casc_dims(2),
+        casc_dims(3),
+        casc_dims(4)
+    ));
     const auto& nh_lte = state->nh_lte;
     auto az_rays = get_az_rays();
     auto az_weights = get_az_weights();
     auto I_dims = I.get_dimensions();
 
+    const auto& wavelength = state->wavelength_h;
+    fp_t lambda = wavelength(la);
+    const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
+    fp_t wl_weight = FP(1.0) / hnu_4pi;
+    if (la == 0) {
+        wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
+    } else if (la == wavelength.extent(0) - 1) {
+        wl_weight *= FP(0.5) * (
+            wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
+        );
+    } else {
+        wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
+    }
+    const fp_t wl_ray_weight = wl_weight / fp_t(I_dims(1));
 
     parallel_for(
         "compute Gamma",
-        SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
-        YAKL_LAMBDA (int x, int y) {
+        SimpleBounds<1>(flat_atmos.temperature.extent(0)),
+        YAKL_LAMBDA (i64 k) {
             AtmosPointParams local_atmos;
-            local_atmos.temperature = atmos.temperature(x, y);
-            local_atmos.ne = atmos.ne(x, y);
-            local_atmos.vturb = atmos.vturb(x, y);
-            local_atmos.nhtot = atmos.nh_tot(x, y);
+            local_atmos.temperature = flat_atmos.temperature(k);
+            local_atmos.ne = flat_atmos.ne(k);
+            local_atmos.vturb = flat_atmos.vturb(k);
+            local_atmos.nhtot = flat_atmos.nh_tot(k);
             local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            local_atmos.vel = FP(0.0);
 
-            fp_t lambda = atom.wavelength(la);
             for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
                 const auto& l = atom.lines(kr);
                 if (!l.is_active(la)) {
                     continue;
                 }
 
-                LineParams params;
-                params.dop_width = doppler_width(
-                    l.lambda0,
-                    atom.mass,
-                    local_atmos.temperature,
-                    local_atmos.vturb
-                );
-                params.gamma = gamma_from_broadening(
-                    l,
-                    atom.broadening,
-                    local_atmos.temperature,
-                    local_atmos.ne,
-                    local_atmos.nh0
-                );
-                // TODO(cmo): Come back to this!
-                params.vel = FP(0.0);
-
-                const UV uv = compute_uv(
-                    l,
-                    phi,
-                    params,
-                    lambda
+                const UV uv = compute_uv_line(
+                    EmisOpacState<>{
+                        .atom = atom,
+                        .profile = phi,
+                        .la = la,
+                        .n = flat_pops,
+                        .n_star_scratch = flat_lte_pops,
+                        .k = k,
+                        .atmos = local_atmos
+                    },
+                    kr
                 );
 
-                const fp_t eta = pops(l.j, x, y) * uv.Uji;
-                const fp_t chi = pops(l.i, x, y) * uv.Vij - pops(l.j, x, y) * uv.Vji;
-                const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
-                fp_t wl_weight = FP(1.0) / hnu_4pi;
-                if (la == 0) {
-                    wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
-                } else if (la == wavelength.extent(0) - 1) {
-                    wl_weight *= FP(0.5) * (
-                        wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
-                    );
-                } else {
-                    wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
-                }
+                const fp_t eta = flat_pops(l.j, k) * uv.Uji;
+                const fp_t chi = flat_pops(l.i, k) * uv.Vij - flat_pops(l.j, k) * uv.Vji;
 
-                fp_t G_ij = FP(0.0);
-                fp_t G_ji = FP(0.0);
-                for (int ray_idx = 0; ray_idx < I_dims(2); ++ray_idx) {
-                    for (int batch_la = 0; batch_la < I_dims(3) / 2; ++batch_la) {
-                        for (int r = 0; r < I_dims(4); ++r) {
-                            const fp_t psi_star = alo(x, y, r) / chi;
-                            const fp_t I_eff = I(x, y, ray_idx, 2 * batch_la, r) - psi_star * eta;
-                            const fp_t wlamu = wl_weight * FP(1.0) / fp_t(I_dims(2)) * az_weights(r);
-                            fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
-                            G_ij += integrand * wlamu;
-                            // if (x == 0 && y == 255 && G_ij < FP(0.0)) {
-                            //     printf("neg: int %e, wla %e, alo %e, Ieff %e\n", integrand, wlamu, alo(x, y), I_eff);
-                            // }
-
-                            integrand = uv.Vij * I_eff;
-                            G_ji += integrand * wlamu;
-                            // if (x == 0 && y == 255 && G_ji < FP(0.0)) {
-                            //     printf("neg: int %e, wla %e, alo %e, Ieff %e\n", integrand, wlamu, alo(x, y), I_eff);
-                            // }
+                for (int ray_idx = 0; ray_idx < I_dims(1); ++ray_idx) {
+                    for (int batch_la = 0; batch_la < I_dims(2) / 2; ++batch_la) {
+                        for (int r = 0; r < I_dims(3); ++r) {
+                            add_to_gamma<false>(GammaAccumState{
+                                .eta = eta,
+                                .chi = chi,
+                                .uv = uv,
+                                .I = I(k, ray_idx, 2 * batch_la, r),
+                                .alo = alo(k, r),
+                                .wlamu = wl_ray_weight * az_weights(r),
+                                .Gamma = flat_Gamma,
+                                .i = l.i,
+                                .j = l.j,
+                                .k = k
+                            });
                         }
                     }
                 }
-                Gamma(l.i, l.j, x, y) += G_ij;
-                Gamma(l.j, l.i, x, y) += G_ji;
             }
             for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
                 const auto& cont = atom.continua(kr);
@@ -108,63 +110,40 @@ void static_compute_gamma(State* state, int la, const Fp3d& lte_scratch) {
                     continue;
                 }
 
-                ContParams params;
-                params.la = la;
-                params.thermal_ratio = lte_scratch(cont.i, x, y) / lte_scratch(cont.j, x, y) * std::exp(-hc_k_B_nm / (lambda * local_atmos.temperature));
-                params.sigma_grid = get_sigma(atom, cont);
-
-                const UV uv = compute_uv(
-                    cont,
-                    params,
-                    lambda
+                const UV uv = compute_uv_cont(
+                    EmisOpacState<>{
+                        .atom = atom,
+                        .profile = phi,
+                        .la = la,
+                        .n = flat_pops,
+                        .n_star_scratch = flat_lte_pops,
+                        .k = k,
+                        .atmos = local_atmos
+                    },
+                    kr
                 );
-                const fp_t eta = pops(cont.j, x, y) * uv.Uji;
-                const fp_t chi = pops(cont.i, x, y) * uv.Vij - pops(cont.j, x, y) * uv.Vji;
-                const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
-                fp_t wl_weight = FP(1.0) / hnu_4pi;
-                if (la == 0) {
-                    wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
-                } else if (la == wavelength.extent(0) - 1) {
-                    wl_weight *= FP(0.5) * (
-                        wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
-                    );
-                } else {
-                    wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
-                }
 
-                fp_t G_ij = FP(0.0);
-                fp_t G_ji = FP(0.0);
-                for (int ray_idx = 0; ray_idx < I_dims(2); ++ray_idx) {
-                    for (int batch_la = 0; batch_la < I_dims(3) / 2; ++batch_la) {
-                        for (int r = 0; r < I_dims(4); ++r) {
-                            const fp_t psi_star = alo(x, y, r) / chi;
-                            const fp_t I_eff = I(x, y, ray_idx, 2 * batch_la, r) - psi_star * eta;
-                            const fp_t wlamu = wl_weight * FP(1.0) / fp_t(I_dims(2)) * az_weights(r);
-                            fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
-                            G_ij += integrand * wlamu;
+                const fp_t eta = flat_pops(cont.j, k) * uv.Uji;
+                const fp_t chi = flat_pops(cont.i, k) * uv.Vij - flat_pops(cont.j, k) * uv.Vji;
 
-                            integrand = uv.Vij * I_eff;
-                            G_ji += integrand * wlamu;
+                for (int ray_idx = 0; ray_idx < I_dims(1); ++ray_idx) {
+                    for (int batch_la = 0; batch_la < I_dims(2) / 2; ++batch_la) {
+                        for (int r = 0; r < I_dims(3); ++r) {
+                            add_to_gamma<false>(GammaAccumState{
+                                .eta = eta,
+                                .chi = chi,
+                                .uv = uv,
+                                .I = I(k, ray_idx, 2 * batch_la, r),
+                                .alo = alo(k, r),
+                                .wlamu = wl_ray_weight * az_weights(r),
+                                .Gamma = flat_Gamma,
+                                .i = cont.i,
+                                .j = cont.j,
+                                .k = k
+                            });
                         }
                     }
                 }
-                Gamma(cont.i, cont.j, x, y) += G_ij;
-                Gamma(cont.j, cont.i, x, y) += G_ji;
-            }
-        }
-    );
-    yakl::fence();
-    parallel_for(
-        "Gamma fixup",
-        SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
-        YAKL_LAMBDA (int x, int y) {
-            for (int i = 0; i < Gamma.extent(1); ++i) {
-                fp_t diag = FP(0.0);
-                Gamma(i, i, x, y) = FP(0.0);
-                for (int j = 0; j < Gamma.extent(0); ++j) {
-                    diag += Gamma(j, i, x, y);
-                }
-                Gamma(i, i, x, y) = -diag;
             }
         }
     );

@@ -13,6 +13,7 @@
 #include "Voigt.hpp"
 #include "StaticFormalSolution.hpp"
 #include "DynamicFormalSolution.hpp"
+#include "GammaMatrix.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else
@@ -383,6 +384,8 @@ void init_state (State* state) {
         state->pops = Fp3d("pops", state->atom.energy.extent(0), space_x, space_y);
         state->J = Fp3d("J", state->atom.wavelength.extent(0), space_x, space_y);
         state->J = FP(0.0);
+        // TODO(cmo): This backwards/forwards shuffle is a bit silly, but it's a tiny array.
+        state->wavelength_h = state->atom.wavelength.createHostCopy();
     } else {
         space_x = MODEL_X;
         space_y = MODEL_Y;
@@ -559,8 +562,7 @@ void init_state (State* state) {
         }
     }
 
-    // NOTE(cmo): Allocate ALO array
-    // TODO(cmo): this should only be when we're using the static fast path
+    // NOTE(cmo): Allocate ALO array -- used for static wavelengths
     state->alo = Fp3d("ALO", space_x, space_y, NUM_AZ);
     const int n_level = state->atom.energy.extent(0);
     state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
@@ -663,10 +665,19 @@ int main(int argc, char** argv) {
             save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         } else {
             compute_lte_pops(&state);
-            const bool non_lte = false;
-            const bool static_soln = false;
+            constexpr bool non_lte = true;
+            constexpr bool static_soln = false;
+            auto flat_Gamma = state.Gamma.reshape<3>(Dims(
+                state.Gamma.extent(0),
+                state.Gamma.extent(1),
+                state.Gamma.extent(2) *state.Gamma.extent(3)
+            ));
 
             auto waves = state.atom.wavelength.createHostCopy();
+            auto fs_fn = dynamic_formal_sol_rc;
+            if (static_soln) {
+                fs_fn = static_formal_sol_rc;
+            }
             fp_t max_change = FP(1.0);
             if (non_lte) {
                 while (max_change > FP(5e-2)) {
@@ -675,27 +686,25 @@ int main(int argc, char** argv) {
                     yakl::fence();
                     for (int la = 0; la < waves.extent(0); ++la) {
                         // fmt::println("Computing wavelength {} ({})", la, waves(la));
-                        static_formal_sol_rc(&state, la);
+                        fs_fn(&state, la);
                         final_cascade_to_J(state.cascades[0], &state.J, la);
                     }
+                    fixup_gamma(flat_Gamma);
+                    yakl::fence();
                     fmt::println("Stat eq");
                     max_change = stat_eq(&state);
                 }
                 int la = 24;
-                static_formal_sol_rc(&state, la);
+                fs_fn(&state, la);
                 final_cascade_to_J(state.cascades[0], &state.J, la);
             } else {
-                auto fn = dynamic_formal_sol_rc;
-                if (static_soln) {
-                    fn = static_formal_sol_rc;
-                }
                 for (int la = 0; la < waves.extent(0); ++la) {
                     fmt::println("Computing wavelength {} ({})", la, waves(la));
-                    fn(&state, la);
+                    fs_fn(&state, la);
                     final_cascade_to_J(state.cascades[0], &state.J, la);
                 }
                 int la = 24;
-                fn(&state, la);
+                fs_fn(&state, la);
                 final_cascade_to_J(state.cascades[0], &state.J, la);
             }
             save_results(

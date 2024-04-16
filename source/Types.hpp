@@ -23,6 +23,12 @@ typedef yakl::Array<fp_t, 3, yakl::memHost> Fp3dHost;
 typedef yakl::Array<fp_t, 4, yakl::memHost> Fp4dHost;
 typedef yakl::Array<fp_t, 5, yakl::memHost> Fp5dHost;
 
+typedef yakl::Array<fp_t const, 1, yakl::memHost> FpConst1dHost;
+typedef yakl::Array<fp_t const, 2, yakl::memHost> FpConst2dHost;
+typedef yakl::Array<fp_t const, 3, yakl::memHost> FpConst3dHost;
+typedef yakl::Array<fp_t const, 4, yakl::memHost> FpConst4dHost;
+typedef yakl::Array<fp_t const, 5, yakl::memHost> FpConst5dHost;
+
 typedef yakl::SArray<fp_t, 1, 2> vec2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
 
@@ -40,6 +46,19 @@ struct Atmosphere {
     Fp2d vx;
     Fp2d vy;
     Fp2d vz;
+};
+
+template <typename T=fp_t>
+struct FlatAtmosphere {
+    fp_t voxel_scale;
+    yakl::Array<T, 1, yakl::memDevice> temperature;
+    yakl::Array<T, 1, yakl::memDevice> pressure;
+    yakl::Array<T, 1, yakl::memDevice> ne;
+    yakl::Array<T, 1, yakl::memDevice> nh_tot;
+    yakl::Array<T, 1, yakl::memDevice> vturb;
+    yakl::Array<T, 1, yakl::memDevice> vx;
+    yakl::Array<T, 1, yakl::memDevice> vy;
+    yakl::Array<T, 1, yakl::memDevice> vz;
 };
 
 struct MipmapState {

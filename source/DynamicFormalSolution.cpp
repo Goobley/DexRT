@@ -93,7 +93,6 @@ void dynamic_formal_sol_rc(State* state, int la) {
     }
     yakl::Array<i32, 1, yakl::memHost>active_host_cut("active set", active_host.get_data(), num_active_lines);
     auto active_set = active_host_cut.createDeviceCopy();
-    yakl::fence();
 
     // NOTE(cmo): Compute RC FS
     if (num_active_lines == 0) {
@@ -102,7 +101,51 @@ void dynamic_formal_sol_rc(State* state, int la) {
             compute_cascade_i_2d(state, i, false);
             yakl::fence();
         }
+        // TODO(cmo): Gamma.
     } else {
+    const auto& wavelength = state->wavelength_h;
+    fp_t lambda = wavelength(la);
+    using namespace ConstantsFP;
+    const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
+    fp_t wl_weight = FP(1.0) / hnu_4pi;
+    if (la == 0) {
+        wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
+    } else if (la == wavelength.extent(0) - 1) {
+        wl_weight *= FP(0.5) * (
+            wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
+        );
+    } else {
+        wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
+    }
+    const fp_t wl_ray_weight = wl_weight / fp_t(PROBE0_NUM_RAYS);
+    yakl::fence();
+
+    // NOTE(cmo): Compute RC FS
+    for (int i = MAX_LEVEL; i >= 0; --i) {
+        // const bool compute_alo = ((i == 0) && state->alo.initialized());
+        const bool compute_alo = (i == 0);
+        if (compute_alo) {
+            compute_dynamic_cascade_i_2d<true>(
+                state,
+                lte_scratch,
+                nh0,
+                i,
+                la,
+                active_set,
+                wl_ray_weight
+            );
+        } else {
+            compute_dynamic_cascade_i_2d<false>(
+                state,
+                lte_scratch,
+                nh0,
+                i,
+                la,
+                active_set,
+                wl_ray_weight
+            );
+        }
+
         yakl::fence();
         for (int i = MAX_LEVEL; i >= 0; --i) {
             // const bool compute_alo = ((i == 0) && state->alo.initialized());
@@ -110,6 +153,4 @@ void dynamic_formal_sol_rc(State* state, int la) {
             yakl::fence();
         }
     }
-
-
 }
