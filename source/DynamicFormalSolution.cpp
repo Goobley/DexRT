@@ -1,6 +1,7 @@
 #include "DynamicFormalSolution.hpp"
 #include "RadianceCascades.hpp"
 #include "DynamicRadianceCascades.hpp"
+#include "StaticFormalSolution.hpp"
 #include "Populations.hpp"
 #include "EmisOpac.hpp"
 #include "LteHPops.hpp"
@@ -95,14 +96,6 @@ void dynamic_formal_sol_rc(State* state, int la) {
     auto active_set = active_host_cut.createDeviceCopy();
 
     // NOTE(cmo): Compute RC FS
-    if (num_active_lines == 0) {
-        // NOTE(cmo): Use the static solver
-        for (int i = MAX_LEVEL; i >= 0; --i) {
-            compute_cascade_i_2d(state, i, false);
-            yakl::fence();
-        }
-        // TODO(cmo): Gamma.
-    } else {
     const auto& wavelength = state->wavelength_h;
     fp_t lambda = wavelength(la);
     using namespace ConstantsFP;
@@ -121,35 +114,40 @@ void dynamic_formal_sol_rc(State* state, int la) {
     yakl::fence();
 
     // NOTE(cmo): Compute RC FS
-    for (int i = MAX_LEVEL; i >= 0; --i) {
-        // const bool compute_alo = ((i == 0) && state->alo.initialized());
-        const bool compute_alo = (i == 0);
-        if (compute_alo) {
-            compute_dynamic_cascade_i_2d<true>(
-                state,
-                lte_scratch,
-                nh0,
-                i,
-                la,
-                active_set,
-                wl_ray_weight
-            );
-        } else {
-            compute_dynamic_cascade_i_2d<false>(
-                state,
-                lte_scratch,
-                nh0,
-                i,
-                la,
-                active_set,
-                wl_ray_weight
-            );
+    if (num_active_lines == 0) {
+        // NOTE(cmo): Use the static solver
+        for (int i = MAX_LEVEL; i >= 0; --i) {
+            compute_cascade_i_2d(state, i, false);
+            yakl::fence();
         }
-
-        yakl::fence();
+        if (state->alo.initialized()) {
+            static_compute_gamma(state, la, lte_scratch);
+        }
+    } else {
         for (int i = MAX_LEVEL; i >= 0; --i) {
             // const bool compute_alo = ((i == 0) && state->alo.initialized());
-            compute_dynamic_cascade_i_2d(state, lte_scratch, nh0, i, la, active_set, false);
+            const bool compute_alo = (i == 0);
+            if (compute_alo) {
+                compute_dynamic_cascade_i_2d<true>(
+                    state,
+                    lte_scratch,
+                    nh0,
+                    i,
+                    la,
+                    active_set,
+                    wl_ray_weight
+                );
+            } else {
+                compute_dynamic_cascade_i_2d<false>(
+                    state,
+                    lte_scratch,
+                    nh0,
+                    i,
+                    la,
+                    active_set,
+                    wl_ray_weight
+                );
+            }
             yakl::fence();
         }
     }
