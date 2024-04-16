@@ -19,6 +19,7 @@ list(APPEND DEX_SOURCE_FILES
     "source/main.cpp"
     "source/StaticFormalSolution.cpp"
     "source/DynamicFormalSolution.cpp"
+    "source/PromweaverBoundary.cpp"
 )
 
 add_executable(dexrt

@@ -3,16 +3,84 @@
 #include "Types.hpp"
 #include "Utils.hpp"
 #include "JasPP.hpp"
+#include "PromweaverBoundary.hpp"
 #include <optional>
 
 using yakl::intrinsics::minloc;
 
+struct RayMarchState2d {
+    /// Start pos
+    vec2 p0;
+    /// end pos
+    vec2 p1;
+
+    /// Current cell coordinate
+    ivec2 curr_coord;
+    /// Next cell coordinate
+    ivec2 next_coord;
+    /// Final cell coordinate -- for intersections with the outer edge of the
+    /// box, this isn't floor(p1), but inside it is.
+    ivec2 final_coord;
+    /// Integer step dir
+    ivec2 step;
+
+    /// t to next hit per axis
+    vec2 next_hit;
+    /// t increment per step per axis
+    vec2 delta;
+    /// t to stop at
+    fp_t max_t;
+
+    /// axis increment
+    vec2 direction;
+    /// value of t at current intersection (far side of curr_coord, just before entering next_coord)
+    fp_t t = FP(0.0);
+    /// length of step
+    fp_t dt = FP(0.0);
+};
+
+struct RayStartEnd {
+    yakl::SArray<fp_t, 1, NUM_DIM> start;
+    yakl::SArray<fp_t, 1, NUM_DIM> end;
+};
+
+struct Box {
+    vec2 dims[NUM_DIM];
+};
+
+template <int NumAz=NUM_AZ>
+struct Raymarch2dStaticArgs {
+    FpConst3d eta = Fp3d();
+    FpConst3d chi = Fp3d();
+    vec2 ray_start;
+    vec2 ray_end;
+    yakl::SArray<fp_t, 1, NumAz> az_rays;
+    yakl::SArray<fp_t, 1, NumAz> az_weights;
+    yakl::SArray<fp_t, 1, 2> direction;
+    int la = -1; /// sentinel value of -1 to ignore bc
+    const PwBc<>& bc;
+    Fp3d alo = Fp3d();
+    fp_t distance_scale = FP(1.0);
+    fp_t altitude = FP(0.0);
+};
+
+
+/** Clips a ray to the specified box
+ * \param ray the start/end points of the ray
+ * \param box the box dimensions
+ * \param start_clipped an out param specifying whether the start point was
+ * clipped (i.e. may need to sample BC). Can be nullptr if not interest
+ * \returns An optional ray start/end, nullopt if the ray is entirely outside.
+*/
 template <int NumDim=NUM_DIM>
-YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box) {
+YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box, bool* start_clipped=nullptr) {
     RayStartEnd result(ray);
     yakl::SArray<fp_t, 1, NumDim> length;
     fp_t clip_t_start = FP(0.0);
     fp_t clip_t_end = FP(0.0);
+    if (start_clipped) {
+        *start_clipped = false;
+    }
     for (int d = 0; d < NumDim; ++d) {
         length(d) = ray.end(d) - ray.start(d);
         int clip_idx = -1;
@@ -57,6 +125,9 @@ YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box)
     if (clip_t_start > FP(0.0)) {
         for (int d = 0; d < NumDim; ++d) {
             result.start(d) += clip_t_start * length(d);
+        }
+        if (start_clipped) {
+            *start_clipped = true;
         }
     }
     if (clip_t_end > FP(0.0)) {
@@ -140,14 +211,27 @@ YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
     return new_t <= s.max_t;
 }
 
+/**
+ * Create a new state for grid traversal using DDA. The ray is first clipped to
+ * the grid, and if it is outside, nullopt is returned.
+ * \param start_pos The start position of the ray
+ * \param end_pos The start position of the ray
+ * \param domain_size The domain size
+ * \param start_clipped whether the start position was clipped; i.e. sample the BC.
+*/
 template <int NumDim=NUM_DIM>
-YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(vec2 start_pos, vec2 end_pos, ivec2 domain_size) {
+YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(
+    vec2 start_pos,
+    vec2 end_pos,
+    ivec2 domain_size,
+    bool* start_clipped=nullptr
+) {
     Box box;
     for (int d = 0; d < NumDim; ++d) {
         box.dims[d](0) = FP(0.0);
         box.dims[d](1) = domain_size(d);
     }
-    auto clipped = clip_ray_to_box({start_pos, end_pos}, box);
+    auto clipped = clip_ray_to_box({start_pos, end_pos}, box, start_clipped);
     if (!clipped) {
         return std::nullopt;
     }
@@ -207,13 +291,14 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     const Raymarch2dStaticArgs<NumAz>& args
 ) {
     JasUnpack(args, eta, chi, ray_start, ray_end, az_rays, az_weights);
-    JasUnpack(args, alo, distance_scale);
+    JasUnpack(args, alo, distance_scale, la, direction, bc, altitude);
 
     auto domain_dims = eta.get_dimensions();
     ivec2 domain_size;
     domain_size(0) = domain_dims(0);
     domain_size(1) = domain_dims(1);
-    auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size);
+    bool start_clipped;
+    auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size, &start_clipped);
     if (!marcher) {
         return empty_hit<NumAz, NumComponents>();
     }
@@ -223,6 +308,25 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     yakl::SArray<fp_t, 2, NumComponents, NumAz> result(FP(0.0));
     yakl::SArray<fp_t, 1, NumWavelengths> sample;
     yakl::SArray<fp_t, 1, NumWavelengths> chi_sample;
+    if (USE_BC && start_clipped) {
+        // NOTE(cmo): Sample BC
+        static_assert(!(USE_BC && USE_MIPMAPS), "BCs not currently supported with mipmaps");
+        static_assert(!(USE_BC && !USE_ATMOSPHERE), "BCs not supported outside of atmosphere mode");
+
+        // NOTE(cmo): Check the ray is going down along z.
+        if (s.step(1) == -1 && la != -1) {
+            yakl::SArray<fp_t, 1, 2> mu;
+            yakl::SArray<fp_t, 1, 2> pos(s.p0 * distance_scale);
+            pos(1) += altitude;
+            for (int r = 0; r < NumAz; ++r) {
+                const fp_t incl_factor = std::sqrt(FP(1.0) - az_rays(r));
+                mu(0) = direction(0) * incl_factor;
+                mu(1) = direction(1) * incl_factor;
+                const fp_t start_I = sample_boundary(bc, la, pos, mu);
+                result(0, r) = start_I;
+            }
+        }
+    }
 
     do {
         const auto& sample_coord(s.curr_coord);
@@ -323,8 +427,12 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
             .ray_end = args.ray_start,
             .az_rays = args.az_rays,
             .az_weights = args.az_weights,
+            .direction = args.direction,
+            .la = args.la,
+            .bc = args.bc,
             .alo = args.alo,
-            .distance_scale = factor
+            .distance_scale = factor,
+            .altitude = args.altitude,
         }
     );
 }

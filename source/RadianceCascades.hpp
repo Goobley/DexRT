@@ -12,6 +12,7 @@ template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int N
 void compute_cascade_i_2d (
     State* state,
     int cascade_idx,
+    int la = -1,
     bool compute_alo = false
 ) {
     const auto march_state = state->raymarch_state;
@@ -49,6 +50,7 @@ void compute_cascade_i_2d (
     auto dims = cascade_i.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();
     auto& atmos = state->atmos;
+    const auto& pw_bc = state->pw_bc;
 
     CascadeRTState rt_state;
     if constexpr (UseMipmaps) {
@@ -166,8 +168,12 @@ void compute_cascade_i_2d (
                     .ray_end = end,
                     .az_rays = az_rays,
                     .az_weights = az_weights,
+                    .direction = direction,
+                    .la = la,
+                    .bc = pw_bc,
                     .alo = alo,
-                    .distance_scale = length_scale
+                    .distance_scale = length_scale,
+                    .altitude = atmos.altitude,
                 }
             );
             decltype(sample) upper_sample(FP(0.0));

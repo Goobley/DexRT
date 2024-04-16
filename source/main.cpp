@@ -14,6 +14,7 @@
 #include "StaticFormalSolution.hpp"
 #include "DynamicFormalSolution.hpp"
 #include "GammaMatrix.hpp"
+#include "PromweaverBoundary.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else
@@ -386,6 +387,13 @@ void init_state (State* state) {
         state->J = FP(0.0);
         // TODO(cmo): This backwards/forwards shuffle is a bit silly, but it's a tiny array.
         state->wavelength_h = state->atom.wavelength.createHostCopy();
+
+        // NOTE(cmo): Allocate ALO array -- used for static wavelengths
+        state->alo = Fp3d("ALO", space_x, space_y, NUM_AZ);
+        const int n_level = state->atom.energy.extent(0);
+        state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
+
+        load_bc("atmos.nc", state);
     } else {
         space_x = MODEL_X;
         space_y = MODEL_Y;
@@ -562,10 +570,6 @@ void init_state (State* state) {
         }
     }
 
-    // NOTE(cmo): Allocate ALO array -- used for static wavelengths
-    state->alo = Fp3d("ALO", space_x, space_y, NUM_AZ);
-    const int n_level = state->atom.energy.extent(0);
-    state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
 }
 
 FpConst3d final_cascade_to_J(const FpConst5d& final_cascade, const Fp3d* J_current=nullptr, int J_offset=0) {

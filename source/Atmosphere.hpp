@@ -41,6 +41,10 @@ inline Atmosphere load_atmos(const std::string& path) {
     nc.read(result.vy, "vy");
     nc.read(result.vz, "vz");
 
+    if (nc.varExists("altitude")) {
+        nc.read(result.altitude, "altitude");
+    }
+
     return result;
 }
 

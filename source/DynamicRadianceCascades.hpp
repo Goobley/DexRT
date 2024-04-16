@@ -88,6 +88,7 @@ void compute_dynamic_cascade_i_2d (
         state->Gamma.extent(2) * state->Gamma.extent(3)
     ));
     const auto& atmos = state->atmos;
+    const auto& pw_bc = state->pw_bc;
 
     std::string cascade_name = fmt::format("Dynamic Cascade {}", cascade_idx);
     yakl::timer_start(cascade_name.c_str());
@@ -223,6 +224,7 @@ void compute_dynamic_cascade_i_2d (
                     .muz = direction(1) * incl_factor,
                     .muy_weight = az_weights(r),
                     .distance_scale = length_scale,
+                    .altitude = atmos.altitude,
                     .atmos = atmos,
                     .atom = atom,
                     .active_set = active_set,
@@ -231,6 +233,7 @@ void compute_dynamic_cascade_i_2d (
                     .n = n_flat,
                     .n_star_scratch = lte_scratch_flat,
                     .upper_sample = upper_sample,
+                    .bc = pw_bc,
                     .Gamma = Gamma_flat,
                     .wl_ray_weight = wl_ray_weight,
                     .la = la
@@ -238,7 +241,8 @@ void compute_dynamic_cascade_i_2d (
             );
             cascade_i(v, u, ray_idx, 0, r) = merged.I;
             cascade_i(v, u, ray_idx, 1, r) = merged.tau;
-        }
+        },
+        yakl::LaunchConfig<256>()
     );
     yakl::timer_stop(cascade_name.c_str());
 }

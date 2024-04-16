@@ -117,7 +117,7 @@ void dynamic_formal_sol_rc(State* state, int la) {
     if (num_active_lines == 0) {
         // NOTE(cmo): Use the static solver
         for (int i = MAX_LEVEL; i >= 0; --i) {
-            compute_cascade_i_2d(state, i, false);
+            compute_cascade_i_2d(state, i, la, false);
             yakl::fence();
         }
         if (state->alo.initialized()) {

@@ -18,10 +18,22 @@ Features/ToDo
 - [ ] LTE background from tabulated atmosphere
 - [ ] LTE with background J iteration
 - [ ] Final formal solution (interactive?)
-- [ ] Non-LTE iteration
+- [x] Non-LTE iteration (@5a68d12)
     - [ ] Add line profile normalisation in final cascade (`wphi`)
 - [ ] Boundary conditions
+    - [ ] Interpolated Prom style
+        - A sketch of this is present - several issues. I believe completely clipped rays should still need to carry BC intensity too.
+    - [ ] Periodic
+        - Lagged sampling from previous cascade 0? -- very diffusive
+        - Ping-pong full cascade stack and do a directional lookup/traversal
+            - Could do this in a separate alg and build a BC from this
+        - Hauschildt & Baron style multiple wrap-around?
+    - Make generic via templating struct passed down to raymarcher -- each BC
+    has a `sample` function so dispatch is fully static (there won't be many
+    types so use a switch to template dispatch)
 - [ ] Multiple atoms - basically splat everything SOA a la MULTI and like is done for the one atom here.
+- [ ] PRD
+- [ ] Sparse VDB-like grid
 
 
 Ideas
@@ -33,6 +45,7 @@ Ideas
 - [ ] Store rays per cascade pre-averaged (groups of 4) - should reduce bandwidth and storage requirements, but requires atomic operation
 - [x] Avoid local memory in dda ray traversal -- seems to be causing stalls
     - Implemented fully register-based approach using the switch/template method from nanovdb - big perf difference.
+- [ ] Full per-wavelength active set treatment. GPU benefits a lot more from this
 
 
 Notes

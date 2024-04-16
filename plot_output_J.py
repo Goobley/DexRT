@@ -45,7 +45,8 @@ if __name__ == "__main__":
     a_set = lw.RadiativeSet([H_6_atom(), CaII_atom()])
     a_set.set_active("Ca")
     eq_pops = a_set.compute_eq_pops(atmos)
-    spect = a_set.compute_wavelength_grid(lambdaReference=CaII_atom().lines[-1].lambda0 - 1.0)
+    # spect = a_set.compute_wavelength_grid(lambdaReference=CaII_atom().lines[-1].lambda0 - 1.0)
+    spect = a_set.compute_wavelength_grid()
 
     ctx = lw.Context(atmos, spect, eq_pops, formalSolver="piecewise_linear_1d")
     ctx.background.eta[...] = 0.0
@@ -53,7 +54,7 @@ if __name__ == "__main__":
     ctx.background.sca[...] = 0.0
     ctx.depthData.fill = True
     ctx.formal_sol_gamma_matrices()
-    lw.iterate_ctx_se(ctx, popsTol=5e-2, JTol=1.0)
+    # lw.iterate_ctx_se(ctx, popsTol=5e-2, JTol=1.0)
     slice_idx = 128
     J_slice = (ctx.spect.J[:, slice_idx] << u.Unit("W / (m2 Hz sr)")).to("kW / (m2 nm sr)", equivalencies=u.spectral_density(ctx.spect.wavelength * u.nm))
 

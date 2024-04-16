@@ -4,6 +4,7 @@
 #include "Utils.hpp"
 #include "JasPP.hpp"
 #include "RayMarching.hpp"
+#include "PromweaverBoundary.hpp"
 #include "EmisOpac.hpp"
 #include "LteHPops.hpp"
 #include "Voigt.hpp"
@@ -36,6 +37,7 @@ struct Raymarch2dDynamicArgs {
     fp_t muz;
     fp_t muy_weight;
     fp_t distance_scale = FP(1.0);
+    fp_t altitude = FP(0.0);
     bool compute_rates = false;
     const Atmosphere& atmos;
     const CompAtom<fp_t>& atom;
@@ -45,6 +47,7 @@ struct Raymarch2dDynamicArgs {
     const Fp2d& n;
     const Fp2d& n_star_scratch;
     const DynamicRadianceInterval& upper_sample = {};
+    const PwBc<>& bc;
     const Fp3d& Gamma;
     fp_t wl_ray_weight;
     int la;
@@ -136,12 +139,29 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
     // NOTE(cmo): This is swapped as the coord is still x,y,z, but the array is indexed (z,y,x)
     domain_size(0) = domain_dims(1);
     domain_size(1) = domain_dims(0);
-    auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size);
+    bool start_clipped;
+    auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size, &start_clipped);
     if (!marcher) {
         return ri;
     }
 
     RayMarchState2d s = *marcher;
+
+    if (USE_BC && start_clipped) {
+        // NOTE(cmo): Sample BC
+        static_assert(!(USE_BC && USE_MIPMAPS), "BCs not currently supported with mipmaps");
+        static_assert(!(USE_BC && !USE_ATMOSPHERE), "BCs not supported outside of atmosphere mode");
+
+        // NOTE(cmo): Check the ray is going down along z.
+        if (s.step(1) == -1 && la != -1) {
+            yakl::SArray<fp_t, 1, 2> mu;
+            mu(1) = muz;
+            auto pos(s.p0 * distance_scale);
+            pos(1) += args.altitude;
+            const fp_t start_I = sample_boundary(args.bc, la, pos, mu);
+            ri.I = start_I;
+        }
+    }
 
     do {
         const auto& sample_coord(s.curr_coord);

@@ -236,7 +236,7 @@ void static_formal_sol_rc(State* state, int la) {
         if constexpr (BILINEAR_FIX) {
             compute_cascade_i_bilinear_fix_2d(state, i, compute_alo);
         } else {
-            compute_cascade_i_2d(state, i, compute_alo);
+            compute_cascade_i_2d(state, i, la, compute_alo);
         }
         yakl::fence();
     }

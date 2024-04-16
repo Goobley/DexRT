@@ -38,6 +38,7 @@ using yakl::Dims;
 
 struct Atmosphere {
     fp_t voxel_scale;
+    fp_t altitude = FP(0.0);
     Fp2d temperature;
     Fp2d pressure;
     Fp2d ne;
@@ -73,58 +74,6 @@ struct CascadeRTState {
     int mipmap_factor;
     FpConst3d eta;
     FpConst3d chi;
-};
-
-struct RayMarchState2d {
-    /// Start pos
-    vec2 p0;
-    /// end pos
-    vec2 p1;
-
-    /// Current cell coordinate
-    ivec2 curr_coord;
-    /// Next cell coordinate
-    ivec2 next_coord;
-    /// Final cell coordinate -- for intersections with the outer edge of the
-    /// box, this isn't floor(p1), but inside it is.
-    ivec2 final_coord;
-    /// Integer step dir
-    ivec2 step;
-
-    /// t to next hit per axis
-    vec2 next_hit;
-    /// t increment per step per axis
-    vec2 delta;
-    /// t to stop at
-    fp_t max_t;
-
-    /// axis increment
-    vec2 direction;
-    /// value of t at current intersection (far side of curr_coord, just before entering next_coord)
-    fp_t t = FP(0.0);
-    /// length of step
-    fp_t dt = FP(0.0);
-};
-
-struct RayStartEnd {
-    yakl::SArray<fp_t, 1, NUM_DIM> start;
-    yakl::SArray<fp_t, 1, NUM_DIM> end;
-};
-
-struct Box {
-    vec2 dims[NUM_DIM];
-};
-
-template <int NumAz=NUM_AZ>
-struct Raymarch2dStaticArgs {
-    FpConst3d eta = Fp3d();
-    FpConst3d chi = Fp3d();
-    vec2 ray_start;
-    vec2 ray_end;
-    yakl::SArray<fp_t, 1, NumAz> az_rays;
-    yakl::SArray<fp_t, 1, NumAz> az_weights;
-    Fp3d alo = Fp3d();
-    fp_t distance_scale = FP(1.0);
 };
 
 template <typename T=fp_t>

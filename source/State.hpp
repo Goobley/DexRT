@@ -4,6 +4,7 @@
 #include "Types.hpp"
 #include "Voigt.hpp"
 #include "LteHPops.hpp"
+#include "PromweaverBoundary.hpp"
 #include <magma_v2.h>
 
 struct State {
@@ -18,6 +19,7 @@ struct State {
     Fp3d J; /// [num_wave, x, y]
     Fp3d alo; /// [x, y, az]
     Fp4d Gamma; /// [i, j, x, y]
+    PwBc<> pw_bc;
     magma_queue_t magma_queue;
 };
 
