@@ -37,7 +37,7 @@ struct Raymarch2dDynamicArgs {
     fp_t muz;
     fp_t muy_weight;
     fp_t distance_scale = FP(1.0);
-    fp_t altitude = FP(0.0);
+    vec3 offset = {};
     bool compute_rates = false;
     const Atmosphere& atmos;
     const CompAtom<fp_t>& atom;
@@ -122,7 +122,7 @@ YAKL_INLINE void accumulate_transitions_to_Gamma(
     }
 }
 
-template <bool compute_alo=false>
+template <bool compute_alo=false, bool SampleBoundary=false>
 YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
     const Raymarch2dDynamicArgs& args
 ) {
@@ -141,27 +141,40 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
     domain_size(1) = domain_dims(0);
     bool start_clipped;
     auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size, &start_clipped);
-    if (!marcher) {
-        return ri;
-    }
-
-    RayMarchState2d s = *marcher;
-
-    if (USE_BC && start_clipped) {
+    if (SampleBoundary && USE_BC && (!marcher || start_clipped)) {
         // NOTE(cmo): Sample BC
         static_assert(!(USE_BC && USE_MIPMAPS), "BCs not currently supported with mipmaps");
         static_assert(!(USE_BC && !USE_ATMOSPHERE), "BCs not supported outside of atmosphere mode");
 
-        // NOTE(cmo): Check the ray is going down along z.
-        if (s.step(1) == -1 && la != -1) {
-            yakl::SArray<fp_t, 1, 2> mu;
-            mu(1) = muz;
-            auto pos(s.p0 * distance_scale);
-            pos(1) += args.altitude;
+        // NOTE(cmo): Check the ray is going up along z.
+        if (ray_start(1) < ray_end(1) && la != -1) {
+            vec3 mu;
+            // NOTE(cmo): Outgoing ray-direction -- inverted from traversal direction
+            mu(0) = -mux;
+            mu(1) = -muy;
+            mu(2) = -muz;
+            vec3 pos(args.offset);
+            if (!marcher) {
+                // NOTE(cmo): Compute intersection of ray with bottom of simulation domain, i.e. offset_z
+                // const fp_t t = (FP(0.0) - ray_start(1)) / mu(2);
+                // pos(0) += (ray_start(0) + t * mu(0)) * distance_scale;
+                // // pos(1) += (t * mu(1)) * distance_scale;
+                // pos(2) += (ray_start(1) + t * mu(2)) * distance_scale;
+                pos(0) += ray_end(0) * distance_scale;
+                pos(2) += ray_end(1) * distance_scale;
+            } else {
+                pos(0) += marcher->p0(0) * distance_scale;
+                pos(2) += marcher->p0(1) * distance_scale;
+            }
             const fp_t start_I = sample_boundary(args.bc, la, pos, mu);
             ri.I = start_I;
         }
     }
+    if (!marcher) {
+        return merge_intervals(ri, args.upper_sample);
+    }
+
+    RayMarchState2d s = *marcher;
 
     do {
         const auto& sample_coord(s.curr_coord);
@@ -239,7 +252,8 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
         if (muy == FP(0.0)) {
             ri.I = source_fn;
         } else {
-            fp_t tau_mu = tau_s / muy;
+            // fp_t tau_mu = tau_s / std::abs(muy);
+            fp_t tau_mu = FP(0.0);
             fp_t edt, one_m_edt;
             if (tau_mu < FP(1e-2)) {
                 edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
@@ -273,7 +287,7 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
     return ri;
 }
 
-template <bool compute_alo=false>
+template <bool compute_alo=false, bool SampleBoundary=false>
 YAKL_INLINE  DynamicRadianceInterval dynamic_raymarch_2d(
     const Raymarch2dDynamicArgs& args
 ) {
@@ -287,7 +301,7 @@ YAKL_INLINE  DynamicRadianceInterval dynamic_raymarch_2d(
     args.ray_end(0) = sx;
     args.ray_end(1) = sy;
 
-    return dynamic_dda_raymarch_2d<compute_alo>(args);
+    return dynamic_dda_raymarch_2d<compute_alo, SampleBoundary>(args);
 }
 
 #else

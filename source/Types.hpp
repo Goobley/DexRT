@@ -30,6 +30,7 @@ typedef yakl::Array<fp_t const, 4, yakl::memHost> FpConst4dHost;
 typedef yakl::Array<fp_t const, 5, yakl::memHost> FpConst5dHost;
 
 typedef yakl::SArray<fp_t, 1, 2> vec2;
+typedef yakl::SArray<fp_t, 1, 3> vec3;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
 
 using yakl::c::parallel_for;
@@ -38,7 +39,9 @@ using yakl::Dims;
 
 struct Atmosphere {
     fp_t voxel_scale;
-    fp_t altitude = FP(0.0);
+    fp_t offset_x = FP(0.0);
+    fp_t offset_y = FP(0.0);
+    fp_t offset_z = FP(0.0);
     Fp2d temperature;
     Fp2d pressure;
     Fp2d ne;

@@ -23,7 +23,7 @@ constexpr int CASCADE_BRANCHING_FACTOR = 2;
 constexpr int MAX_LEVEL = 4;
 
 constexpr bool LAST_CASCADE_TO_INFTY = true;
-constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e8);
+constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
 
 constexpr bool BRANCH_RAYS = false;
 constexpr bool BILINEAR_FIX = false;
@@ -35,6 +35,7 @@ constexpr bool PINGPONG_BUFFERS = true;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 constexpr bool USE_BC = true;
+constexpr bool PWBC_USE_VECTOR_FORM = true;
 
 // #define FLATLAND
 #ifdef FLATLAND

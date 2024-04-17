@@ -669,7 +669,7 @@ int main(int argc, char** argv) {
             save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         } else {
             compute_lte_pops(&state);
-            constexpr bool non_lte = true;
+            constexpr bool non_lte = false;
             constexpr bool static_soln = false;
             auto flat_Gamma = state.Gamma.reshape<3>(Dims(
                 state.Gamma.extent(0),

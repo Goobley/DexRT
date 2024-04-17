@@ -22,7 +22,7 @@ Features/ToDo
     - [ ] Add line profile normalisation in final cascade (`wphi`)
 - [ ] Boundary conditions
     - [ ] Interpolated Prom style
-        - A sketch of this is present - several issues. I believe completely clipped rays should still need to carry BC intensity too.
+        - Moved to fully 3D treatment -- looks mostly correct. Need to check ray integration in 3D -- may have to simplify to 2D given the integration method used currently
     - [ ] Periodic
         - Lagged sampling from previous cascade 0? -- very diffusive
         - Ping-pong full cascade stack and do a directional lookup/traversal

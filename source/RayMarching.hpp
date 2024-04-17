@@ -61,7 +61,7 @@ struct Raymarch2dStaticArgs {
     const PwBc<>& bc;
     Fp3d alo = Fp3d();
     fp_t distance_scale = FP(1.0);
-    fp_t altitude = FP(0.0);
+    vec3 offset = {};
 };
 
 
@@ -286,12 +286,12 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> empty_hit() {
     return result;
 }
 
-template <int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool SampleBoundary=false, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     const Raymarch2dStaticArgs<NumAz>& args
 ) {
     JasUnpack(args, eta, chi, ray_start, ray_end, az_rays, az_weights);
-    JasUnpack(args, alo, distance_scale, la, direction, bc, altitude);
+    JasUnpack(args, alo, distance_scale, la, direction, bc);
 
     auto domain_dims = eta.get_dimensions();
     ivec2 domain_size;
@@ -299,34 +299,45 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     domain_size(1) = domain_dims(1);
     bool start_clipped;
     auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size, &start_clipped);
-    if (!marcher) {
-        return empty_hit<NumAz, NumComponents>();
-    }
-
-    RayMarchState2d s = *marcher;
-
     yakl::SArray<fp_t, 2, NumComponents, NumAz> result(FP(0.0));
-    yakl::SArray<fp_t, 1, NumWavelengths> sample;
-    yakl::SArray<fp_t, 1, NumWavelengths> chi_sample;
-    if (USE_BC && start_clipped) {
+    if (SampleBoundary && USE_BC && (!marcher || start_clipped)) {
         // NOTE(cmo): Sample BC
         static_assert(!(USE_BC && USE_MIPMAPS), "BCs not currently supported with mipmaps");
         static_assert(!(USE_BC && !USE_ATMOSPHERE), "BCs not supported outside of atmosphere mode");
 
-        // NOTE(cmo): Check the ray is going down along z.
-        if (s.step(1) == -1 && la != -1) {
-            yakl::SArray<fp_t, 1, 2> mu;
-            yakl::SArray<fp_t, 1, 2> pos(s.p0 * distance_scale);
-            pos(1) += altitude;
+        // NOTE(cmo): Check the ray is going up along z.
+        if (ray_start(1) < ray_end(1) && la != -1) {
+            vec3 mu;
             for (int r = 0; r < NumAz; ++r) {
                 const fp_t incl_factor = std::sqrt(FP(1.0) - az_rays(r));
-                mu(0) = direction(0) * incl_factor;
-                mu(1) = direction(1) * incl_factor;
+                // NOTE(cmo): Outgoing ray-direction -- inverted from traversal direction
+                mu(0) = -direction(0) * incl_factor;
+                mu(2) = -direction(1) * incl_factor;
+                mu(1) = -std::sqrt(1.0 - square(mu(0)) - square(mu(2)));
+                vec3 pos(args.offset);
+                if (!marcher) {
+                    // NOTE(cmo): Compute intersection of ray with bottom of simulation domain, i.e. offset_z
+                    const fp_t t = (FP(0.0) - ray_start(1)) / mu(2);
+                    pos(0) += (ray_start(0) + t * mu(0)) * distance_scale;
+                    // pos(1) += (t * mu(1)) * distance_scale;
+                    pos(2) += (ray_start(1) + t * mu(2)) * distance_scale;
+                } else {
+                    pos(0) += marcher->p0(0) * distance_scale;
+                    pos(2) += marcher->p0(1) * distance_scale;
+                }
                 const fp_t start_I = sample_boundary(bc, la, pos, mu);
                 result(0, r) = start_I;
             }
         }
     }
+    if (!marcher) {
+        return result;
+    }
+
+    RayMarchState2d s = *marcher;
+
+    yakl::SArray<fp_t, 1, NumWavelengths> sample;
+    yakl::SArray<fp_t, 1, NumWavelengths> chi_sample;
 
     do {
         const auto& sample_coord(s.curr_coord);
@@ -353,10 +364,10 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
         }
 
         for (int i = 0; i < NumWavelengths; ++i) {
-            sample(i) = eta(sample_coord(0), sample_coord(1), i);
+            sample(i) = eta(sample_coord(1), sample_coord(0), i);
         }
         for (int i = 0; i < NumWavelengths; ++i) {
-            chi_sample(i) = chi(sample_coord(0), sample_coord(1), i) + FP(1e-20);
+            chi_sample(i) = chi(sample_coord(1), sample_coord(0), i) + FP(1e-20);
         }
 
         const bool final_step = (s.t == s.max_t);
@@ -372,7 +383,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
                     result(2*i, r) = source_fn;
                     if (accumulate_alo) {
                         // NOTE(cmo): We add the local weight since tau is infinite, i.e. one_m_edt == 1.0
-                        yakl::atomicAdd(alo(sample_coord(0), sample_coord(1), r), weight);
+                        yakl::atomicAdd(alo(sample_coord(1), sample_coord(0), r), weight);
                     }
                 } else {
                     fp_t mu = az_rays(r);
@@ -388,7 +399,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
                     result(2*i+1, r) += tau_mu;
                     result(2*i, r) = result(2*i, r) * edt + source_fn * one_m_edt;
                     if (accumulate_alo) {
-                        yakl::atomicAdd(alo(sample_coord(0), sample_coord(1), r), weight * one_m_edt);
+                        yakl::atomicAdd(alo(sample_coord(1), sample_coord(0), r), weight * one_m_edt);
                     }
                 }
             }
@@ -398,7 +409,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     return result;
 }
 
-template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     const CascadeRTState& state,
     const Raymarch2dStaticArgs<NumAz>& args
@@ -419,7 +430,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     const FpConst3d& eta = state.eta;
     const FpConst3d& chi = state.chi;
 
-    return dda_raymarch_2d<NumWavelengths, NumAz, NumComponents>(
+    return dda_raymarch_2d<SampleBoundary, NumWavelengths, NumAz, NumComponents>(
         Raymarch2dStaticArgs<NumAz>{
             .eta = eta,
             .chi = chi,
@@ -432,7 +443,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
             .bc = args.bc,
             .alo = args.alo,
             .distance_scale = factor,
-            .altitude = args.altitude,
+            .offset = args.offset,
         }
     );
 }

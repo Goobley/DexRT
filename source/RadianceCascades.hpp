@@ -6,9 +6,10 @@
 #include "Utils.hpp"
 #include "RayMarching.hpp"
 #include "RadianceIntervals.hpp"
+#include "Atmosphere.hpp"
 #include <fmt/core.h>
 
-template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 void compute_cascade_i_2d (
     State* state,
     int cascade_idx,
@@ -50,6 +51,7 @@ void compute_cascade_i_2d (
     auto dims = cascade_i.get_dimensions();
     auto upper_dims = cascade_ip.get_dimensions();
     auto& atmos = state->atmos;
+    const auto offsets = get_offsets(atmos);
     const auto& pw_bc = state->pw_bc;
 
     CascadeRTState rt_state;
@@ -75,12 +77,12 @@ void compute_cascade_i_2d (
     yakl::timer_start(cascade_name.c_str());
     parallel_for(
         SimpleBounds<3>(dims(0), dims(1), dims(2)),
-        YAKL_LAMBDA (int u, int v, int ray_idx) {
+        YAKL_LAMBDA (int v, int u, int ray_idx) {
             // NOTE(cmo): u, v probe indices
             // NOTE(cmo): x, y world coords
             for (int i = 0; i < NumComponents; ++i) {
                 for (int j = 0; j < NumAz; ++j) {
-                    cascade_i(u, v, ray_idx, i, j) = FP(0.0);
+                    cascade_i(v, u, ray_idx, i, j) = FP(0.0);
                 }
             }
 
@@ -99,7 +101,7 @@ void compute_cascade_i_2d (
             }
 
             fp_t cx = (u + FP(0.5)) * spacing;
-            fp_t cy = (v + FP(0.5)) * spacing;
+            fp_t cz = (v + FP(0.5)) * spacing;
             fp_t distance = radius - prev_radius;
 
             // NOTE(cmo): bc: bottom corner of 2x2 used for bilinear interp on next cascade
@@ -112,8 +114,8 @@ void compute_cascade_i_2d (
             fp_t v_uc_weight = FP(1.0) - v_bc_weight;
             int u_bc = yakl::max(upper_u_bc, 0);
             int v_bc = yakl::max(upper_v_bc, 0);
-            int u_uc = yakl::min(u_bc+1, (int)upper_dims(0)-1);
-            int v_uc = yakl::min(v_bc+1, (int)upper_dims(1)-1);
+            int u_uc = yakl::min(u_bc+1, (int)upper_dims(1)-1);
+            int v_uc = yakl::min(v_bc+1, (int)upper_dims(0)-1);
             // NOTE(cmo): Edge-most probes should only interpolate the edge-most
             // probes of the cascade above them, otherwise 3 probes per dimension
             // (e.g. u = 0, 1, 2) have u_bc = 0, vs 2 for every other u_bc
@@ -148,12 +150,12 @@ void compute_cascade_i_2d (
                 prev_direction(0) = yakl::cos(prev_angle);
                 prev_direction(1) = yakl::sin(prev_angle);
                 start(0) = cx + prev_radius * prev_direction(0);
-                start(1) = cy + prev_radius * prev_direction(1);
+                start(1) = cz + prev_radius * prev_direction(1);
                 end(0) = cx + radius * direction(0);
-                end(1) = cy + radius * direction(1);
+                end(1) = cz + radius * direction(1);
             } else {
                 start(0) = cx + prev_radius * direction(0);
-                start(1) = cy + prev_radius * direction(1);
+                start(1) = cz + prev_radius * direction(1);
                 end = start + direction * distance;
             }
 
@@ -161,19 +163,19 @@ void compute_cascade_i_2d (
             if (USE_ATMOSPHERE) {
                 length_scale = atmos.voxel_scale;
             }
-            auto sample = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(
+            auto sample = raymarch_2d<SampleBoundary, UseMipmaps, NumWavelengths, NumAz, NumComponents>(
                 rt_state,
                 Raymarch2dStaticArgs<NumAz>{
                     .ray_start = start,
                     .ray_end = end,
                     .az_rays = az_rays,
                     .az_weights = az_weights,
-                    .direction = direction,
+                    .direction = direction * FP(-1.0),
                     .la = la,
                     .bc = pw_bc,
                     .alo = alo,
                     .distance_scale = length_scale,
-                    .altitude = atmos.altitude,
+                    .offset = offsets,
                 }
             );
             decltype(sample) upper_sample(FP(0.0));
@@ -190,10 +192,10 @@ void compute_cascade_i_2d (
                                 // NOTE(cmo): Can't merge the in-out of page ray.
                                 continue;
                             }
-                            fp_t u_11 = cascade_ip(u_bc, v_bc, upper_ray_idx, i, r);
-                            fp_t u_21 = cascade_ip(u_uc, v_bc, upper_ray_idx, i, r);
-                            fp_t u_12 = cascade_ip(u_bc, v_uc, upper_ray_idx, i, r);
-                            fp_t u_22 = cascade_ip(u_uc, v_uc, upper_ray_idx, i, r);
+                            fp_t u_11 = cascade_ip(v_bc, u_bc, upper_ray_idx, i, r);
+                            fp_t u_12 = cascade_ip(v_uc, u_bc, upper_ray_idx, i, r);
+                            fp_t u_21 = cascade_ip(v_bc, u_uc, upper_ray_idx, i, r);
+                            fp_t u_22 = cascade_ip(v_uc, u_uc, upper_ray_idx, i, r);
                             fp_t term = (
                                 v_bc_weight * (u_bc_weight * u_11 + u_uc_weight * u_21) +
                                 v_uc_weight * (u_bc_weight * u_12 + u_uc_weight * u_22)
@@ -206,7 +208,7 @@ void compute_cascade_i_2d (
             auto merged = merge_intervals(sample, upper_sample, az_rays);
             for (int i = 0; i < NumComponents; ++i) {
                 for (int r = 0; r < NumAz; ++r) {
-                    cascade_i(u, v, ray_idx, i, r) = merged(i, r);
+                    cascade_i(v, u, ray_idx, i, r) = merged(i, r);
                 }
             }
         }
@@ -214,7 +216,7 @@ void compute_cascade_i_2d (
     yakl::timer_stop(cascade_name.c_str());
 }
 
-template <bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
 void compute_cascade_i_bilinear_fix_2d (
     State* state,
     int cascade_idx,
@@ -283,12 +285,12 @@ void compute_cascade_i_bilinear_fix_2d (
     yakl::timer_start(cascade_name.c_str());
     parallel_for(
         SimpleBounds<3>(dims(0), dims(1), dims(2)),
-        YAKL_LAMBDA (int u, int v, int ray_idx) {
+        YAKL_LAMBDA (int v, int u, int ray_idx) {
             // NOTE(cmo): u, v probe indices
             // NOTE(cmo): x, y world coords
             for (int i = 0; i < NumComponents; ++i) {
                 for (int j = 0; j < NumAz; ++j) {
-                    cascade_i(u, v, ray_idx, i, j) = FP(0.0);
+                    cascade_i(v, u, ray_idx, i, j) = FP(0.0);
                 }
             }
 
@@ -307,7 +309,7 @@ void compute_cascade_i_bilinear_fix_2d (
             }
 
             fp_t cx = (u + FP(0.5)) * spacing;
-            fp_t cy = (v + FP(0.5)) * spacing;
+            fp_t cz = (v + FP(0.5)) * spacing;
             fp_t distance = radius - prev_radius;
 
             // NOTE(cmo): bc: bottom corner of 2x2 used for bilinear interp on next cascade
@@ -320,8 +322,8 @@ void compute_cascade_i_bilinear_fix_2d (
             fp_t v_uc_weight = FP(1.0) - v_bc_weight;
             int u_bc = yakl::max(upper_u_bc, 0);
             int v_bc = yakl::max(upper_v_bc, 0);
-            int u_uc = yakl::min(u_bc+1, (int)upper_dims(0)-1);
-            int v_uc = yakl::min(v_bc+1, (int)upper_dims(1)-1);
+            int u_uc = yakl::min(u_bc+1, (int)upper_dims(1)-1);
+            int v_uc = yakl::min(v_bc+1, (int)upper_dims(0)-1);
             // NOTE(cmo): Edge-most probes should only interpolate the edge-most
             // probes of the cascade above them, otherwise 3 probes per dimension
             // (e.g. u = 0, 1, 2) have u_bc = 0, vs 2 for every other u_bc
@@ -356,10 +358,10 @@ void compute_cascade_i_bilinear_fix_2d (
                 prev_direction(0) = yakl::cos(prev_angle);
                 prev_direction(1) = yakl::sin(prev_angle);
                 start(0) = cx + prev_radius * prev_direction(0);
-                start(1) = cy + prev_radius * prev_direction(1);
+                start(1) = cz + prev_radius * prev_direction(1);
             } else {
                 start(0) = cx + prev_radius * direction(0);
-                start(1) = cy + prev_radius * direction(1);
+                start(1) = cz + prev_radius * direction(1);
             }
             // NOTE(cmo): Centre of upper cascade probes
             vec2 c11, c21, c12, c22;
@@ -390,7 +392,7 @@ void compute_cascade_i_bilinear_fix_2d (
                 int upper_ray_idx,
                 decltype(upper_sample)& storage
             ) {
-                storage = raymarch_2d<UseMipmaps, NumWavelengths, NumAz, NumComponents>(
+                storage = raymarch_2d<SampleBoundary, UseMipmaps, NumWavelengths, NumAz, NumComponents>(
                     rt_state,
                     Raymarch2dStaticArgs<NumAz>{
                         .ray_start = start,
@@ -403,7 +405,7 @@ void compute_cascade_i_bilinear_fix_2d (
                 );
                 for (int i = 0; i < NumComponents; ++i) {
                     for (int r = 0; r < NumAz; ++r) {
-                        upper_sample(i, r) = cascade_ip(u, v, upper_ray_idx, i, r);
+                        upper_sample(i, r) = cascade_ip(v, u, upper_ray_idx, i, r);
                     }
                 }
                 storage = merge_intervals(storage, upper_sample, az_rays);

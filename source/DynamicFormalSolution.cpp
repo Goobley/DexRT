@@ -116,16 +116,28 @@ void dynamic_formal_sol_rc(State* state, int la) {
     // NOTE(cmo): Compute RC FS
     if (num_active_lines == 0) {
         // NOTE(cmo): Use the static solver
-        for (int i = MAX_LEVEL; i >= 0; --i) {
-            compute_cascade_i_2d(state, i, la, false);
+        compute_cascade_i_2d<USE_BC>(state, MAX_LEVEL, la, false);
+        yakl::fence();
+        for (int i = MAX_LEVEL-1; i >= 0; --i) {
+            const bool compute_alo = ((i == 0) && state->alo.initialized());
+            compute_cascade_i_2d(state, i, la, compute_alo);
             yakl::fence();
         }
         if (state->alo.initialized()) {
             static_compute_gamma(state, la, lte_scratch);
         }
     } else {
-        for (int i = MAX_LEVEL; i >= 0; --i) {
-            // const bool compute_alo = ((i == 0) && state->alo.initialized());
+        compute_dynamic_cascade_i_2d<false, USE_BC>(
+            state,
+            lte_scratch,
+            nh0,
+            MAX_LEVEL,
+            la,
+            active_set,
+            wl_ray_weight
+        );
+        yakl::fence();
+        for (int i = MAX_LEVEL-1; i >= 0; --i) {
             const bool compute_alo = (i == 0);
             if (compute_alo) {
                 compute_dynamic_cascade_i_2d<true>(

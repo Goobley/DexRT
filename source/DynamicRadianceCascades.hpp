@@ -8,7 +8,7 @@
 #include "RadianceIntervals.hpp"
 #include <fmt/core.h>
 
-template <bool compute_alo=false, int NumWavelengths=NUM_WAVELENGTHS, int NumComponents=NUM_COMPONENTS>
+template <bool compute_alo=false, bool SampleBoundary=false, int NumWavelengths=NUM_WAVELENGTHS, int NumComponents=NUM_COMPONENTS>
 void compute_dynamic_cascade_i_2d (
     State* state,
     const Fp3d& lte_scratch,
@@ -88,6 +88,7 @@ void compute_dynamic_cascade_i_2d (
         state->Gamma.extent(2) * state->Gamma.extent(3)
     ));
     const auto& atmos = state->atmos;
+    const vec3 offsets = get_offsets(atmos);
     const auto& pw_bc = state->pw_bc;
 
     std::string cascade_name = fmt::format("Dynamic Cascade {}", cascade_idx);
@@ -181,7 +182,10 @@ void compute_dynamic_cascade_i_2d (
                 length_scale = atmos.voxel_scale;
             }
 
-            DynamicRadianceInterval upper_sample{};
+            DynamicRadianceInterval upper_sample{
+                .I = FP(0.0),
+                .tau = FP(0.0)
+            };
             // NOTE(cmo): Sample upper cascade. This is done _before_ the
             // raymarch here, so we can compute the entries to Gamma using the
             // correct radiation field.
@@ -213,18 +217,19 @@ void compute_dynamic_cascade_i_2d (
             }
 
             // NOTE(cmo): This variant of the raymarcher does the merge internally
-            DynamicRadianceInterval merged = dynamic_raymarch_2d<compute_alo>(
+            DynamicRadianceInterval merged = dynamic_raymarch_2d<compute_alo, SampleBoundary>(
                 Raymarch2dDynamicArgs{
                     .eta = eta,
                     .chi = chi,
                     .ray_start = start,
                     .ray_end = end,
-                    .mux = direction(0) * incl_factor,
-                    .muy = az_rays(r),
-                    .muz = direction(1) * incl_factor,
+                    // NOTE(cmo): We flip the direction here because we know start/end will be flipped
+                    .mux = -direction(0) * incl_factor,
+                    .muy = -az_rays(r),
+                    .muz = -direction(1) * incl_factor,
                     .muy_weight = az_weights(r),
                     .distance_scale = length_scale,
-                    .altitude = atmos.altitude,
+                    .offset = offsets,
                     .atmos = atmos,
                     .atom = atom,
                     .active_set = active_set,

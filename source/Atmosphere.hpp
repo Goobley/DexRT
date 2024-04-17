@@ -21,7 +21,7 @@ inline Atmosphere load_atmos(const std::string& path) {
     int x_dim = nc.getDimSize("x");
     int z_dim = nc.getDimSize("z");
 
-    Atmosphere result;
+    Atmosphere result{};
     result.temperature = Fp2d("temperature", z_dim, x_dim);
     result.pressure = Fp2d("pressure", z_dim, x_dim);
     result.ne = Fp2d("ne", z_dim, x_dim);
@@ -41,8 +41,14 @@ inline Atmosphere load_atmos(const std::string& path) {
     nc.read(result.vy, "vy");
     nc.read(result.vz, "vz");
 
-    if (nc.varExists("altitude")) {
-        nc.read(result.altitude, "altitude");
+    if (nc.varExists("offset_x")) {
+        nc.read(result.offset_x, "offset_x");
+    }
+    if (nc.varExists("offset_y")) {
+        nc.read(result.offset_y, "offset_y");
+    }
+    if (nc.varExists("offset_z")) {
+        nc.read(result.offset_z, "offset_z");
     }
 
     return result;
@@ -70,6 +76,14 @@ YAKL_INLINE fp_t compute_vnorm(const FlatAtmosphere<T>& atmos, i64 k) {
         + square(atmos.vy(k))
         + square(atmos.vz(k))
     );
+}
+
+YAKL_INLINE vec3 get_offsets(const Atmosphere& atmos) {
+    vec3 result;
+    result(0) = atmos.offset_x;
+    result(1) = atmos.offset_y;
+    result(2) = atmos.offset_z;
+    return result;
 }
 
 #else

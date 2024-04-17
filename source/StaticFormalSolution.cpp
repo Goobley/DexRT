@@ -231,7 +231,14 @@ void static_formal_sol_rc(State* state, int la) {
         yakl::fence();
     }
     // NOTE(cmo): Compute RC FS
-    for (int i = MAX_LEVEL; i >= 0; --i) {
+
+    if constexpr (BILINEAR_FIX) {
+        compute_cascade_i_bilinear_fix_2d(state, MAX_LEVEL, false);
+    } else {
+        compute_cascade_i_2d(state, MAX_LEVEL, la, false);
+    }
+    yakl::fence();
+    for (int i = MAX_LEVEL - 1; i >= 0; --i) {
         const bool compute_alo = ((i == 0) && state->alo.initialized());
         if constexpr (BILINEAR_FIX) {
             compute_cascade_i_bilinear_fix_2d(state, i, compute_alo);

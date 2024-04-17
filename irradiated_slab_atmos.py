@@ -25,6 +25,7 @@ if __name__ == '__main__':
             tabulated["I"][la, :],
             outUnits="kW / (m2 nm sr)"
         ).value
+    bc_I[...] = 1.0
 
 
     atmos_size = 256
@@ -40,8 +41,13 @@ if __name__ == '__main__':
     vy = atmos.createVariable("vy", "f4", index_order)
     vz = atmos.createVariable("vz", "f4", index_order)
     scale = atmos.createVariable("voxel_scale", "f4")
+    altitude = atmos.createVariable("offset_z", "f4")
+    offset_x = atmos.createVariable("offset_x", "f4")
 
-    scale[...] = 30e6 / atmos_size
+    atmos_size_m = 30e3
+    scale[...] = atmos_size_m / atmos_size
+    altitude[...] = 5.0e6
+    offset_x[...] = -0.5 * atmos_size_m
     temp_val = 5000.0
     temperature[...] = temp_val
     pres_val = 0.1
