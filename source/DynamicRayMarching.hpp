@@ -32,6 +32,7 @@ struct Raymarch2dDynamicArgs {
     FpConst2d chi = Fp2d();
     vec2 ray_start;
     vec2 ray_end;
+    vec2 centre;
     fp_t mux;
     fp_t muy;
     fp_t muz;
@@ -150,24 +151,22 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
         if (ray_start(1) < ray_end(1) && la != -1) {
             vec3 mu;
             // NOTE(cmo): Outgoing ray-direction -- inverted from traversal direction
-            mu(0) = -mux;
-            mu(1) = -muy;
-            mu(2) = -muz;
+            const fp_t flat_factor = std::sqrt(FP(1.0) - square(muy));
+            mu(0) = -mux / flat_factor;
+            mu(1) = FP(0.0);
+            mu(2) = -muz / flat_factor;
             vec3 pos(args.offset);
-            if (!marcher) {
-                // NOTE(cmo): Compute intersection of ray with bottom of simulation domain, i.e. offset_z
-                // const fp_t t = (FP(0.0) - ray_start(1)) / mu(2);
-                // pos(0) += (ray_start(0) + t * mu(0)) * distance_scale;
-                // // pos(1) += (t * mu(1)) * distance_scale;
-                // pos(2) += (ray_start(1) + t * mu(2)) * distance_scale;
-                pos(0) += ray_end(0) * distance_scale;
-                pos(2) += ray_end(1) * distance_scale;
-            } else {
-                pos(0) += marcher->p0(0) * distance_scale;
-                pos(2) += marcher->p0(1) * distance_scale;
-            }
+            pos(0) += args.centre(0) * distance_scale;
+            pos(2) += args.centre(1) * distance_scale;
+
             const fp_t start_I = sample_boundary(args.bc, la, pos, mu);
-            ri.I = start_I;
+            // NOTE(cmo): The extra terms are correcting for solid angle so J is correct
+            ri.I = (
+                start_I
+                * std::abs(mu(0))
+                * FP(0.5)
+                * FP(M_PI)
+            );
         }
     }
     if (!marcher) {
@@ -252,8 +251,7 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
         if (muy == FP(0.0)) {
             ri.I = source_fn;
         } else {
-            // fp_t tau_mu = tau_s / std::abs(muy);
-            fp_t tau_mu = FP(0.0);
+            fp_t tau_mu = tau_s / std::abs(muy);
             fp_t edt, one_m_edt;
             if (tau_mu < FP(1e-2)) {
                 edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);

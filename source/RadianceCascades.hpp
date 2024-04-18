@@ -163,11 +163,15 @@ void compute_cascade_i_2d (
             if (USE_ATMOSPHERE) {
                 length_scale = atmos.voxel_scale;
             }
+            vec2 centre;
+            centre(0) = cx;
+            centre(1) = cz;
             auto sample = raymarch_2d<SampleBoundary, UseMipmaps, NumWavelengths, NumAz, NumComponents>(
                 rt_state,
                 Raymarch2dStaticArgs<NumAz>{
                     .ray_start = start,
                     .ray_end = end,
+                    .centre = centre,
                     .az_rays = az_rays,
                     .az_weights = az_weights,
                     .direction = direction * FP(-1.0),
@@ -220,6 +224,7 @@ template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelen
 void compute_cascade_i_bilinear_fix_2d (
     State* state,
     int cascade_idx,
+    int la = -1,
     bool compute_alo = false
 ) {
     if (cascade_idx == MAX_LEVEL) {
@@ -273,6 +278,8 @@ void compute_cascade_i_bilinear_fix_2d (
     }
 
     auto& atmos = state->atmos;
+    const auto offsets = get_offsets(atmos);
+    const auto& pw_bc = state->pw_bc;
     auto az_rays = get_az_rays();
     auto az_weights = get_az_weights();
 
@@ -380,11 +387,15 @@ void compute_cascade_i_bilinear_fix_2d (
             vec2 u11_start, u21_start, u12_start, u22_start;
             yakl::SArray<fp_t, 2, NumComponents, NumAz> u11_contrib, u21_contrib, u12_contrib, u22_contrib, upper_sample;
 
+            vec2 centre;
+            centre(0) = cx;
+            centre(1) = cz;
+
             fp_t length_scale = FP(1.0);
             if (USE_ATMOSPHERE) {
                 length_scale = atmos.voxel_scale;
             }
-            auto trace_and_merge_with_upper = [&upper_sample, &rt_state, &az_rays, &cascade_ip, &length_scale, &az_weights, &alo](
+            auto trace_and_merge_with_upper = [&](
                 vec2 start,
                 vec2 end,
                 int u,
@@ -397,10 +408,15 @@ void compute_cascade_i_bilinear_fix_2d (
                     Raymarch2dStaticArgs<NumAz>{
                         .ray_start = start,
                         .ray_end = end,
+                        .centre = centre,
                         .az_rays = az_rays,
                         .az_weights = az_weights,
+                        .direction = direction * FP(-1.0),
+                        .la = la,
+                        .bc = pw_bc,
                         .alo = alo,
-                        .distance_scale = length_scale
+                        .distance_scale = length_scale,
+                        .offset = offsets,
                     }
                 );
                 for (int i = 0; i < NumComponents; ++i) {

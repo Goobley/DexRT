@@ -145,7 +145,8 @@ void compute_dynamic_cascade_i_2d (
 
             fp_t angle = FP(2.0) * FP(M_PI) / num_rays * (ray_idx + FP(0.5));
             // NOTE(cmo): The multiplicative term for mux and muz in full 3D
-            fp_t incl_factor = std::sqrt(FP(1.0) - az_rays(r));
+            const fp_t cos_phi = az_rays(r);
+            const fp_t sin_phi = std::sqrt(FP(1.0) - square(cos_phi));
             // NOTE(cmo): This is flatland direction; the y effect is added in the raymarcher
             vec2 direction;
             direction(0) = yakl::cos(angle);
@@ -216,6 +217,9 @@ void compute_dynamic_cascade_i_2d (
                 }
             }
 
+            vec2 centre;
+            centre(0) = cx;
+            centre(1) = cz;
             // NOTE(cmo): This variant of the raymarcher does the merge internally
             DynamicRadianceInterval merged = dynamic_raymarch_2d<compute_alo, SampleBoundary>(
                 Raymarch2dDynamicArgs{
@@ -223,10 +227,11 @@ void compute_dynamic_cascade_i_2d (
                     .chi = chi,
                     .ray_start = start,
                     .ray_end = end,
+                    .centre = centre,
                     // NOTE(cmo): We flip the direction here because we know start/end will be flipped
-                    .mux = -direction(0) * incl_factor,
-                    .muy = -az_rays(r),
-                    .muz = -direction(1) * incl_factor,
+                    .mux = -(direction(0) * sin_phi),
+                    .muy = -cos_phi,
+                    .muz = -(direction(1) * sin_phi),
                     .muy_weight = az_weights(r),
                     .distance_scale = length_scale,
                     .offset = offsets,

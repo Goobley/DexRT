@@ -54,6 +54,7 @@ struct Raymarch2dStaticArgs {
     FpConst3d chi = Fp3d();
     vec2 ray_start;
     vec2 ray_end;
+    vec2 centre;
     yakl::SArray<fp_t, 1, NumAz> az_rays;
     yakl::SArray<fp_t, 1, NumAz> az_weights;
     yakl::SArray<fp_t, 1, 2> direction;
@@ -295,8 +296,9 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
 
     auto domain_dims = eta.get_dimensions();
     ivec2 domain_size;
-    domain_size(0) = domain_dims(0);
-    domain_size(1) = domain_dims(1);
+    // NOTE(cmo): This is swapped as the coord is still x,y,z, but the array is indexed (z,y,x)
+    domain_size(0) = domain_dims(1);
+    domain_size(1) = domain_dims(0);
     bool start_clipped;
     auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size, &start_clipped);
     yakl::SArray<fp_t, 2, NumComponents, NumAz> result(FP(0.0));
@@ -308,24 +310,17 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
         // NOTE(cmo): Check the ray is going up along z.
         if (ray_start(1) < ray_end(1) && la != -1) {
             vec3 mu;
+            mu(0) = -direction(0);
+            mu(1) = FP(0.0);
+            mu(2) = -direction(1);
+            vec3 pos(args.offset);
+            pos(0) += args.centre(0) * distance_scale;
+            pos(2) += args.centre(1) * distance_scale;
+
+            const fp_t I_sample = sample_boundary(bc, la, pos, mu);
+            // NOTE(cmo): The extra terms are correcting for solid angle so J is correct
+            const fp_t start_I = I_sample * std::abs(mu(0)) * FP(0.5) * FP(M_PI);
             for (int r = 0; r < NumAz; ++r) {
-                const fp_t incl_factor = std::sqrt(FP(1.0) - az_rays(r));
-                // NOTE(cmo): Outgoing ray-direction -- inverted from traversal direction
-                mu(0) = -direction(0) * incl_factor;
-                mu(2) = -direction(1) * incl_factor;
-                mu(1) = -std::sqrt(1.0 - square(mu(0)) - square(mu(2)));
-                vec3 pos(args.offset);
-                if (!marcher) {
-                    // NOTE(cmo): Compute intersection of ray with bottom of simulation domain, i.e. offset_z
-                    const fp_t t = (FP(0.0) - ray_start(1)) / mu(2);
-                    pos(0) += (ray_start(0) + t * mu(0)) * distance_scale;
-                    // pos(1) += (t * mu(1)) * distance_scale;
-                    pos(2) += (ray_start(1) + t * mu(2)) * distance_scale;
-                } else {
-                    pos(0) += marcher->p0(0) * distance_scale;
-                    pos(2) += marcher->p0(1) * distance_scale;
-                }
-                const fp_t start_I = sample_boundary(bc, la, pos, mu);
                 result(0, r) = start_I;
             }
         }
@@ -436,6 +431,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
             .chi = chi,
             .ray_start = args.ray_end,
             .ray_end = args.ray_start,
+            .centre = args.centre,
             .az_rays = args.az_rays,
             .az_weights = args.az_weights,
             .direction = args.direction,

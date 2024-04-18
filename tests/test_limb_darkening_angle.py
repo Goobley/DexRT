@@ -7,11 +7,14 @@ def float32(x):
 dtype = np.float32
 
 Rs = float32(const.R_sun.value)
-height = float32(30e6)
+height = float32(1.0e6)
 
 p0 = np.array([0.0, 0.0, height + Rs], dtype=dtype)
 p1 = np.array([5.0e6, 0.0, height + Rs], dtype=dtype)
 
+def classical_dilution(h):
+    Rs = const.R_sun.value
+    return 0.5 * (1.0 - np.sqrt(1.0 - Rs**2 / (Rs + h)**2))
 
 def compute_intersection_t(p0, d):
     # NOTE(cmo): Units of Rs
@@ -40,11 +43,12 @@ def compute_intersection_angle(p0, d):
 
 if __name__ == "__main__":
     muz = float32(0.7)
-    x_frac = float32(0.8)
+    x_frac = float32(1.0)
     mu = np.array(
         [
             np.sqrt(x_frac * (1.0 - muz**2)),
-            np.sqrt((1.0 - x_frac) * (1.0 - muz**2)),
+            # np.sqrt((1.0 - x_frac) * (1.0 - muz**2)),
+            0.0,
             -muz
         ],
         dtype=dtype,
@@ -70,3 +74,30 @@ if __name__ == "__main__":
     print(f"Launching from downstream plane")
     print(f"pw: {pw_1Mm}, this method: {aligned_1Mm}")
     print(f"offset: {offset_1Mm}")
+
+
+    print("===================\n\n")
+    Nrays = 1024
+    accum = 0.0
+    for r in range(Nrays):
+        angle = 2.0 * np.pi * (r + 0.5) / Nrays
+        direction = np.array([
+            np.cos(angle),
+            0.0,
+            np.sin(angle),
+        ])
+
+        if direction[2] < 0.0:
+            mu_chromo = compute_intersection_angle(p1, direction)
+            if mu_chromo is not None:
+                curr_weight = np.abs(direction[0])
+                accum += curr_weight * 1.0 * (0.5 * np.pi)
+
+    accum /= Nrays #* (2.0 / np.pi)
+
+    classical = classical_dilution(height)
+    print(f"Got dilution {accum}, expected {classical}, ratio: {accum / classical}")
+    subtended = 0.5 * (1.0 - np.sqrt((Rs + height)**2 - Rs**2) / (Rs + height))
+    print(f"Subtended/4pi = {subtended}")
+
+

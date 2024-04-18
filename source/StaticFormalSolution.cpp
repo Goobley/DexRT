@@ -233,7 +233,7 @@ void static_formal_sol_rc(State* state, int la) {
     // NOTE(cmo): Compute RC FS
 
     if constexpr (BILINEAR_FIX) {
-        compute_cascade_i_bilinear_fix_2d(state, MAX_LEVEL, false);
+        compute_cascade_i_bilinear_fix_2d(state, MAX_LEVEL, la, false);
     } else {
         compute_cascade_i_2d(state, MAX_LEVEL, la, false);
     }
@@ -241,7 +241,7 @@ void static_formal_sol_rc(State* state, int la) {
     for (int i = MAX_LEVEL - 1; i >= 0; --i) {
         const bool compute_alo = ((i == 0) && state->alo.initialized());
         if constexpr (BILINEAR_FIX) {
-            compute_cascade_i_bilinear_fix_2d(state, i, compute_alo);
+            compute_cascade_i_bilinear_fix_2d(state, i, la, compute_alo);
         } else {
             compute_cascade_i_2d(state, i, la, compute_alo);
         }

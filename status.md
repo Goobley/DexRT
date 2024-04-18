@@ -21,14 +21,15 @@ Features/ToDo
 - [x] Non-LTE iteration (@5a68d12)
     - [ ] Add line profile normalisation in final cascade (`wphi`)
 - [ ] Boundary conditions
-    - [ ] Interpolated Prom style
-        - Moved to fully 3D treatment -- looks mostly correct. Need to check ray integration in 3D -- may have to simplify to 2D given the integration method used currently
+    - [x] Interpolated Prom style
+        - Full 3D treatment available (but only considering ray projection in
+        x-z), applying a correction factor for solid angle due to muz
     - [ ] Periodic
         - Lagged sampling from previous cascade 0? -- very diffusive
         - Ping-pong full cascade stack and do a directional lookup/traversal
             - Could do this in a separate alg and build a BC from this
         - Hauschildt & Baron style multiple wrap-around?
-    - Make generic via templating struct passed down to raymarcher -- each BC
+    - [ ] Make generic via templating struct passed down to raymarcher -- each BC
     has a `sample` function so dispatch is fully static (there won't be many
     types so use a switch to template dispatch)
 - [ ] Multiple atoms - basically splat everything SOA a la MULTI and like is done for the one atom here.
@@ -46,6 +47,7 @@ Ideas
 - [x] Avoid local memory in dda ray traversal -- seems to be causing stalls
     - Implemented fully register-based approach using the switch/template method from nanovdb - big perf difference.
 - [ ] Full per-wavelength active set treatment. GPU benefits a lot more from this
+- [ ] Bring back wavelength batches -- consider a warp (32 threads) of inclination rays (e.g. 4) with e.g. 8 wavelengths. The raymarching will be entirely coherent for these. Emissivity/Opacity gather will be almost perfectly coherent too.
 
 
 Notes
