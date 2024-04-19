@@ -25,11 +25,10 @@ if __name__ == '__main__':
             tabulated["I"][la, :],
             outUnits="kW / (m2 nm sr)"
         ).value
-    bc_I[...] = 1.0
 
 
-    atmos_size = 256
-    atmos_size_x = 128
+    atmos_size = 512
+    atmos_size_x = 768
     x_dim = atmos.createDimension("x", atmos_size_x)
     z_dim = atmos.createDimension("z", atmos_size)
     index_order = ("z", "x")
@@ -45,9 +44,9 @@ if __name__ == '__main__':
     altitude = atmos.createVariable("offset_z", "f4")
     offset_x = atmos.createVariable("offset_x", "f4")
 
-    atmos_size_m = 30e6
+    atmos_size_m = 10.0e6
     scale[...] = atmos_size_m / atmos_size
-    altitude[...] = 40.0e6
+    altitude[...] = 30.0e6
     offset_x[...] = -0.5 * atmos_size_m * atmos_size_x / atmos_size
     temp_val = 5000.0
     temperature[...] = temp_val

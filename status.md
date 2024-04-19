@@ -48,6 +48,7 @@ Ideas
     - Implemented fully register-based approach using the switch/template method from nanovdb - big perf difference.
 - [ ] Full per-wavelength active set treatment. GPU benefits a lot more from this
 - [ ] Bring back wavelength batches -- consider a warp (32 threads) of inclination rays (e.g. 4) with e.g. 8 wavelengths. The raymarching will be entirely coherent for these. Emissivity/Opacity gather will be almost perfectly coherent too.
+- [ ] Refactor to only have one raymarch/RC impl
 
 
 Notes

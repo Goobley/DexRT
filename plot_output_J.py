@@ -19,7 +19,7 @@ if __name__ == "__main__":
     dex_chi = np.array(ds["chi"][...])
     dex_pops = np.array(ds["pops"][...])
 
-    ds = netCDF4.Dataset("build/atmos.nc", "r")
+    ds = netCDF4.Dataset("build/snow_atmos.nc", "r")
     nz = ds.dimensions["z"].size
     z_grid = np.ascontiguousarray((np.arange(nz, dtype=np.float64) * ds["voxel_scale"][...])[::-1])
     sample_idx = ds["ne"].shape[1] // 2

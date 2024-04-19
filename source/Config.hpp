@@ -61,6 +61,7 @@ constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.11846344), FP(0.23931434), FP(0.284444
 #endif
 
 /// Whether to load an atmosphere or use the LIGHT_MODEL to determine eta/chi.
+constexpr const char* ATMOS_PATH = "snow_atmos.nc";
 constexpr bool USE_ATMOSPHERE = true;
 constexpr int MODEL_X = 1024;
 constexpr int MODEL_Y = 1024;

@@ -9,19 +9,70 @@
 #else
     #include "YAKL_netcdf.h"
 #endif
+#include "JasPP.hpp"
 
 inline Atmosphere load_atmos(const std::string& path) {
 #ifdef HAVE_MPI
     static_assert(false, "Only normal netcdf supported for atmosphere loading currently.");
 #endif
 
+    typedef yakl::Array<f32, 1, yakl::memHost> Fp1dLoad;
+    typedef yakl::Array<f32, 2, yakl::memHost> Fp2dLoad;
 
     yakl::SimpleNetCDF nc;
     nc.open(path, yakl::NETCDF_MODE_READ);
     int x_dim = nc.getDimSize("x");
     int z_dim = nc.getDimSize("z");
 
-    Atmosphere result{};
+    Fp2dLoad temperature("temperature", z_dim, x_dim);
+    Fp2dLoad pressure("pressure", z_dim, x_dim);
+    Fp2dLoad ne("ne", z_dim, x_dim);
+    Fp2dLoad nh_tot("nh_tot", z_dim, x_dim);
+    Fp2dLoad vturb("vturb", z_dim, x_dim);
+    Fp2dLoad vx("vx", z_dim, x_dim);
+    Fp2dLoad vy("vy", z_dim, x_dim);
+    Fp2dLoad vz("vz", z_dim, x_dim);
+
+    f32 voxel_scale;
+    nc.read(voxel_scale, "voxel_scale");
+    nc.read(temperature, "temperature");
+    nc.read(pressure, "pressure");
+    nc.read(ne, "ne");
+    nc.read(nh_tot, "nh_tot");
+    nc.read(vturb, "vturb");
+    nc.read(vx, "vx");
+    nc.read(vy, "vy");
+    nc.read(vz, "vz");
+
+    f32 offset_x = FP(0.0);
+    f32 offset_y = FP(0.0);
+    f32 offset_z = FP(0.0);
+
+    if (nc.varExists("offset_x")) {
+        nc.read(offset_x, "offset_x");
+    }
+    if (nc.varExists("offset_y")) {
+        nc.read(offset_y, "offset_y");
+    }
+    if (nc.varExists("offset_z")) {
+        nc.read(offset_z, "offset_z");
+    }
+    Atmosphere result{
+        .voxel_scale = voxel_scale,
+        .offset_x = offset_x,
+        .offset_y = offset_y,
+        .offset_z = offset_z
+    };
+#ifdef DEXRT_SINGLE_PREC
+    result.temperature = temperature.createDeviceCopy();
+    result.pressure = pressure.createDeviceCopy();
+    result.ne = ne.createDeviceCopy();
+    result.nh_tot = nh_tot.createDeviceCopy();
+    result.vturb = vturb.createDeviceCopy();
+    result.vx = vx.createDeviceCopy();
+    result.vy = vy.createDeviceCopy();
+    result.vz = vz.createDeviceCopy();
+#else
     result.temperature = Fp2d("temperature", z_dim, x_dim);
     result.pressure = Fp2d("pressure", z_dim, x_dim);
     result.ne = Fp2d("ne", z_dim, x_dim);
@@ -31,25 +82,38 @@ inline Atmosphere load_atmos(const std::string& path) {
     result.vy = Fp2d("vy", z_dim, x_dim);
     result.vz = Fp2d("vz", z_dim, x_dim);
 
-    nc.read(result.voxel_scale, "voxel_scale");
-    nc.read(result.temperature, "temperature");
-    nc.read(result.pressure, "pressure");
-    nc.read(result.ne, "ne");
-    nc.read(result.nh_tot, "nh_tot");
-    nc.read(result.vturb, "vturb");
-    nc.read(result.vx, "vx");
-    nc.read(result.vy, "vy");
-    nc.read(result.vz, "vz");
+    #define DEX_DEV_COPY(X) auto JasConcat(X, dev) = X.createDeviceCopy()
+    #define DEX_FLOAT_CONVERT(X) parallel_for( \
+        "convert", \
+        SimpleBounds<2>(z_dim, x_dim), \
+        YAKL_LAMBDA (int z, int x) { \
+            result.X(z, x) = JasConcat(X, dev)(z, x); \
+        } \
+    )
 
-    if (nc.varExists("offset_x")) {
-        nc.read(result.offset_x, "offset_x");
-    }
-    if (nc.varExists("offset_y")) {
-        nc.read(result.offset_y, "offset_y");
-    }
-    if (nc.varExists("offset_z")) {
-        nc.read(result.offset_z, "offset_z");
-    }
+    DEX_DEV_COPY(temperature);
+    DEX_DEV_COPY(pressure);
+    DEX_DEV_COPY(ne);
+    DEX_DEV_COPY(nh_tot);
+    DEX_DEV_COPY(vturb);
+    DEX_DEV_COPY(vx);
+    DEX_DEV_COPY(vy);
+    DEX_DEV_COPY(vz);
+    yakl::fence();
+    DEX_FLOAT_CONVERT(temperature);
+    DEX_FLOAT_CONVERT(pressure);
+    DEX_FLOAT_CONVERT(ne);
+    DEX_FLOAT_CONVERT(nh_tot);
+    DEX_FLOAT_CONVERT(vturb);
+    DEX_FLOAT_CONVERT(vx);
+    DEX_FLOAT_CONVERT(vy);
+    DEX_FLOAT_CONVERT(vz);
+    yakl::fence();
+
+    #undef DEX_DEV_COPY
+    #undef DEX_FLOAT_CONVERT
+
+#endif
 
     return result;
 }

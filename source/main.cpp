@@ -393,7 +393,7 @@ void init_state (State* state) {
         const int n_level = state->atom.energy.extent(0);
         state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
 
-        load_bc("atmos.nc", state);
+        load_bc(ATMOS_PATH, state);
     } else {
         space_x = MODEL_X;
         space_y = MODEL_Y;
@@ -632,7 +632,7 @@ int main(int argc, char** argv) {
         static_assert((!USE_ATMOSPHERE) || (USE_ATMOSPHERE && NUM_WAVELENGTHS == 1), "More than one wavelength per batch with USE_ATMOSPHERE - vectorisation is probably poor.");
 
         if constexpr (USE_ATMOSPHERE) {
-            Atmosphere atmos = load_atmos("atmos.nc");
+            Atmosphere atmos = load_atmos(ATMOS_PATH);
             ModelAtom<f64> model = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
             CompAtom atom = to_comp_atom(model);
             state.atmos = atmos;
@@ -669,7 +669,7 @@ int main(int argc, char** argv) {
             save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         } else {
             compute_lte_pops(&state);
-            constexpr bool non_lte = false;
+            constexpr bool non_lte = true;
             constexpr bool static_soln = false;
             auto flat_Gamma = state.Gamma.reshape<3>(Dims(
                 state.Gamma.extent(0),
@@ -684,8 +684,10 @@ int main(int argc, char** argv) {
             }
             fp_t max_change = FP(1.0);
             if (non_lte) {
-                while (max_change > FP(5e-3)) {
-                    fmt::println("FS");
+                constexpr int max_iters = 60;
+                int i = 0;
+                while (max_change > FP(1e-2) && i < max_iters) {
+                    fmt::println("FS {}", i);
                     compute_collisions_to_gamma(&state);
                     yakl::fence();
                     for (int la = 0; la < waves.extent(0); ++la) {
@@ -693,10 +695,12 @@ int main(int argc, char** argv) {
                         fs_fn(&state, la);
                         final_cascade_to_J(state.cascades[0], &state.J, la);
                     }
-                    fixup_gamma(flat_Gamma);
+                    // NOTE(cmo): Fixup now done in stateq
+                    // fixup_gamma(flat_Gamma);
                     yakl::fence();
                     fmt::println("Stat eq");
-                    max_change = stat_eq(&state);
+                    max_change = stat_eq<f64>(&state);
+                    i += 1;
                 }
                 int la = 24;
                 fs_fn(&state, la);
