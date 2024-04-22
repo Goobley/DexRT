@@ -604,7 +604,7 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
     auto dims = J.get_dimensions();
 
     yakl::SimpleNetCDF nc;
-    nc.create("output.nc", NC_CLOBBER);
+    nc.create("output.nc", yakl::NETCDF_MODE_REPLACE);
 
     auto eta_dims = eta.get_dimensions();
     fmt::println("J: ({} {} {})", dims(0), dims(1), dims(2));
