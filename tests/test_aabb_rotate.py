@@ -30,7 +30,8 @@ if __name__ == "__main__":
     )
 
     rotation_point = np.mean(box[[0, 2]], axis=0)
-    rotation = np.deg2rad(30.0)
+    mu = 0.8
+    rotation = np.arccos(mu)
     rot_mat = np.array([
         [np.cos(rotation), -np.sin(rotation)],
         [np.sin(rotation), np.cos(rotation)]
@@ -99,7 +100,7 @@ if __name__ == "__main__":
         end_pt = start_pt + d * 1024
         plt.plot([start_pt[0], end_pt[0]], [start_pt[1], end_pt[1]], '--', c='C5')
 
-    ray_dir = np.array([np.sin(np.deg2rad(30)), -np.cos(np.deg2rad(30))])
+    ray_dir = np.array([np.sqrt(1.0 - mu**2), -mu])
     start_pt = np.array([384, 768])
     end_pt = start_pt + ray_dir * 512
 

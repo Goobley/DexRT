@@ -2,7 +2,7 @@
 #include "State.hpp"
 
 
-void load_bc(const std::string& path, State* state) {
+PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength) {
     yakl::SimpleNetCDF nc;
     nc.open(path, yakl::NETCDF_MODE_READ);
 
@@ -10,7 +10,7 @@ void load_bc(const std::string& path, State* state) {
         if (USE_BC) {
             throw std::runtime_error("No BC data present.");
         }
-        return;
+        return PwBc<>{};
     }
 
     int mu_dim = nc.getDimSize("prom_bc_mu");
@@ -24,13 +24,11 @@ void load_bc(const std::string& path, State* state) {
     Fp1d wl_load("prom_bc_wavelength", wl_dim);
     nc.read(wl_load, "prom_bc_wavelength");
     FpConst1d wl(wl_load);
-    result.I = Fp2d("pw_bc", state->atom.wavelength.extent(0), mu_dim);
-    auto& I = result.I;
+    Fp2d I("pw_bc", wavelength.extent(0), mu_dim);
+    result.I = I;
 
     using yakl::c::parallel_outer;
     using yakl::c::parallel_inner;
-    const auto& atom = state->atom;
-    const auto& wavelength = atom.wavelength;
     parallel_outer(
         "Promweaver BC Interp",
         SimpleBounds<1>(wavelength.extent(0)),
@@ -62,5 +60,5 @@ void load_bc(const std::string& path, State* state) {
     );
     yakl::fence();
 
-    state->pw_bc = result;
+    return result;
 }

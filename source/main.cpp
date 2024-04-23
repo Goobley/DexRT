@@ -393,7 +393,7 @@ void init_state (State* state) {
         const int n_level = state->atom.energy.extent(0);
         state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
 
-        load_bc(ATMOS_PATH, state);
+        state->pw_bc = load_bc(ATMOS_PATH, state->atom.wavelength);
     } else {
         space_x = MODEL_X;
         space_y = MODEL_Y;

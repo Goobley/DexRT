@@ -12,8 +12,7 @@ struct PwBc {
     fp_t mu_step;
     yakl::Array<fp_t, 2, mem_space> I; // [wl, mu]
 };
-struct State;
-void load_bc(const std::string& path, State* state);
+PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength);
 
 /** Computes the outgoing mu (relative to the surface normal at the location of
  * the ray hit). Assumes the Sun is a sphere with radius 695,700 km. Looks both
