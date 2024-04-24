@@ -18,6 +18,7 @@ Features/ToDo
 - [ ] LTE background from tabulated atmosphere
 - [ ] LTE with background J iteration
 - [ ] Final formal solution (interactive?)
+    - Mostly working. EmisOpac system needs to be refactored to handle "random" wavelengths
 - [x] Non-LTE iteration (@5a68d12)
     - [ ] Add line profile normalisation in final cascade (`wphi`)
 - [ ] Boundary conditions

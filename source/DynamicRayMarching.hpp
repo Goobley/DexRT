@@ -251,7 +251,8 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
         if (muy == FP(0.0)) {
             ri.I = source_fn;
         } else {
-            fp_t tau_mu = tau_s / std::abs(muy);
+            fp_t sinphi = std::sqrt(FP(1.0) - square(muy));
+            fp_t tau_mu = tau_s / sinphi;
             fp_t edt, one_m_edt;
             if (tau_mu < FP(1e-2)) {
                 edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);

@@ -59,6 +59,18 @@ struct EmisOpacState {
     EmisOpacMode mode = EmisOpacMode::All;
 };
 
+
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+struct EmisOpacSpecState {
+    const CompAtom<T, mem_space>& atom;
+    const VoigtProfile<T, false, mem_space>& profile;
+    fp_t lambda;
+    const yakl::Array<fp_t const, 2, mem_space>& n;
+    const yakl::Array<fp_t, 2, mem_space>& n_star_scratch;
+    int64_t k;
+    const AtmosPointParams& atmos;
+};
+
 template <int mem_space=yakl::memDevice>
 struct SigmaInterp {
     yakl::Array<fp_t const, 1, mem_space> sigma;
@@ -329,6 +341,95 @@ YAKL_INLINE EmisOpac emis_opac(
             result.eta += nj * uv.Uji;
             result.chi += ni * uv.Vij - nj * uv.Vji;
         }
+    }
+
+    return result;
+}
+
+// NOTE(cmo): An overload for a specific lambda that may not be in the atomic data grid
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE EmisOpac emis_opac(
+    const EmisOpacSpecState<T, mem_space>& args
+) {
+    JasUnpack(args, atom, profile, lambda, n, n_star_scratch, k, atmos);
+    EmisOpac result{FP(0.0), FP(0.0)};
+
+    int la_effective = upper_bound(atom.wavelength, lambda) - 1;
+
+    for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
+        const auto& l = atom.lines(kr);
+        if (!l.is_active(la_effective)) {
+            continue;
+        }
+
+        LineParams params;
+        params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
+        params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
+        params.vel = atmos.vel;
+
+        const UV uv = compute_uv(
+            l,
+            profile,
+            params,
+            lambda
+        );
+
+        const fp_t nj = n(l.j, k);
+        const fp_t ni = n(l.i, k);
+        result.eta += nj * uv.Uji;
+        result.chi += ni * uv.Vij - nj * uv.Vji;
+    }
+
+    bool any_active = false;
+    for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+        const auto& cont = atom.continua(kr);
+        any_active = any_active || cont.is_active(la_effective);
+    }
+    if (!any_active) {
+        return result;
+    }
+
+    auto& n_star = n_star_scratch;
+    lte_pops<T, fp_t, mem_space>(
+        atom.energy,
+        atom.g,
+        atom.stage,
+        atmos.temperature,
+        atmos.ne,
+        atom.abundance * atmos.nhtot,
+        n_star,
+        k
+    );
+    for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+        const auto& cont = atom.continua(kr);
+        if (!cont.is_active(la_effective)) {
+            continue;
+        }
+        int la_effective_p = std::min(la_effective + 1, cont.red_idx - 1);
+        fp_t t;
+        if (la_effective == la_effective_p) {
+            t = FP(1.0);
+        } else {
+            t = lambda - atom.wavelength(la_effective) / (atom.wavelength(la_effective_p) - atom.wavelength(la_effective));
+        }
+
+        using namespace ConstantsFP;
+        ContParams<mem_space> params;
+        params.thermal_ratio = n_star(cont.i, k) / n_star(cont.j, k) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
+        params.sigma_grid = get_sigma<mem_space>(atom, cont);
+
+        UV uv;
+        uv.Vij = (
+            (FP(1.0) - t) * params.sigma_grid.sigma(la_effective - cont.blue_idx)
+            + t * params.sigma_grid.sigma(la_effective_p - cont.blue_idx)
+        );
+        uv.Vji = params.thermal_ratio * uv.Vij;
+        uv.Uji = twohc2_kW_nm2 / (cube(lambda) * square(lambda) * FP(1e-18)) * uv.Vji;
+
+        const fp_t nj = n(cont.j, k);
+        const fp_t ni = n(cont.i, k);
+        result.eta += nj * uv.Uji;
+        result.chi += ni * uv.Vij - nj * uv.Vji;
     }
 
     return result;

@@ -169,7 +169,7 @@ RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos,
         mu_2d(1) = muz;
 
         mat2x2 reverse_rot;
-        fp_t reverse_angle = -std::acos(muz);
+        fp_t reverse_angle = std::acos(muz) * std::copysign(FP(1.0), mux);
         fp_t rs = std::sin(reverse_angle);
         fp_t rc = std::cos(reverse_angle);
         reverse_rot(0, 0) = rc;
@@ -240,14 +240,15 @@ RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos,
             );
         };
         // NOTE(cmo): The compiler can't directly take a reference to min here
+        auto clip_noop = [](fp_t a) { return a; };
         auto min_wrap = [](fp_t a, fp_t b) { return std::min(a, b); };
         auto max_wrap = [](fp_t a, fp_t b) { return std::max(a, b); };
         auto floor_wrap = [](fp_t a) { return std::floor(a); };
         auto ceil_wrap = [](fp_t a) { return std::ceil(a); };
-        fp_t min_x = reduce_and_clip(min_wrap, floor_wrap, rot_box, 0) - FP(1.0);
-        fp_t max_x = reduce_and_clip(max_wrap, ceil_wrap, rot_box, 0)  + FP(1.0);
-        fp_t min_z = reduce_and_clip(min_wrap, floor_wrap, rot_box, 1) - FP(1.0);
-        fp_t max_z = reduce_and_clip(max_wrap, ceil_wrap, rot_box, 1)  + FP(1.0);
+        fp_t min_x = reduce_and_clip(min_wrap, clip_noop, rot_box, 0) - FP(1.0);
+        fp_t max_x = reduce_and_clip(max_wrap, clip_noop, rot_box, 0)  + FP(1.0);
+        fp_t min_z = reduce_and_clip(min_wrap, clip_noop, rot_box, 1) - FP(1.0);
+        fp_t max_z = reduce_and_clip(max_wrap, clip_noop, rot_box, 1)  + FP(1.0);
 
         // NOTE(cmo): Top surface of the AABB of the reverse rotated AABB of the domain
         LineSeg rot_image_plane;
@@ -266,19 +267,26 @@ RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos,
             (rot_image_plane.end - centre)
         ) + centre;
 
-        fp_t seg_length = std::sqrt(yakl::intrinsics::sum(square(image_plane.end) - square(image_plane.start)));
+        fp_t seg_length = std::sqrt(yakl::intrinsics::sum(square(image_plane.end - image_plane.start)));
         vec2 image_plane_dir = (image_plane.end - image_plane.start) / seg_length;
 
-        int num_rays = int(seg_length);
+        int num_rays = int(std::ceil(seg_length));
         Fp2dHost ray_pos("ray_starts", num_rays, 2);
         for (int i = 0; i < num_rays; ++i) {
-            ray_pos(i, 0) = image_plane.start(0) + (0.5 * i) * image_plane_dir(0);
-            ray_pos(i, 1) = image_plane.start(1) + (0.5 * i) * image_plane_dir(1);
+            ray_pos(i, 0) = image_plane.start(0) + (0.5 + i) * image_plane_dir(0);
+            ray_pos(i, 1) = image_plane.start(1) + (0.5 + i) * image_plane_dir(1);
         }
         vec3 mu;
         mu(0) = -cfg.mux[mu_idx];
         mu(2) = -cfg.muz[mu_idx];
-        mu(1) = std::sqrt(FP(1.0) - square(mu(0)) - square(mu(2)));
+        mu_norm = square(mu(0)) + square(mu(2));
+        if (mu_norm >= FP(1.0)) {
+            mu(0) /= mu_norm;
+            mu(1) = FP(0.0);
+            mu(2) /= mu_norm;
+        } else {
+            mu(1) = std::sqrt(FP(1.0) - square(mu(0)) - square(mu(2)));
+        }
 
         result.mu = mu;
         if constexpr (mem_space == yakl::memHost) {
@@ -296,7 +304,14 @@ RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos,
         vec3 mu;
         mu(0) = -cfg.mux[mu_idx];
         mu(2) = -cfg.muz[mu_idx];
-        mu(1) = std::sqrt(FP(1.0) - square(mu(0)) - square(mu(2)));
+        fp_t mu_norm = square(mu(0)) + square(mu(2));
+        if (mu_norm >= FP(1.0)) {
+            mu(0) /= mu_norm;
+            mu(1) = FP(0.0);
+            mu(2) /= mu_norm;
+        } else {
+            mu(1) = std::sqrt(FP(1.0) - square(mu(0)) - square(mu(2)));
+        }
 
         result.mu = mu;
         if constexpr (mem_space == yakl::memHost) {
@@ -349,15 +364,12 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
             SimpleBounds<1>(flatmos.temperature.extent(0)),
             YAKL_LAMBDA (i64 k) {
                 fp_t lambda = ray_set.wavelength(wave);
-                // NOTE(cmo): Compute the effective la in the atom wavelength
-                // array (to get the right transitions active)
-                // TODO(cmo): emis_opac should probably be refactored to avoid this
-                int la_effective = upper_bound(atom.wavelength, lambda) - 1;
-
+                // NOTE(cmo): The projection vector is inverted here as we are
+                // tracing front-to-back.
                 fp_t v_proj = (
-                    flatmos.vx(k) * ray_set.mu(0)
-                    + flatmos.vy(k) * ray_set.mu(1)
-                    + flatmos.vz(k) * ray_set.mu(2)
+                    flatmos.vx(k) * -ray_set.mu(0)
+                    + flatmos.vy(k) * -ray_set.mu(1)
+                    + flatmos.vz(k) * -ray_set.mu(2)
                 );
                 AtmosPointParams local_atmos {
                     .temperature = flatmos.temperature(k),
@@ -369,10 +381,10 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
                 };
 
                 auto eta_chi = emis_opac(
-                    EmisOpacState<>{
+                    EmisOpacSpecState<>{
                         .atom = atom,
                         .profile = phi,
-                        .la = la_effective,
+                        .lambda = lambda,
                         .n = flat_pops,
                         .n_star_scratch = flat_n_star,
                         .k = k,
@@ -438,12 +450,18 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
                 fp_t cumulative_tau = FP(0.0);
 
                 RayMarchState2d s = *marcher;
-                const fp_t distance_factor = atmos.voxel_scale / ray_set.mu(1);
+                const fp_t distance_factor = atmos.voxel_scale / std::sqrt(FP(1.0) - square(ray_set.mu(1)));
 
                 do {
                     const auto& sample_coord(s.curr_coord);
+                    if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
+                        break;
+                    }
+                    if (sample_coord(1) < 0 || sample_coord(1) >= domain_size(1)) {
+                        break;
+                    }
                     fp_t eta_s = eta(sample_coord(1), sample_coord(0));
-                    fp_t chi_s = chi(sample_coord(1), sample_coord(0));
+                    fp_t chi_s = chi(sample_coord(1), sample_coord(0)) + FP(1e-20);
                     fp_t tau = chi_s * s.dt * distance_factor;
                     fp_t source_fn = eta_s / chi_s;
                     fp_t one_m_edt = -std::expm1(-tau);
@@ -464,28 +482,11 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
                 }
 
                 ray_I(wave, ray_idx) = I;
-                ray_I(wave, ray_idx) = cumulative_tau;
+                ray_tau(wave, ray_idx) = cumulative_tau;
             }
         );
     }
 }
-yakl::SimpleNetCDF::NcVar get_var(
-    yakl::SimpleNetCDF& nc,
-    std::string name,
-    const std::vector<std::string>& dim_names
-) {
-    auto var = nc.file.getVar(name);
-    if (var.isNull()) {
-        // var = nc.file.addVar(*)
-        std::vector<yakl::SimpleNetCDF::NcDim> dims;
-        for (const auto& d : dim_names) {
-            auto dim = nc.file.getDim(d);
-            dims.push_back(dim);
-        }
-        var = nc.file.addVar(name, nc.getType<fp_t>(), dims);
-    }
-    return var;
-};
 
 yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
     yakl::SimpleNetCDF nc;
@@ -495,19 +496,7 @@ yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
     nc.createDim("3d-space", 3);
     nc.createDim("2d-space", 2);
     nc.createDim("wavelength", cfg.wavelength.size());
-    // // NOTE(cmo): This is an unlimited dim, as it's ragged
-    // nc.createDim("ray_idx");
-    nc_type ray_idx_vlen_t;
-    yakl::ncwrap(nc_def_vlen(nc.file.ncid, "ray_idx", NC_FLOAT, &ray_idx_vlen_t), __LINE__);
-    int I_id;
-    std::vector<int> dims = {
-        nc.file.getDim("mu").getId(),
-        nc.file.getDim("wavelength").getId()
-    };
-    yakl::ncwrap(nc_def_var(nc.file.ncid, "I", ray_idx_vlen_t, dims.size(), dims.data(), &I_id), __LINE__);
 
-    // auto wavelength = get_var(nc, "wavelength", {"wavelength"});
-    // auto mu = get_var(nc, "mu", {"mu", "3d-space"});
     FpConst1dHost wavelength("wavelength", cfg.wavelength.data(), cfg.wavelength.size());
     nc.write(wavelength, "wavelength", {"wavelength"});
     Fp2dHost mu("mu", cfg.muz.size(), 3);
@@ -522,36 +511,10 @@ yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
 }
 
 void write_output_plane(yakl::SimpleNetCDF& nc, const DexRayState& state, int mu_idx) {
-    // auto ray_start = get_var(nc, "ray_start", {"mu", "ray_idx", "2d-space"});
-    // auto I = get_var(nc, "I", {"mu", "wavelength"});
-    auto I = nc.file.getVar("I");
-    // auto tau = get_var(nc, "tau", {"mu", "wavelength", "ray_idx"});
-    std::vector<size_t> start(3);
-    std::vector<size_t> count(3);
-    // start[0] = mu_idx;
-    // count[0] = 1;
-    // start[1] = 0;
-    // count[1] = state.ray_set.start_coord.extent(0);
-    // start[2] = 0;
-    // count[2] = 2;
-    // ray_start.putVar(start, count, state.ray_set.start_coord.createHostCopy().data());
-
-    start[0] = mu_idx;
-    count[0] = 1;
-    start[2] = 0;
-    count[2] = state.ray_set.start_coord.extent(0);
-    // I.putVar(start, count, state.ray_I.createHostCopy().data());
-    auto I_host = state.ray_I.createHostCopy();
-    yakl::fence();
-    for (int wave = 0; wave < state.ray_set.wavelength.extent(0); ++wave) {
-        start[1] = wave;
-        count[1] = 1;
-        yakl::ncwrap(
-            nc_put_vara(nc.file.ncid, I.getId(), start.data(), count.data(), &I_host(wave, 0)),
-            __LINE__
-        );
-    }
-    // tau.putVar(start, count, state.ray_tau.createHostCopy().data());
+    std::string ray_idx = fmt::format("rays_{}", mu_idx);
+    nc.write(state.ray_I, fmt::format("I_{}", mu_idx), {"wavelength", ray_idx});
+    nc.write(state.ray_tau, fmt::format("tau_{}", mu_idx), {"wavelength", ray_idx});
+    nc.write(state.ray_set.start_coord, fmt::format("ray_start_{}", mu_idx), {ray_idx, "2d-space"});
 }
 
 
