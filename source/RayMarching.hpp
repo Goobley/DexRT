@@ -308,16 +308,41 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
         static_assert(!(USE_BC && !USE_ATMOSPHERE), "BCs not supported outside of atmosphere mode");
 
         // NOTE(cmo): Check the ray is going up along z.
-        if (ray_start(1) < ray_end(1) && la != -1) {
+        if ((direction(1) > FP(0.0)) && la != -1) {
             vec3 mu;
             mu(0) = -direction(0);
             mu(1) = FP(0.0);
             mu(2) = -direction(1);
-            vec3 pos(args.offset);
-            pos(0) += args.centre(0) * distance_scale;
-            pos(2) += args.centre(1) * distance_scale;
+            vec3 pos;
+            pos(0) = args.centre(0) * distance_scale + args.offset(0);
+            pos(1) = args.offset(1);
+            pos(2) = args.centre(1) * distance_scale + args.offset(2);
 
-            const fp_t I_sample = sample_boundary(bc, la, pos, mu);
+            fp_t I_sample = sample_boundary(bc, la, pos, mu);
+            if constexpr (PWBC_SAMPLE_CONE) {
+                constexpr fp_t cone_half_angle = FP(2.0) * FP(M_PI) / FP(2048.0);
+                constexpr fp_t edge_weight = FP(2.5) / FP(9.0);
+                constexpr fp_t centre_weight = FP(4.0)/ FP(9.0);
+                constexpr fp_t gl_sample =  FP(0.7745966692414834);
+                const fp_t cos_cone = std::cos(cone_half_angle * gl_sample);
+                const fp_t sin_cone = std::sin(cone_half_angle * gl_sample);
+                I_sample *= centre_weight;
+
+                // cos(x+y) = cosx cosy - sinx siny
+                // cos(x-y) = cosx cosy + sinx siny
+                // sin(x+y) = sinx cosy + cosx siny
+                // sin(x-y) = sinx cosy - cosx siny
+                vec3 mu_cone;
+                mu_cone(0) = mu(0) * cos_cone - mu(2) * sin_cone;
+                mu_cone(1) = FP(0.0);
+                mu_cone(2) = mu(2) * cos_cone + mu(0) * sin_cone;
+                I_sample += edge_weight * sample_boundary(bc, la, pos, mu_cone);
+
+                mu_cone(0) = mu(0) * cos_cone + mu(2) * sin_cone;
+                mu_cone(1) = FP(0.0);
+                mu_cone(2) = mu(2) * cos_cone - mu(0) * sin_cone;
+                I_sample += edge_weight * sample_boundary(bc, la, pos, mu_cone);
+            }
             // NOTE(cmo): The extra terms are correcting for solid angle so J is correct
             const fp_t start_I = I_sample * std::abs(mu(0)) * FP(0.5) * FP(M_PI);
             for (int r = 0; r < NumAz; ++r) {
@@ -325,7 +350,8 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
             }
         }
     }
-    if (!marcher) {
+    // if (!marcher) {
+    if (true) {
         return result;
     }
 

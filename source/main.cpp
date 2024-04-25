@@ -599,7 +599,7 @@ FpConst3d final_cascade_to_J(const FpConst5d& final_cascade, const Fp3d* J_curre
     return J;
 }
 
-void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops) {
+void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst5d& casc=FpConst5d()) {
     fmt::print("Saving output...\n");
     auto dims = J.get_dimensions();
 
@@ -615,6 +615,9 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
         nc.write(chi, "chi", {"x", "y", "chan"});
         nc.write(wavelengths, "wavelength", {"wavelength"});
         nc.write(pops, "pops", {"level", "x", "y"});
+        if (casc.initialized()) {
+            nc.write(casc, "cascade", {"u", "v", "ray_idx", "comp", "incl"});
+        }
     }
     nc.close();
 }
@@ -669,7 +672,7 @@ int main(int argc, char** argv) {
             save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         } else {
             compute_lte_pops(&state);
-            constexpr bool non_lte = true;
+            constexpr bool non_lte = false;
             constexpr bool static_soln = false;
             auto flat_Gamma = state.Gamma.reshape<3>(Dims(
                 state.Gamma.extent(0),
@@ -686,7 +689,7 @@ int main(int argc, char** argv) {
             if (non_lte) {
                 constexpr int max_iters = 60;
                 int i = 0;
-                while (max_change > FP(1e-2) && i < max_iters) {
+                while (max_change > FP(5e-2) && i < max_iters) {
                     fmt::println("FS {}", i);
                     compute_collisions_to_gamma(&state);
                     yakl::fence();
@@ -720,7 +723,8 @@ int main(int argc, char** argv) {
                 state.raymarch_state.emission,
                 state.raymarch_state.absorption,
                 state.atom.wavelength,
-                state.pops
+                state.pops,
+                state.cascades[state.cascades.size()-1]
             );
         }
         magma_queue_destroy(state.magma_queue);

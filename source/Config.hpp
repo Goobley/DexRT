@@ -31,11 +31,12 @@ constexpr bool BILINEAR_FIX = false;
 constexpr bool USE_MIPMAPS = false;
 constexpr int MIPMAP_FACTORS[MAX_LEVEL+1] = {0, 0, 1, 1, 1};
 
-constexpr bool PINGPONG_BUFFERS = true;
+constexpr bool PINGPONG_BUFFERS = false;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 constexpr bool USE_BC = true;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
+constexpr bool PWBC_SAMPLE_CONE = true;
 
 // #define FLATLAND
 #ifdef FLATLAND
@@ -61,7 +62,7 @@ constexpr fp_t AZ_WEIGHTS[NUM_AZ] = {FP(0.11846344), FP(0.23931434), FP(0.284444
 #endif
 
 /// Whether to load an atmosphere or use the LIGHT_MODEL to determine eta/chi.
-constexpr const char* ATMOS_PATH = "snow_atmos.nc";
+constexpr const char* ATMOS_PATH = "atmos.nc";
 constexpr bool USE_ATMOSPHERE = true;
 constexpr int MODEL_X = 1024;
 constexpr int MODEL_Y = 1024;

@@ -159,8 +159,32 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
             pos(0) += args.centre(0) * distance_scale;
             pos(2) += args.centre(1) * distance_scale;
 
-            const fp_t start_I = sample_boundary(args.bc, la, pos, mu);
-            // NOTE(cmo): The extra terms are correcting for solid angle so J is correct
+            fp_t start_I = sample_boundary(args.bc, la, pos, mu);
+            if constexpr (PWBC_SAMPLE_CONE) {
+                constexpr fp_t cone_half_angle = FP(2.0) * FP(M_PI) / FP(2048.0);
+                constexpr fp_t edge_weight = FP(2.5) / FP(9.0);
+                constexpr fp_t centre_weight = FP(4.0)/ FP(9.0);
+                constexpr fp_t gl_sample =  FP(0.7745966692414834);
+                const fp_t cos_cone = std::cos(cone_half_angle * gl_sample);
+                const fp_t sin_cone = std::sin(cone_half_angle * gl_sample);
+                start_I *= centre_weight;
+
+                // cos(x+y) = cosx cosy - sinx siny
+                // cos(x-y) = cosx cosy + sinx siny
+                // sin(x+y) = sinx cosy + cosx siny
+                // sin(x-y) = sinx cosy - cosx siny
+                vec3 mu_cone;
+                mu_cone(0) = mu(0) * cos_cone - mu(2) * sin_cone;
+                mu_cone(1) = FP(0.0);
+                mu_cone(2) = mu(2) * cos_cone + mu(0) * sin_cone;
+                start_I += edge_weight * sample_boundary(args.bc, la, pos, mu_cone);
+
+                mu_cone(0) = mu(0) * cos_cone + mu(2) * sin_cone;
+                mu_cone(1) = FP(0.0);
+                mu_cone(2) = mu(2) * cos_cone - mu(0) * sin_cone;
+                start_I += edge_weight * sample_boundary(args.bc, la, pos, mu_cone);
+            }
+            // NOTE(cmo): The extra terms are correcting for solid angle so J is correct -- mux is cos(angle), but sin from the perspective of solid angle with z being our primary axis
             ri.I = (
                 start_I
                 * std::abs(mu(0))
