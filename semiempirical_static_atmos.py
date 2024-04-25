@@ -52,14 +52,14 @@ if __name__ == '__main__':
     scale[...] = atmos_size_m / atmos_size
     altitude[...] = 30.0e6
     offset_x[...] = -0.5 * atmos_size_m * atmos_size_x / atmos_size
-    temp_val = 1e6
+    temp_val = 8000
     temperature[...] = temp_val
     pres_val = 0.1
     pressure[...] = pres_val
     # NOTE(cmo): Approximate ionisation fraction
     X = 0.1
     nh_val = pres_val / (lw.KBoltzmann * temp_val * (1.0 + X))
-    nh_tot[...] = nh_val / 1e5
+    nh_tot[...] = nh_val
     ne[...] = X * nh_val
     vturb[...] = 5e3
 

@@ -16,7 +16,7 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DCMAKE_Fortran_COMPILER=gfortran \
       -DYAKL_ARCH="CUDA"              \
       -DYAKL_PROFILE="On"             \
-      -DYAKL_CUDA_FLAGS="-O0 -g --ptxas-options=-v --generate-line-info" \
+      -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v --generate-line-info" \
       -DYAKL_INT64_RESHAPE="On"       \
       -DDEXRT_CUDA_ARCHITECTURES="86" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
