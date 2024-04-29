@@ -8,6 +8,7 @@
 #include "Atmosphere.hpp"
 #include "Populations.hpp"
 #include "RadianceCascades.hpp"
+#include "RadianceCascades2.hpp"
 #include "CrtafParser.hpp"
 #include "Collisions.hpp"
 #include "Voigt.hpp"
@@ -389,9 +390,10 @@ void init_state (State* state) {
         state->wavelength_h = state->atom.wavelength.createHostCopy();
 
         // NOTE(cmo): Allocate ALO array -- used for static wavelengths
-        state->alo = Fp3d("ALO", space_x, space_y, NUM_AZ);
+        state->alo = Fp3d("ALO", space_x, space_y, NUM_INCL);
         const int n_level = state->atom.energy.extent(0);
-        state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
+        // state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
+        state->Gamma = decltype(state->Gamma)("Gamma", n_level, n_level, space_x, space_y);
 
         state->pw_bc = load_bc(ATMOS_PATH, state->atom.wavelength);
     } else {
@@ -403,7 +405,7 @@ void init_state (State* state) {
 
     // NOTE(cmo): Allocate cascades
     if constexpr (PINGPONG_BUFFERS) {
-        int64_t cascade_alloc_entries = int64_t(cascade_0_x_probes) * int64_t(cascade_0_z_probes) * PROBE0_NUM_RAYS * NUM_COMPONENTS * NUM_AZ;
+        int64_t cascade_alloc_entries = int64_t(cascade_0_x_probes) * int64_t(cascade_0_z_probes) * PROBE0_NUM_RAYS * NUM_COMPONENTS * NUM_INCL;
         for (int l = 0; l < MAX_LEVEL + 1; ++l) {
             int64_t x_dim = cascade_0_x_probes / (1 << l);
             int64_t z_dim = cascade_0_z_probes / (1 << l);
@@ -412,7 +414,7 @@ void init_state (State* state) {
                 x_dim *
                 z_dim *
                 ray_dim *
-                NUM_COMPONENTS * NUM_AZ
+                NUM_COMPONENTS * NUM_INCL
             );
             if (cascade_size > cascade_alloc_entries) {
                 throw std::runtime_error(fmt::format(
@@ -437,7 +439,7 @@ void init_state (State* state) {
                     cascade_0_z_probes,
                     PROBE0_NUM_RAYS,
                     NUM_COMPONENTS,
-                    NUM_AZ
+                    NUM_INCL
                 )
             );
             state->cascades.back() = FP(0.0);
@@ -451,7 +453,7 @@ void init_state (State* state) {
                     cascade_0_z_probes / (1 << l),
                     PROBE0_NUM_RAYS * (1 << (l * CASCADE_BRANCHING_FACTOR)),
                     NUM_COMPONENTS,
-                    NUM_AZ
+                    NUM_INCL
                 )
             );
 
@@ -673,7 +675,7 @@ int main(int argc, char** argv) {
         } else {
             compute_lte_pops(&state);
             constexpr bool non_lte = true;
-            constexpr bool static_soln = false;
+            constexpr bool static_soln = true;
             auto flat_Gamma = state.Gamma.reshape<3>(Dims(
                 state.Gamma.extent(0),
                 state.Gamma.extent(1),
@@ -687,7 +689,7 @@ int main(int argc, char** argv) {
             }
             fp_t max_change = FP(1.0);
             if (non_lte) {
-                constexpr int max_iters = 200;
+                constexpr int max_iters = 300;
                 int i = 0;
                 while (max_change > FP(1e-2) && i < max_iters) {
                     fmt::println("FS {}", i);
@@ -705,7 +707,7 @@ int main(int argc, char** argv) {
                     max_change = stat_eq<f64>(&state);
                     i += 1;
                 }
-                int la = 24;
+                int la = 55;
                 fs_fn(&state, la);
                 final_cascade_to_J(state.cascades[0], &state.J, la);
             } else {
@@ -714,7 +716,7 @@ int main(int argc, char** argv) {
                     fs_fn(&state, la);
                     final_cascade_to_J(state.cascades[0], &state.J, la);
                 }
-                int la = 24;
+                int la = 55;
                 fs_fn(&state, la);
                 final_cascade_to_J(state.cascades[0], &state.J, la);
             }

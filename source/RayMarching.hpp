@@ -48,7 +48,7 @@ struct Box {
     vec2 dims[NUM_DIM];
 };
 
-template <int NumAz=NUM_AZ>
+template <int NumAz=NUM_INCL>
 struct Raymarch2dStaticArgs {
     FpConst3d eta = Fp3d();
     FpConst3d chi = Fp3d();
@@ -280,14 +280,14 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(
     return r;
 }
 
-template <int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
 YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> empty_hit() {
     yakl::SArray<fp_t, 2, NumComponents, NumAz> result;
     result = FP(0.0);
     return result;
 }
 
-template <bool SampleBoundary=false, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool SampleBoundary=false, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
 YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     const Raymarch2dStaticArgs<NumAz>& args
 ) {
@@ -344,14 +344,14 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
                 I_sample += edge_weight * sample_boundary(bc, la, pos, mu_cone);
             }
             // NOTE(cmo): The extra terms are correcting for solid angle so J is correct
-            const fp_t start_I = I_sample * std::abs(mu(0)) * FP(0.5) * FP(M_PI);
+            // const fp_t start_I = I_sample * std::abs(mu(0)) * FP(0.5) * FP(M_PI);
+            const fp_t start_I = I_sample * FP(0.5) * FP(M_PI);
             for (int r = 0; r < NumAz; ++r) {
-                result(0, r) = start_I;
+                result(0, r) = start_I * std::sqrt(FP(1.0) - square(az_rays(r)));
             }
         }
     }
-    // if (!marcher) {
-    if (true) {
+    if (!marcher) {
         return result;
     }
 
@@ -407,7 +407,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
                         yakl::atomicAdd(alo(sample_coord(1), sample_coord(0), r), weight);
                     }
                 } else {
-                    fp_t mu = az_rays(r);
+                    fp_t mu = std::sqrt(FP(1.0) - square(az_rays(r)));
                     fp_t tau_mu = tau / mu;
                     fp_t edt, one_m_edt;
                     if (tau_mu < FP(1e-2)) {
@@ -430,7 +430,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
     return result;
 }
 
-template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
 YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
     const CascadeRTState& state,
     const Raymarch2dStaticArgs<NumAz>& args

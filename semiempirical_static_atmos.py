@@ -6,7 +6,8 @@ import numpy as np
 if __name__ == '__main__':
     atmos = ncdf.Dataset("build/atmos.nc", "w", format="NETCDF4")
 
-    bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"])
+    # bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"])
+    bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["Ca"])
     tabulated = pw.tabulate_bc(bc_ctx, mu_grid=np.linspace(0.05, 1.0, 20))
     I_with_zero = np.zeros((tabulated["I"].shape[0], tabulated["I"].shape[1] + 1))
     I_with_zero[:, 1:] = tabulated["I"][...]
@@ -31,8 +32,8 @@ if __name__ == '__main__':
         ).value
 
 
-    atmos_size = 512
-    atmos_size_x = 512
+    atmos_size = 128
+    atmos_size_x = 8192
     x_dim = atmos.createDimension("x", atmos_size_x)
     z_dim = atmos.createDimension("z", atmos_size)
     index_order = ("z", "x")
@@ -50,7 +51,7 @@ if __name__ == '__main__':
 
     atmos_size_m = 10.0e6
     scale[...] = atmos_size_m / atmos_size
-    altitude[...] = 30.0e6
+    altitude[...] = 10.0e6
     offset_x[...] = -0.5 * atmos_size_m * atmos_size_x / atmos_size
     temp_val = 8000
     temperature[...] = temp_val

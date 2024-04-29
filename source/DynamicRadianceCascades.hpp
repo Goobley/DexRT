@@ -41,7 +41,7 @@ void compute_dynamic_cascade_i_2d (
         z_dim,
         ray_dim,
         NumComponents,
-        NUM_AZ
+        NUM_INCL
     ));
     FpConst5d cascade_ip = cascade_i;
     if (cascade_idx != MAX_LEVEL) {
@@ -50,7 +50,7 @@ void compute_dynamic_cascade_i_2d (
             z_dim / 2,
             ray_dim * (1 << CASCADE_BRANCHING_FACTOR),
             NumComponents,
-            NUM_AZ
+            NUM_INCL
         ));
     }
     auto dims = cascade_i.get_dimensions();

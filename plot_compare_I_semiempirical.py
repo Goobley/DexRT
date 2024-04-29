@@ -77,7 +77,8 @@ if __name__ == "__main__":
     offset_x = np.float32(ds["offset_x"][...])
     offset_z = np.float32(ds["offset_z"][...])
 
-    bc_ctx = pw.compute_falc_bc_ctx(["H", "Ca"])
+    # bc_ctx = pw.compute_falc_bc_ctx(["H", "Ca"])
+    bc_ctx = pw.compute_falc_bc_ctx(["Ca"])
     # bc_table = pw.tabulate_bc(bc_ctx, mu_grid=np.linspace(0.1, 1.0, 10))
     orig_bc_table = pw.tabulate_bc(bc_ctx, mu_grid=np.linspace(0.05, 1.0, 20))
     # bc_table = pw.tabulate_bc(bc_ctx)
@@ -140,33 +141,80 @@ if __name__ == "__main__":
     )
     fil_atmos.quadrature(10)
 
+    def nothing_H():
+        h = H_6_atom()
+        h.lines = []
+        h.continua = []
+        lw.reconfigure_atom(h)
+        return h
+
+
     # a_set = lw.RadiativeSet([H_6_atom(), collisionless_CaII()])
-    a_set = lw.RadiativeSet([H_6_atom(), CaII_atom()])
-    a_set.set_active("H", "Ca")
+    a_set = lw.RadiativeSet([nothing_H(), CaII_atom()])
+    a_set.set_active("Ca")
     eq_pops = a_set.compute_eq_pops(fil_atmos)
     # spect = a_set.compute_wavelength_grid(lambdaReference=CaII_atom().lines[-1].lambda0 - 1.0)
     spect = a_set.compute_wavelength_grid()
 
-    # ctx = lw.Context(fil_atmos, spect, eq_pops, formalSolver="piecewise_linear_1d")
-    # ctx.background.eta[...] = 0.0
-    # ctx.background.chi[...] = 0.0
-    # ctx.background.sca[...] = 0.0
-    # ctx.depthData.fill = True
-    # # ctx.formal_sol_gamma_matrices()
-    # lw.iterate_ctx_se(ctx, popsTol=1e-2, JTol=1.0)
-    # fil_atmos.zLowerBc.final_synthesis = True
-    # Ivert_fil = lw.convert_specific_intensity(
-    #     ctx.spect.wavelength,
-    #     ctx.compute_rays(mus=1.0),
-    #     outUnits="kW / (m2 nm sr)"
-    # )
-    # plt.ion()
-    # plt.plot(ctx.spect.wavelength, Ivert_fil)
-
+    ctx = lw.Context(fil_atmos, spect, eq_pops, formalSolver="piecewise_linear_1d", Nthreads=12)
+    ctx.background.eta[...] = 0.0
+    ctx.background.chi[...] = 0.0
+    ctx.background.sca[...] = 0.0
+    ctx.depthData.fill = True
+    # ctx.formal_sol_gamma_matrices()
+    lw.iterate_ctx_se(ctx, popsTol=1e-3, JTol=1.0)
+    fil_atmos.zLowerBc.final_synthesis = True
     ray_output = netCDF4.Dataset("build/ray_output.nc")
-    # central_Ivert_fil = ray_output["I_0"][:, ray_output["I_0"].shape[1]//2]
     dex_wave = ray_output["wavelength"][...]
-    # plt.plot(dex_wave, central_Ivert_fil)
+    Ivert_fil = lw.convert_specific_intensity(
+        dex_wave,
+        ctx.compute_rays(wavelengths=dex_wave.astype(np.float64), mus=1.0),
+        outUnits="kW / (m2 nm sr)"
+    )
+    plt.ion()
+    plt.plot(dex_wave, Ivert_fil)
+
+    central_Ivert_fil = ray_output["I_0"][:, ray_output["I_0"].shape[1]//2]
+    plt.plot(dex_wave, central_Ivert_fil)
+
+    prom_atmos = lw.Atmosphere.make_1d(
+        lw.ScaleType.Geometric,
+        z_grid,
+        temperature,
+        vlos=np.zeros_like(z_grid),
+        vturb=vturb,
+        ne=ne,
+        nHTot=nhtot,
+        lowerBc=pw.ConePromBc("prominence", bc_provider, altitude_m=ds["offset_z"][...], prom_upper_lower="lower"),
+        upperBc=pw.ConePromBc("prominence", bc_provider, altitude_m=ds["offset_z"][...], prom_upper_lower="upper"),
+    )
+    prom_atmos.quadrature(10)
+
+    # a_set = lw.RadiativeSet([H_6_atom(), collisionless_CaII()])
+    prom_a_set = lw.RadiativeSet([nothing_H(), CaII_atom()])
+    prom_a_set.set_active("Ca")
+    prom_eq_pops = prom_a_set.compute_eq_pops(prom_atmos)
+    # spect = a_set.compute_wavelength_grid(lambdaReference=CaII_atom().lines[-1].lambda0 - 1.0)
+    prom_spect = prom_a_set.compute_wavelength_grid()
+
+    prom_ctx = lw.Context(prom_atmos, prom_spect, prom_eq_pops, Nthreads=12)
+    prom_ctx.background.eta[...] = 0.0
+    prom_ctx.background.chi[...] = 0.0
+    prom_ctx.background.sca[...] = 0.0
+    prom_ctx.depthData.fill = True
+    # ctx.formal_sol_gamma_matrices()
+    lw.iterate_ctx_se(prom_ctx, popsTol=1e-3, JTol=1.0)
+    prom_atmos.zLowerBc.final_synthesis = True
+    prom_atmos.zUpperBc.final_synthesis = True
+    Ivert_prom = lw.convert_specific_intensity(
+        dex_wave,
+        prom_ctx.compute_rays(wavelengths=np.asarray(dex_wave).astype(np.float64), mus=1.0),
+        outUnits="kW / (m2 nm sr)"
+    )
+    plt.clf()
+    plt.plot(dex_wave, Ivert_prom)
+    central_Ivert_prom = ray_output["I_1"][:, ray_output["I_1"].shape[1]//2]
+    plt.plot(dex_wave, central_Ivert_prom)
 
     # def compute_ray_idx(i, cone_half_angular_width=None):
     #     probe_I = np.zeros((32, 32))
@@ -205,6 +253,9 @@ if __name__ == "__main__":
     #                         mu_hits.append(compute_intersection_angle(pos, cone_mu))
 
     #                 wave_idx = np.searchsorted(bc_table["wavelength"], dex_wave[20])
+    #                 cos_incl = np.array([0.04691008, 0.23076534, 0.5, 0.76923466, 0.95308992])
+    #                 sin_incl = np.sqrt(1.0 - cos_incl**2)
+    #                 incl_weights = [0.11846344, 0.23931434, 0.28444444, 0.23931434, 0.11846344]
 
     #                 if any(m is not None for m in mu_hits):
     #                     Ibc = 0.0
@@ -221,6 +272,8 @@ if __name__ == "__main__":
     #                     #     Ibc += 2.5 / 9 * weno4(mu_hit + gl_sample * cone_half_angular_width, bc_table["mu_grid"], bc_table["I"][20])
     #                     # probe_I[probe_v, probe_u] += j_weights[j] * Ibc * abs(mu_x) * 0.5 * np.pi
     #                     probe_I[probe_v, probe_u] += Ibc * abs(mu_x) * 0.5 * np.pi
+    #                     # for incl in range(sin_incl.shape[0]):
+    #                     #     probe_I[probe_v, probe_u] += Ibc * sin_incl[incl] * 0.5 * np.pi * incl_weights[incl]
     #     return probe_I
 
 

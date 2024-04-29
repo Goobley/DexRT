@@ -485,7 +485,10 @@ inline fp_t stat_eq(State* state) {
     auto GammaT_host = GammaT.createHostCopy();
     auto pops_host = pops.createHostCopy();
     // const int print_idx = 452 * state->atmos.temperature.extent(1) + 519;
-    const int print_idx = 262 * state->atmos.temperature.extent(1) + 575;
+    const int print_idx = std::min(
+        int(128 * state->atmos.temperature.extent(1) + 128),
+        int(state->atmos.temperature.extent(0) * state->atmos.temperature.extent(1) - 1)
+    );
     for (int i = 0; i < GammaT_host.extent(2); ++i) {
         for (int j = 0; j < GammaT_host.extent(1); ++j) {
             fmt::print("{}, ", GammaT_host(print_idx, j, i));

@@ -151,7 +151,6 @@ template <int mem_space=yakl::memDevice>
 RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos, int mu_idx) {
     RaySet<mem_space> result;
     if (cfg.rotate_aabb) {
-        using mat2x2 = yakl::SArray<fp_t, 2, 2, 2>;
         auto matvec = [] (const mat2x2& mat, const vec2& vec) {
             vec2 result;
             result(0) = mat(0, 0) * vec(0) + mat(0, 1) * vec(1);

@@ -9,7 +9,7 @@
 #include "Atmosphere.hpp"
 #include <fmt/core.h>
 
-template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
 void compute_cascade_i_2d (
     State* state,
     int cascade_idx,
@@ -220,7 +220,7 @@ void compute_cascade_i_2d (
     yakl::timer_stop(cascade_name.c_str());
 }
 
-template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_AZ, int NumComponents=NUM_COMPONENTS>
+template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
 void compute_cascade_i_bilinear_fix_2d (
     State* state,
     int cascade_idx,
