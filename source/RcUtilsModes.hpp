@@ -1,15 +1,11 @@
 #if !defined(DEXRT_UTILS_MODES_HPP)
 #define DEXRT_UTILS_MODES_HPP
 #include "Types.hpp"
+#include "State.hpp"
+// #include "RayMarching2.hpp"
 
 constexpr int RC_DYNAMIC = 0x1;
-
-struct CascadeDims {
-    ivec2 num_probes;
-    int num_flat_dirs;
-    int wave_batch;
-    int num_incl;
-};
+constexpr int RC_SAMPLE_BC = 0x2;
 
 YAKL_INLINE CascadeDims cascade_size(const CascadeDims& c0, int n) {
     CascadeDims c;
@@ -21,7 +17,16 @@ YAKL_INLINE CascadeDims cascade_size(const CascadeDims& c0, int n) {
     return c;
 }
 
-YAKL_INLINE vec2 probe_pos(ivec2 probe_coord, const CascadeDims& c0, int n) {
+YAKL_INLINE i64 cascade_entries(const CascadeDims& c) {
+    i64 result = c.num_probes(0);
+    result *= c.num_probes(1);
+    result *= c.num_flat_dirs;
+    result *= c.num_incl;
+    result *= c.wave_batch;
+    return result;
+}
+
+YAKL_INLINE vec2 probe_pos(ivec2 probe_coord, int n) {
     fp_t probe_spacing = PROBE0_SPACING * (1 << n);
     vec2 pos;
     pos(0) = (fp_t(probe_coord(0)) + FP(0.5)) * probe_spacing;
@@ -124,6 +129,75 @@ YAKL_INLINE i64 probe_linear_index(const CascadeDims& dims, const ProbeIndex& pr
     idx += dim_mul * probe.coord(1);
     return idx;
 }
+
+YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeDims& dims, const ProbeIndex& index) {
+    i64 lin_idx = probe_linear_index(dims, index);
+// #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
+//     return __ldg(casc.data() + lin_idx);
+// #else
+    return casc(lin_idx);
+// #endif
+}
+
+/// Index i for cascade n, ip for n+1. If no n+1, ip=-1
+struct CascadeIdxs {
+    int i;
+    int ip;
+};
+
+YAKL_INLINE CascadeIdxs cascade_indices(const CascadeState& casc, int n) {
+    CascadeIdxs idxs;
+    if constexpr (PINGPONG_BUFFERS) {
+        if (n & 1) {
+            idxs.i = 1;
+            idxs.ip = 0;
+        } else {
+            idxs.i = 0;
+            idxs.ip = 1;
+        }
+    } else {
+        idxs.i = n;
+        idxs.ip = n + 1;
+    }
+
+    if (n == casc.num_cascades) {
+        idxs.ip = -1;
+    }
+    return idxs;
+}
+
+struct IntervalLength {
+    fp_t from;
+    fp_t to;
+};
+
+YAKL_INLINE IntervalLength cascade_interval_length(const CascadeDims& dims, int num_cascades, int n) {
+    IntervalLength length = {
+        .from = PROBE0_LENGTH * ((n == 0) ? FP(0.0) : (1 << (CASCADE_BRANCHING_FACTOR * (n - 1)))),
+        .to = PROBE0_LENGTH * (1 << (CASCADE_BRANCHING_FACTOR * n))
+    };
+    if (LAST_CASCADE_TO_INFTY && n == num_cascades) {
+        length.to = LAST_CASCADE_MAX_DIST;
+    }
+    return length;
+}
+
+YAKL_INLINE RayProps ray_props(const CascadeDims& dims, int num_cascades, int n, const ProbeIndex& probe) {
+    RayProps ray;
+    ray.centre = probe_pos(probe.coord, n);
+
+    fp_t phi = FP(2.0) * FP(M_PI) / fp_t(dims.num_flat_dirs)  * (probe.dir + FP(0.5));
+    ray.dir(0) = std::cos(phi);
+    ray.dir(1) = std::sin(phi);
+
+    IntervalLength length = cascade_interval_length(dims, num_cascades, n);
+    ray.start(0) = ray.centre(0) + ray.dir(0) * length.from;
+    ray.start(1) = ray.centre(1) + ray.dir(1) * length.from;
+    ray.end(0) = ray.centre(0) + ray.dir(0) * length.to;
+    ray.end(1) = ray.centre(1) + ray.dir(1) * length.to;
+    return ray;
+}
+
 
 
 #else

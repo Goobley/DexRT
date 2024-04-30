@@ -23,7 +23,7 @@ constexpr int PROBE0_NUM_RAYS = 4;
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 
 constexpr int CASCADE_BRANCHING_FACTOR = 2;
-constexpr int MAX_LEVEL = 4;
+constexpr int MAX_CASCADE = 4;
 
 constexpr bool LAST_CASCADE_TO_INFTY = true;
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
@@ -33,15 +33,15 @@ constexpr bool BILINEAR_FIX = false;
 constexpr bool PREAVERAGE = false;
 
 constexpr bool USE_MIPMAPS = false;
-constexpr int MIPMAP_FACTORS[MAX_LEVEL+1] = {0, 0, 1, 1, 1};
+constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
 
 constexpr bool PINGPONG_BUFFERS = false;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 constexpr bool USE_BC = false;
-constexpr bool PWBC_USE_VECTOR_FORM = false;
-constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = false;
-constexpr bool PWBC_SAMPLE_CONE = true;
+constexpr bool PWBC_USE_VECTOR_FORM = true;
+constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
+constexpr bool PWBC_SAMPLE_CONE = false;
 
 // #define FLATLAND
 #ifdef FLATLAND

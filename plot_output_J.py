@@ -48,8 +48,8 @@ if __name__ == "__main__":
         vturb=vturb,
         ne=ne,
         nHTot=nhtot,
-        # lowerBc=pw.UniformJPromBc("filament", bc_provider=bc_provider, altitude_m=ds["offset_z"][...]),
-        lowerBc=lw.ZeroRadiation(),
+        lowerBc=pw.UniformJPromBc("filament", bc_provider=bc_provider, altitude_m=ds["offset_z"][...]),
+        # lowerBc=lw.ZeroRadiation(),
         upperBc=lw.ZeroRadiation(),
     )
     atmos.quadrature(10)
@@ -68,7 +68,7 @@ if __name__ == "__main__":
     ctx.background.sca[...] = 0.0
     ctx.depthData.fill = True
     ctx.formal_sol_gamma_matrices()
-    lw.iterate_ctx_se(ctx, popsTol=1e-2, JTol=1.0)
+    # lw.iterate_ctx_se(ctx, popsTol=1e-2, JTol=1.0)
     slice_idx = 0
     J_slice = (ctx.spect.J[:, ctx.spect.J.shape[1] - slice_idx - 1] << u.Unit("W / (m2 Hz sr)")).to("kW / (m2 nm sr)", equivalencies=u.spectral_density(ctx.spect.wavelength * u.nm))
 

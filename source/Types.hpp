@@ -40,6 +40,55 @@ using yakl::c::parallel_for;
 using yakl::c::SimpleBounds;
 using yakl::Dims;
 
+struct CascadeDims {
+    ivec2 num_probes;
+    int num_flat_dirs;
+    int wave_batch;
+    int num_incl;
+};
+
+struct InclQuadrature {
+    Fp1d muy;
+    Fp1d wmuy;
+};
+
+struct RadianceInterval {
+    fp_t I = FP(0.0);
+    fp_t tau = FP(0.0);
+};
+
+struct RayProps {
+    vec2 start;
+    vec2 end;
+    vec2 dir;
+    vec2 centre;
+};
+
+struct CascadeState {
+    int num_cascades;
+    std::vector<Fp1d> i_cascades;
+    std::vector<Fp1d> tau_cascades;
+    Fp3d eta; // [z, x, wave]
+    Fp3d chi; // [z, x, wave]
+};
+
+struct DeviceCascadeState {
+    int num_cascades;
+    int n;
+    Fp1d cascade_I;
+    Fp1d cascade_tau;
+    FpConst1d upper_I;
+    FpConst1d upper_tau;
+    Fp3d eta; // [z, x, wave]
+    Fp3d chi; // [z, x, wave]
+};
+
+template <typename Bc>
+struct CascadeStateAndBc {
+    DeviceCascadeState state;
+    Bc bc;
+};
+
 struct Atmosphere {
     fp_t voxel_scale;
     fp_t offset_x = FP(0.0);
@@ -73,7 +122,7 @@ struct MipmapState {
     Fp3d absorption;
     std::vector<Fp3d> emission_mipmaps;
     std::vector<Fp3d> absorption_mipmaps;
-    yakl::SArray<int, 1, MAX_LEVEL+1> cumulative_mipmap_factor;
+    yakl::SArray<int, 1, MAX_CASCADE+1> cumulative_mipmap_factor;
 };
 
 struct CascadeRTState {

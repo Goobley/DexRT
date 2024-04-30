@@ -5,12 +5,18 @@
 #include "Voigt.hpp"
 #include "LteHPops.hpp"
 #include "PromweaverBoundary.hpp"
+#include "ZeroBoundary.hpp"
 #include <magma_v2.h>
 
+enum class BoundaryType {
+    Zero,
+    Promweaver,
+};
+
 struct State {
-    std::vector<Fp5d> cascades;
-    MipmapState raymarch_state;
+    CascadeDims c0_size;
     Atmosphere atmos;
+    InclQuadrature incl_quad;
     CompAtom<fp_t> atom;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
@@ -20,6 +26,8 @@ struct State {
     Fp3d alo; /// [x, y, az]
     Fp4d Gamma; /// [i, j, x, y]
     PwBc<> pw_bc;
+    ZeroBc zero_bc;
+    BoundaryType boundary;
     magma_queue_t magma_queue;
 };
 

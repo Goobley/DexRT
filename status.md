@@ -60,3 +60,4 @@ Formalising coordinate system
 - z up, x default perpendicular axis, y as per right-hand rule
 - Storage is as [z, x] or [z, y, x]
 - These correspond to probes v, u in 2D, and w, v, u in 3D.
+- Indexing as wave typically implies the member of a batch, and la the index into the wavelength array

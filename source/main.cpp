@@ -4,16 +4,15 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "State.hpp"
+#include "CascadeState.hpp"
 #include "Utils.hpp"
 #include "Atmosphere.hpp"
 #include "Populations.hpp"
-#include "RadianceCascades.hpp"
 #include "RadianceCascades2.hpp"
 #include "CrtafParser.hpp"
 #include "Collisions.hpp"
 #include "Voigt.hpp"
 #include "StaticFormalSolution.hpp"
-#include "DynamicFormalSolution.hpp"
 #include "GammaMatrix.hpp"
 #include "PromweaverBoundary.hpp"
 #ifdef HAVE_MPI
@@ -378,8 +377,8 @@ void init_state (State* state) {
         const auto space_dims = atmos.temperature.get_dimensions();
         space_x = space_dims(0);
         space_y = space_dims(1);
-        cascade_0_x_probes = space_dims(0) / PROBE0_SPACING;
-        cascade_0_z_probes = space_dims(1) / PROBE0_SPACING;
+        cascade_0_x_probes = space_dims(1) / PROBE0_SPACING;
+        cascade_0_z_probes = space_dims(0) / PROBE0_SPACING;
         // TODO(cmo): Need to decide whether to allow non-probe 1 spacing... it
         // probably doesn't make sense for us to have any interest in the level
         // populations not on a probe - we don't have any way to compute this outside LTE.
@@ -396,206 +395,68 @@ void init_state (State* state) {
         state->Gamma = decltype(state->Gamma)("Gamma", n_level, n_level, space_x, space_y);
 
         state->pw_bc = load_bc(ATMOS_PATH, state->atom.wavelength);
+        if constexpr (USE_BC) {
+            state->boundary = BoundaryType::Promweaver;
+        } else {
+            state->boundary = BoundaryType::Zero;
+        }
     } else {
         space_x = MODEL_X;
         space_y = MODEL_Y;
         cascade_0_x_probes = MODEL_X / PROBE0_SPACING;
         cascade_0_z_probes = MODEL_Y / PROBE0_SPACING;
+        state->boundary = BoundaryType::Zero;
     }
 
-    // NOTE(cmo): Allocate cascades
-    if constexpr (PINGPONG_BUFFERS) {
-        int64_t cascade_alloc_entries = int64_t(cascade_0_x_probes) * int64_t(cascade_0_z_probes) * PROBE0_NUM_RAYS * NUM_COMPONENTS * NUM_INCL;
-        for (int l = 0; l < MAX_LEVEL + 1; ++l) {
-            int64_t x_dim = cascade_0_x_probes / (1 << l);
-            int64_t z_dim = cascade_0_z_probes / (1 << l);
-            int64_t ray_dim = PROBE0_NUM_RAYS * (1 << (l * CASCADE_BRANCHING_FACTOR));
-            int64_t cascade_size = (
-                x_dim *
-                z_dim *
-                ray_dim *
-                NUM_COMPONENTS * NUM_INCL
-            );
-            if (cascade_size > cascade_alloc_entries) {
-                throw std::runtime_error(fmt::format(
-                    "Cascade {} (with {} entries), too large for pingpong buffer ({} entries). Use a power of 2 size!",
-                    l,
-                    cascade_size,
-                    cascade_alloc_entries
-                ));
-            }
-            fp_t prev_radius = 0;
-            if (l != 0) {
-                prev_radius = PROBE0_LENGTH * (1 << ((l-1) * CASCADE_BRANCHING_FACTOR));
-            }
-            fp_t radius = PROBE0_LENGTH * (1 << (l * CASCADE_BRANCHING_FACTOR));
-            fmt::print("[{}, {}, {}, {}->{}]\n", x_dim, z_dim, ray_dim, prev_radius, radius);
-        }
-        for (int i = 0; i < 2; ++i) {
-            state->cascades.push_back(
-                Fp5d(
-                    "cascade",
-                    cascade_0_x_probes,
-                    cascade_0_z_probes,
-                    PROBE0_NUM_RAYS,
-                    NUM_COMPONENTS,
-                    NUM_INCL
-                )
-            );
-            state->cascades.back() = FP(0.0);
-        }
-    } else {
-        for (int l = 0; l < MAX_LEVEL + 1; ++l) {
-            state->cascades.push_back(
-                Fp5d(
-                    "cascade",
-                    cascade_0_x_probes / (1 << l),
-                    cascade_0_z_probes / (1 << l),
-                    PROBE0_NUM_RAYS * (1 << (l * CASCADE_BRANCHING_FACTOR)),
-                    NUM_COMPONENTS,
-                    NUM_INCL
-                )
-            );
+    state->c0_size.num_probes(0) = cascade_0_x_probes;
+    state->c0_size.num_probes(1) = cascade_0_z_probes;
+    state->c0_size.num_flat_dirs = PROBE0_NUM_RAYS;
+    state->c0_size.num_incl = NUM_INCL;
+    state->c0_size.wave_batch = WAVE_BATCH;
 
-            auto casc = state->cascades[l];
-            auto dims = casc.get_dimensions();
-            fp_t prev_radius = 0;
-            if (l != 0) {
-                prev_radius = PROBE0_LENGTH * (1 << ((l-1) * CASCADE_BRANCHING_FACTOR));
-            }
-            fp_t radius = PROBE0_LENGTH * (1 << (l * CASCADE_BRANCHING_FACTOR));
-            fmt::print("[{}, {}, {}, {}->{}]\n", dims(0), dims(1), dims(2), prev_radius, radius);
-            casc = FP(0.0);
-        }
+    Fp1dHost muy("muy", NUM_INCL);
+    Fp1dHost wmuy("wmuy", NUM_INCL);
+    for (int i = 0; i < NUM_INCL; ++i) {
+        muy(i) = INCL_RAYS[i];
+        wmuy(i) = INCL_WEIGHTS[i];
     }
-
-    auto& march_state = state->raymarch_state;
-    march_state.emission = Fp3d("emission_map", space_x, space_y, NUM_WAVELENGTHS);
-    march_state.absorption = Fp3d("absorption_map", space_x, space_y, NUM_WAVELENGTHS);
-
-    if constexpr (!USE_ATMOSPHERE) {
-        const auto& emission = march_state.emission;
-        parallel_for(
-            SimpleBounds<2>(space_x, space_y),
-            YAKL_LAMBDA (int x, int y) {
-                for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-                    emission(x, y, i) = FP(0.0);
-                }
-
-                // model_original(emission, x, y);
-                // model_A(emission, x, y);
-                // model_B(emission, x, y);
-                LIGHT_MODEL(emission, x, y);
-            }
-        );
-
-        const auto& chi = march_state.absorption;
-        parallel_for(
-            SimpleBounds<2>(space_x, space_y),
-            YAKL_LAMBDA (int x, int y) {
-#ifndef ABSORPTION_MODEL
-                LIGHT_MODEL(chi, x, y);
-                for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-                    if (chi(x, y, i) == FP(0.0)) {
-                        chi(x, y, i) = FP(1e-10);
-                    } else if (chi(x, y, i) == FP(1e-6)) {
-                        chi(x, y, i) = FP(3.0)true;
-                    } else {
-                        chi(x, y, i) /= FP(2.0);
-                    }
-                }
-#else
-                ABSORPTION_MODEL(chi, x, y);
-#endif
-            }
-        );
-        yakl::fence();
-    }
-
-
-    // NOTE(cmo): Allocate mipmaps if we're using them
-    if constexpr (USE_MIPMAPS) {
-        march_state.emission_mipmaps = std::vector<Fp3d>(MAX_LEVEL+1);
-        auto& emission_mipmaps = march_state.emission_mipmaps;
-        march_state.absorption_mipmaps = std::vector<Fp3d>(MAX_LEVEL+1);
-        auto& absorption_mipmaps = march_state.absorption_mipmaps;
-        march_state.cumulative_mipmap_factor = 0;
-
-        auto curr_em = march_state.emission;
-        auto curr_ab = march_state.absorption;
-
-        for (int i = 0; i <= MAX_LEVEL; ++i) {
-            if (MIPMAP_FACTORS[i] == 0) {
-                emission_mipmaps[i] = curr_em;
-                absorption_mipmaps[i] = curr_ab;
-                if (i == 0) {
-                    march_state.cumulative_mipmap_factor(i) = 0;
-                } else {
-                    march_state.cumulative_mipmap_factor(i) = march_state.cumulative_mipmap_factor(i-1);
-                }
-            } else {
-                int factor = MIPMAP_FACTORS[i];
-                if (i == 0) {
-                    march_state.cumulative_mipmap_factor(i) = factor;
-                } else {
-                    march_state.cumulative_mipmap_factor(i) = march_state.cumulative_mipmap_factor(i-1) + factor;
-                }
-
-                auto dims = curr_em.get_dimensions();
-                Fp3d new_em = Fp3d("emission_mipmap", dims(0) / (1 << factor), dims(1) / (1 << factor), dims(2));
-                Fp3d new_ab = Fp3d("absorption_mipmap", dims(0) / (1 << factor), dims(1) / (1 << factor), dims(2));
-                auto new_dims = new_em.get_dimensions();
-
-                if constexpr (!USE_ATMOSPHERE) {
-                    // NOTE(cmo): Very basic averaging approach
-                    parallel_for(
-                        SimpleBounds<2>(new_dims(0), new_dims(1)),
-                        YAKL_LAMBDA (int x, int y) {
-                            mipmap_arr(curr_em, new_em, factor, x, y);
-                        }
-                    );
-                    parallel_for(
-                        SimpleBounds<2>(new_dims(0), new_dims(1)),
-                        YAKL_LAMBDA (int x, int y) {
-                            mipmap_arr(curr_ab, new_ab, factor, x, y);
-                        }
-                    );
-                    yakl::fence();
-                }
-
-                emission_mipmaps[i] = new_em;
-                absorption_mipmaps[i] = new_ab;
-
-                curr_em = new_em;
-                curr_ab = new_ab;
-            }
-        }
-    }
-
+    state->incl_quad.muy = muy.createDeviceCopy();
+    state->incl_quad.wmuy = wmuy.createDeviceCopy();
 }
 
-FpConst3d final_cascade_to_J(const FpConst5d& final_cascade, const Fp3d* J_current=nullptr, int J_offset=0) {
-    // [x, y, ray, wave*2, az]
-    auto dims = final_cascade.get_dimensions();
-    auto az_weights = get_az_weights();
-    Fp3d J;
-    if (J_current) {
-        assert((dims(3) / 2 == 1) && "Got multiple wavelength entries when updating in existing J array, expect one at a time.");
-        auto temp = J_current->slice<2>({J_offset, yakl::COLON, yakl::COLON});
-        J = Fp3d("J_3d_nonown", temp.get_data(), 1, J_current->extent(1), J_current->extent(2));
-        J = FP(0.0);
-    } else {
-        J = Fp3d("J", dims(3) / 2, dims(0), dims(1));
-        J = FP(0.0);
-    }
-    yakl::fence();
-    const fp_t angular_weight = FP(1.0) / fp_t(dims(2));
+FpConst3d final_cascade_to_J(
+    const FpConst1d& final_cascade,
+    const CascadeDims& c0_dims,
+    const Fp3d& J,
+    const InclQuadrature incl_quad,
+    int la_start,
+    int la_end
+) {
+    const fp_t phi_weight = FP(1.0) / fp_t(c0_dims.num_flat_dirs);
+    int wave_batch = la_end - la_start;
+
     parallel_for(
         "final_cascade_to_J",
-        SimpleBounds<5>(dims(0), dims(1), dims(2), dims(3) / 2, dims(4)),
-        YAKL_LAMBDA (int x, int y, int ray_idx, int la, int r) {
-            fp_t ray_weight = angular_weight * az_weights(r);
-            yakl::atomicAdd(J(la, x, y), ray_weight * final_cascade(x, y, ray_idx, 2 * la, r));
+        SimpleBounds<5>(
+            c0_dims.num_probes(1),
+            c0_dims.num_probes(0),
+            c0_dims.num_flat_dirs,
+            wave_batch,
+            c0_dims.num_incl),
+        YAKL_LAMBDA (int z, int x, int phi_idx, int wave, int theta_idx) {
+            fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
+            int la = la_start + wave;
+            ivec2 coord;
+            coord(0) = x;
+            coord(1) = z;
+            ProbeIndex idx{
+                .coord=coord,
+                .dir=phi_idx,
+                .incl=theta_idx,
+                .wave=wave
+            };
+            const fp_t sample = probe_fetch(final_cascade, c0_dims, idx);
+            yakl::atomicAdd(J(la, z, x), ray_weight * sample);
         }
     );
     return J;
@@ -611,12 +472,12 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
     auto eta_dims = eta.get_dimensions();
     fmt::println("J: ({} {} {})", dims(0), dims(1), dims(2));
     fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
-    nc.write(J, "image", {"wavelength", "x", "y"});
+    nc.write(J, "image", {"wavelength", "z", "x"});
     if (USE_ATMOSPHERE) {
-        nc.write(eta, "eta", {"x", "y", "chan"});
-        nc.write(chi, "chi", {"x", "y", "chan"});
+        nc.write(eta, "eta", {"z", "x", "wave_batch"});
+        nc.write(chi, "chi", {"z", "x", "wave_batch"});
         nc.write(wavelengths, "wavelength", {"wavelength"});
-        nc.write(pops, "pops", {"level", "x", "y"});
+        nc.write(pops, "pops", {"level", "z", "x"});
         if (casc.initialized()) {
             nc.write(casc, "cascade", {"u", "v", "ray_idx", "comp", "incl"});
         }
@@ -652,29 +513,24 @@ int main(int argc, char** argv) {
 
         // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if not using an atmosphere
         init_state(&state);
-        if constexpr (USE_MIPMAPS) {
-            for (int i = 0; i < MAX_LEVEL+1; ++i) {
-                auto dims = state.raymarch_state.emission_mipmaps[i].get_dimensions();
-                fmt::println("Cascade {} mipmap: ({}, {}, {})", i, dims(0), dims(1), dims(2));
-            }
-        }
+        CascadeState casc_state = CascadeState_new(state.c0_size, MAX_CASCADE);
 
-        if constexpr (!USE_ATMOSPHERE) {
-            for (int i = MAX_LEVEL; i >= 0; --i) {
-                if constexpr (BILINEAR_FIX) {
-                    compute_cascade_i_bilinear_fix_2d(&state, i);
-                } else {
-                    compute_cascade_i_2d(&state, i);
-                }
-                yakl::fence();
-            }
-            auto J = final_cascade_to_J(state.cascades[0]);
-            FpConst3d dummy_eta, dummy_chi, dummy_pops;
-            FpConst1d dummy_wave;
-            save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
-        } else {
+        // if constexpr (!USE_ATMOSPHERE) {
+        //     for (int i = MAX_LEVEL; i >= 0; --i) {
+        //         if constexpr (BILINEAR_FIX) {
+        //             compute_cascade_i_bilinear_fix_2d(&state, i);
+        //         } else {
+        //             compute_cascade_i_2d(&state, i);
+        //         }
+        //         yakl::fence();
+        //     }
+        //     auto J = final_cascade_to_J(state.cascades[0]);
+        //     FpConst3d dummy_eta, dummy_chi, dummy_pops;
+        //     FpConst1d dummy_wave;
+        //     save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
+        // } else {
             compute_lte_pops(&state);
-            constexpr bool non_lte = true;
+            constexpr bool non_lte = false;
             constexpr bool static_soln = true;
             auto flat_Gamma = state.Gamma.reshape<3>(Dims(
                 state.Gamma.extent(0),
@@ -683,52 +539,63 @@ int main(int argc, char** argv) {
             ));
 
             auto waves = state.atom.wavelength.createHostCopy();
-            auto fs_fn = dynamic_formal_sol_rc;
-            if (static_soln) {
-                fs_fn = static_formal_sol_rc;
-            }
+            // auto fs_fn = dynamic_formal_sol_rc;
+            // if (static_soln) {
+            //     fs_fn = static_formal_sol_rc;
+            // }
+            auto fs_fn = static_formal_sol_rc;
             fp_t max_change = FP(1.0);
-            if (non_lte) {
-                constexpr int max_iters = 300;
-                int i = 0;
-                while (max_change > FP(1e-2) && i < max_iters) {
-                    fmt::println("FS {}", i);
-                    compute_collisions_to_gamma(&state);
-                    yakl::fence();
-                    for (int la = 0; la < waves.extent(0); ++la) {
-                        // fmt::println("Computing wavelength {} ({})", la, waves(la));
-                        fs_fn(&state, la);
-                        final_cascade_to_J(state.cascades[0], &state.J, la);
-                    }
-                    // NOTE(cmo): Fixup now done in stateq
-                    // fixup_gamma(flat_Gamma);
-                    yakl::fence();
-                    fmt::println("Stat eq");
-                    max_change = stat_eq<f64>(&state);
-                    i += 1;
+            // if (non_lte) {
+            //     constexpr int max_iters = 300;
+            //     int i = 0;
+            //     while (max_change > FP(1e-2) && i < max_iters) {
+            //         fmt::println("FS {}", i);
+            //         compute_collisions_to_gamma(&state);
+            //         yakl::fence();
+            //         for (int la = 0; la < waves.extent(0); ++la) {
+            //             // fmt::println("Computing wavelength {} ({})", la, waves(la));
+            //             fs_fn(state, la);
+            //             final_cascade_to_J(state.cascades[0], &state.J, la);
+            //         }
+            //         // NOTE(cmo): Fixup now done in stateq
+            //         // fixup_gamma(flat_Gamma);
+            //         yakl::fence();
+            //         fmt::println("Stat eq");
+            //         max_change = stat_eq<f64>(&state);
+            //         i += 1;
+            //     }
+            //     int la = 55;
+            //     fs_fn(&state, la);
+            //     final_cascade_to_J(state.cascades[0], &state.J, la);
+            // } else {
+                for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
+                    int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
+                    fmt::println(
+                        "Computing wavelengths [{}, {}] ({}, {})",
+                        la_start,
+                        la_end,
+                        waves(la_start),
+                        waves(la_end-1)
+                    );
+                    fs_fn(state, casc_state, la_start, la_end);
+                    final_cascade_to_J(
+                        casc_state.i_cascades[0],
+                        state.c0_size,
+                        state.J,
+                        state.incl_quad,
+                        la_start,
+                        la_end
+                    );
                 }
-                int la = 55;
-                fs_fn(&state, la);
-                final_cascade_to_J(state.cascades[0], &state.J, la);
-            } else {
-                for (int la = 0; la < waves.extent(0); ++la) {
-                    fmt::println("Computing wavelength {} ({})", la, waves(la));
-                    fs_fn(&state, la);
-                    final_cascade_to_J(state.cascades[0], &state.J, la);
-                }
-                int la = 55;
-                fs_fn(&state, la);
-                final_cascade_to_J(state.cascades[0], &state.J, la);
-            }
+            // }
             save_results(
                 state.J,
-                state.raymarch_state.emission,
-                state.raymarch_state.absorption,
+                casc_state.eta,
+                casc_state.chi,
                 state.atom.wavelength,
-                state.pops,
-                state.cascades[state.cascades.size()-1]
+                state.pops
             );
-        }
+        // }
         magma_queue_destroy(state.magma_queue);
     }
     magma_finalize();
