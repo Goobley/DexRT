@@ -209,8 +209,8 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
     );
     yakl::fence();
     // NOTE(cmo): Compute RC FS
-    constexpr int RcModeBc = USE_BC ? RC_SAMPLE_BC : 0;
-    constexpr int RcModeNoBc = 0;
+    constexpr int RcModeBc = (USE_BC ? RC_SAMPLE_BC : 0) | (PREAVERAGE ? RC_PREAVERAGE : 0);
+    constexpr int RcModeNoBc = PREAVERAGE ? RC_PREAVERAGE : 0;
     cascade_i_25d<RcModeBc>(
         state,
         casc_state,

@@ -2,13 +2,13 @@
 #define DEXRT_UTILS_MODES_HPP
 #include "Types.hpp"
 #include "State.hpp"
-// #include "RayMarching2.hpp"
 
 constexpr int RC_DYNAMIC = 0x1;
-constexpr int RC_SAMPLE_BC = 0x2;
+constexpr int RC_PREAVERAGE = 0x2;
+constexpr int RC_SAMPLE_BC = 0x4;
 
-YAKL_INLINE CascadeDims cascade_size(const CascadeDims& c0, int n) {
-    CascadeDims c;
+YAKL_INLINE CascadeStorage cascade_size(const CascadeStorage& c0, int n) {
+    CascadeStorage c;
     c.num_probes(0) = std::max(1, (c0.num_probes(0) >> n));
     c.num_probes(1) = std::max(1, (c0.num_probes(1) >> n));
     c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
@@ -17,7 +17,48 @@ YAKL_INLINE CascadeDims cascade_size(const CascadeDims& c0, int n) {
     return c;
 }
 
-YAKL_INLINE i64 cascade_entries(const CascadeDims& c) {
+YAKL_INLINE CascadeRays cascade_compute_size(const CascadeRays& c0, int n) {
+    CascadeRays c;
+    c.num_probes(0) = std::max(1, (c0.num_probes(0) >> n));
+    c.num_probes(1) = std::max(1, (c0.num_probes(1) >> n));
+    c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
+    c.num_incl = c0.num_incl;
+    c.wave_batch = c0.wave_batch;
+    return c;
+}
+
+template <bool Preaverage>
+YAKL_INLINE CascadeRays cascade_compute_size(const CascadeStorage& c0, int n) {
+    CascadeRays c;
+    c.num_probes(0) = std::max(1, (c0.num_probes(0) >> n));
+    c.num_probes(1) = std::max(1, (c0.num_probes(1) >> n));
+    if constexpr (Preaverage) {
+        c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * (n + 1)));
+    } else {
+        c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
+    }
+    c.num_incl = c0.num_incl;
+    c.wave_batch = c0.wave_batch;
+    return c;
+}
+
+template <bool Preaverage>
+YAKL_INLINE CascadeStorage cascade_rays_to_storage(const CascadeRays& r) {
+    CascadeStorage c;
+    c.num_probes(0) = r.num_probes(0);
+    c.num_probes(1) = r.num_probes(1);
+    if constexpr (Preaverage) {
+        c.num_flat_dirs = r.num_flat_dirs / (1 << CASCADE_BRANCHING_FACTOR);
+    } else {
+        c.num_flat_dirs = r.num_flat_dirs;
+    }
+    c.num_incl = r.num_incl;
+    c.wave_batch = r.wave_batch;
+    return c;
+}
+
+
+YAKL_INLINE i64 cascade_entries(const CascadeStorage& c) {
     i64 result = c.num_probes(0);
     result *= c.num_probes(1);
     result *= c.num_flat_dirs;
@@ -66,13 +107,13 @@ YAKL_INLINE ivec2 bilinear_offset() {
     return result;
 };
 
-YAKL_INLINE ivec2 bilinear_offset(const BilinearCorner& bilin, const CascadeDims& dims, int sample) {
+YAKL_INLINE ivec2 bilinear_offset(const BilinearCorner& bilin, const ivec2& num_probes, int sample) {
     const bool u0 = bilin.corner(0) == 0;
-    const bool u_max = bilin.corner(0) == (dims.num_probes(0) - 1);
+    const bool u_max = bilin.corner(0) == (num_probes(0) - 1);
     const bool u_clamp = (u0 || u_max);
 
     const bool v0 = bilin.corner(1) == 0;
-    const bool v_max = bilin.corner(1) == (dims.num_probes(1) - 1);
+    const bool v_max = bilin.corner(1) == (num_probes(1) - 1);
     const bool v_clamp = (v0 || v_max);
     switch (sample) {
         case 0: {
@@ -114,7 +155,7 @@ struct ProbeIndex {
     int wave;
 };
 
-YAKL_INLINE i64 probe_linear_index(const CascadeDims& dims, const ProbeIndex& probe) {
+YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeIndex& probe) {
     // NOTE(cmo): probe_coord is stored as [u, v], but these are stored in the buffer as [v, u]
     // Current cascade storage is [v, u, ray, wave, incl] to give coalesced warp access
 
@@ -130,8 +171,24 @@ YAKL_INLINE i64 probe_linear_index(const CascadeDims& dims, const ProbeIndex& pr
     return idx;
 }
 
-YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeDims& dims, const ProbeIndex& index) {
+template <bool Preaverage>
+YAKL_INLINE i64 probe_linear_index(const CascadeRays& dims, const ProbeIndex& probe) {
+    CascadeStorage storage = cascade_rays_to_storage<Preaverage>(dims);
+    return probe_linear_index(storage, probe);
+}
+
+YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeStorage& dims, const ProbeIndex& index) {
     i64 lin_idx = probe_linear_index(dims, index);
+// #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
+//     return __ldg(casc.data() + lin_idx);
+// #else
+    return casc(lin_idx);
+// #endif
+}
+
+template <bool Preaverage>
+YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeRays& dims, const ProbeIndex& index) {
+    i64 lin_idx = probe_linear_index<Preaverage>(dims, index);
 // #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
 //     return __ldg(casc.data() + lin_idx);
 // #else
@@ -171,7 +228,7 @@ struct IntervalLength {
     fp_t to;
 };
 
-YAKL_INLINE IntervalLength cascade_interval_length(const CascadeDims& dims, int num_cascades, int n) {
+YAKL_INLINE IntervalLength cascade_interval_length(int num_cascades, int n) {
     IntervalLength length = {
         .from = PROBE0_LENGTH * ((n == 0) ? FP(0.0) : (1 << (CASCADE_BRANCHING_FACTOR * (n - 1)))),
         .to = PROBE0_LENGTH * (1 << (CASCADE_BRANCHING_FACTOR * n))
@@ -182,7 +239,7 @@ YAKL_INLINE IntervalLength cascade_interval_length(const CascadeDims& dims, int 
     return length;
 }
 
-YAKL_INLINE RayProps ray_props(const CascadeDims& dims, int num_cascades, int n, const ProbeIndex& probe) {
+YAKL_INLINE RayProps ray_props(const CascadeRays& dims, int num_cascades, int n, const ProbeIndex& probe) {
     RayProps ray;
     ray.centre = probe_pos(probe.coord, n);
 
@@ -190,7 +247,7 @@ YAKL_INLINE RayProps ray_props(const CascadeDims& dims, int num_cascades, int n,
     ray.dir(0) = std::cos(phi);
     ray.dir(1) = std::sin(phi);
 
-    IntervalLength length = cascade_interval_length(dims, num_cascades, n);
+    IntervalLength length = cascade_interval_length(num_cascades, n);
     ray.start(0) = ray.centre(0) + ray.dir(0) * length.from;
     ray.start(1) = ray.centre(1) + ray.dir(1) * length.from;
     ray.end(0) = ray.centre(0) + ray.dir(0) * length.to;

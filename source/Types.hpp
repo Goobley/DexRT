@@ -40,7 +40,16 @@ using yakl::c::parallel_for;
 using yakl::c::SimpleBounds;
 using yakl::Dims;
 
-struct CascadeDims {
+// NOTE(cmo): The texel setup for a cascade
+struct CascadeStorage {
+    ivec2 num_probes;
+    int num_flat_dirs;
+    int wave_batch;
+    int num_incl;
+};
+
+// NOTE(cmo): The rays in a cascade
+struct CascadeRays {
     ivec2 num_probes;
     int num_flat_dirs;
     int wave_batch;

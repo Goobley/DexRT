@@ -88,6 +88,9 @@ YAKL_INLINE fp_t sample_boundary(
 ) {
     fp_t mu_sample;
     if constexpr (PWBC_USE_VECTOR_FORM) {
+        if constexpr (!PWBC_CONSIDER_HORIZONTAL_OFFSET) {
+            at(0) = FP(0.0);
+        }
         mu_sample = vector_chromo_ray_mu(at, dir);
     } else {
         const fp_t alt = at(2);

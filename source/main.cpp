@@ -408,11 +408,14 @@ void init_state (State* state) {
         state->boundary = BoundaryType::Zero;
     }
 
-    state->c0_size.num_probes(0) = cascade_0_x_probes;
-    state->c0_size.num_probes(1) = cascade_0_z_probes;
-    state->c0_size.num_flat_dirs = PROBE0_NUM_RAYS;
-    state->c0_size.num_incl = NUM_INCL;
-    state->c0_size.wave_batch = WAVE_BATCH;
+    CascadeRays c0_rays;
+    c0_rays.num_probes(0) = cascade_0_x_probes;
+    c0_rays.num_probes(1) = cascade_0_z_probes;
+    c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
+    c0_rays.num_incl = NUM_INCL;
+    c0_rays.wave_batch = WAVE_BATCH;
+
+    state->c0_size = cascade_rays_to_storage<PREAVERAGE>(c0_rays);
 
     Fp1dHost muy("muy", NUM_INCL);
     Fp1dHost wmuy("wmuy", NUM_INCL);
@@ -426,7 +429,7 @@ void init_state (State* state) {
 
 FpConst3d final_cascade_to_J(
     const FpConst1d& final_cascade,
-    const CascadeDims& c0_dims,
+    const CascadeStorage& c0_dims,
     const Fp3d& J,
     const InclQuadrature incl_quad,
     int la_start,

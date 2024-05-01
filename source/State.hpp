@@ -14,7 +14,7 @@ enum class BoundaryType {
 };
 
 struct State {
-    CascadeDims c0_size;
+    CascadeStorage c0_size;
     Atmosphere atmos;
     InclQuadrature incl_quad;
     CompAtom<fp_t> atom;

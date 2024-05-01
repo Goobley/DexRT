@@ -4,7 +4,7 @@
 #include "State.hpp"
 #include "RcUtilsModes.hpp"
 
-inline CascadeState CascadeState_new(const CascadeDims& c0, int num_cascades) {
+inline CascadeState CascadeState_new(const CascadeStorage& c0, int num_cascades) {
     CascadeState result;
     if constexpr (PINGPONG_BUFFERS) {
         i64 max_entries = 0;

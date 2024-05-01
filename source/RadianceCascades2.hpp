@@ -17,7 +17,7 @@ struct RaymarchParams {
 template <int RcMode=0, typename Bc>
 YAKL_INLINE RadianceInterval march_and_merge_average_interval(
     const CascadeStateAndBc<Bc>& casc_state,
-    const CascadeDims& dims,
+    const CascadeStorage& dims,
     const ProbeIndex& this_probe,
     RayProps ray,
     const RaymarchParams& params
@@ -35,8 +35,13 @@ YAKL_INLINE RadianceInterval march_and_merge_average_interval(
             .offset = params.offset,
         }
     );
+    constexpr bool preaverage = RcMode & RC_PREAVERAGE;
 
-    const int num_rays_per_ray = 1 << CASCADE_BRANCHING_FACTOR;
+    int num_rays_per_ray = 1 << CASCADE_BRANCHING_FACTOR;
+    if constexpr (preaverage) {
+        num_rays_per_ray = 1;
+    }
+
     const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
@@ -46,9 +51,9 @@ YAKL_INLINE RadianceInterval march_and_merge_average_interval(
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau);
         // NOTE(cmo): The cascade_size function works with any cascade and a relative level offset for n.
-        CascadeDims upper_dims = cascade_size(dims, 1);
+        CascadeStorage upper_dims = cascade_size(dims, 1);
         for (int bilin = 0; bilin < 4; ++bilin) {
-            ivec2 bilin_offset = bilinear_offset(base, upper_dims, bilin);
+            ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, bilin);
             for (
                 int upper_ray_idx = upper_ray_start_idx;
                 upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
@@ -96,8 +101,10 @@ void cascade_i_25d(
         .eta = casc_state.eta,
         .chi = casc_state.chi,
     };
+    constexpr bool preaverage = RcMode & RC_PREAVERAGE;
 
-    CascadeDims dims = cascade_size(state.c0_size, cascade_idx);
+    CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
+    CascadeRays ray_set = cascade_compute_size<preaverage>(state.c0_size, cascade_idx);
     int wave_batch = la_end - la_start;
 
     auto offset = get_offsets(atmos);
@@ -116,65 +123,77 @@ void cascade_i_25d(
             probe_coord(0) = u;
             probe_coord(1) = v;
 
-            ProbeIndex probe_idx{
+            RadianceInterval average_ri{};
+            const int num_rays_per_texel = ray_set.num_flat_dirs / dims.num_flat_dirs;
+            const fp_t sample_weight = FP(1.0) / fp_t(num_rays_per_texel);
+            for (int i = 0; i < num_rays_per_texel; ++i) {
+                ProbeIndex probe_idx{
+                    .coord=probe_coord,
+                    .dir=phi_idx * num_rays_per_texel + i,
+                    .incl=theta_idx,
+                    .wave=wave
+                };
+                RayProps ray = ray_props(ray_set, dev_casc_state.num_cascades, cascade_idx, probe_idx);
+                RaymarchParams params {
+                    .distance_scale = atmos.voxel_scale,
+                    .incl = incl_quad.muy(theta_idx),
+                    .incl_weight = incl_quad.wmuy(theta_idx),
+                    .la = la_start + wave,
+                    .offset = offset
+                };
+
+                RadianceInterval ri;
+                BoundaryType boundary = state.boundary;
+                auto& casc_dims = dims;
+                if constexpr (RcMode && RC_SAMPLE_BC) {
+                    switch (boundary) {
+                        case BoundaryType::Zero: {
+                            auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, state);
+                            ri = march_and_merge_average_interval<RcMode>(
+                                casc_and_bc,
+                                casc_dims,
+                                probe_idx,
+                                ray,
+                                params
+                            );
+                        } break;
+                        case BoundaryType::Promweaver: {
+                            auto casc_and_bc = get_bc<PwBc<>>(dev_casc_state, state);
+                            ri = march_and_merge_average_interval<RcMode>(
+                                casc_and_bc,
+                                casc_dims,
+                                probe_idx,
+                                ray,
+                                params
+                            );
+                        } break;
+                        default: {
+                            assert(false && "Unknown BC type");
+                        }
+                    }
+                } else {
+                    auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, state);
+                    ri = march_and_merge_average_interval<RcMode>(
+                        casc_and_bc,
+                        casc_dims,
+                        probe_idx,
+                        ray,
+                        params
+                    );
+                }
+                average_ri.I += sample_weight * ri.I;
+                average_ri.tau += sample_weight * ri.tau;
+            }
+
+            ProbeIndex probe_storage_idx{
                 .coord=probe_coord,
                 .dir=phi_idx,
                 .incl=theta_idx,
                 .wave=wave
             };
-
-            RayProps ray = ray_props(dims, dev_casc_state.num_cascades, cascade_idx, probe_idx);
-            RaymarchParams params {
-                .distance_scale = atmos.voxel_scale,
-                .incl = incl_quad.muy(theta_idx),
-                .incl_weight = incl_quad.wmuy(theta_idx),
-                .la = la_start + wave,
-                .offset = offset
-            };
-
-            RadianceInterval ri;
-            BoundaryType boundary = state.boundary;
-            if constexpr (RcMode && RC_SAMPLE_BC) {
-                switch (boundary) {
-                    case BoundaryType::Zero: {
-                        auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, state);
-                        ri = march_and_merge_average_interval<RcMode>(
-                            casc_and_bc,
-                            dims,
-                            probe_idx,
-                            ray,
-                            params
-                        );
-                    } break;
-                    case BoundaryType::Promweaver: {
-                        auto casc_and_bc = get_bc<PwBc<>>(dev_casc_state, state);
-                        ri = march_and_merge_average_interval<RcMode>(
-                            casc_and_bc,
-                            dims,
-                            probe_idx,
-                            ray,
-                            params
-                        );
-                    } break;
-                    default: {
-                        assert(false && "Unknown BC type");
-                    }
-                }
-            } else {
-                auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, state);
-                ri = march_and_merge_average_interval<RcMode>(
-                    casc_and_bc,
-                    dims,
-                    probe_idx,
-                    ray,
-                    params
-                );
-            }
-
-            i64 lin_idx = probe_linear_index(dims, probe_idx);
-
-            i_cascade_i(lin_idx) = ri.I;
-            tau_cascade_i(lin_idx) = ri.tau;
+            i64 lin_idx = probe_linear_index(dims, probe_storage_idx);
+            dev_casc_state.cascade_I(lin_idx) = average_ri.I;
+            dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
         }
     );
 }
