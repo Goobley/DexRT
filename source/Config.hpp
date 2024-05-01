@@ -38,7 +38,7 @@ constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
 constexpr bool PINGPONG_BUFFERS = false;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
-constexpr bool USE_BC = false;
+constexpr bool USE_BC = true;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 constexpr bool PWBC_SAMPLE_CONE = false;

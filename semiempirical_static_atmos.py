@@ -32,8 +32,8 @@ if __name__ == '__main__':
         ).value
 
 
-    atmos_size = 128
-    atmos_size_x = 8192
+    atmos_size = 256
+    atmos_size_x = 256
     x_dim = atmos.createDimension("x", atmos_size_x)
     z_dim = atmos.createDimension("z", atmos_size)
     index_order = ("z", "x")

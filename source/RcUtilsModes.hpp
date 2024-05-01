@@ -186,7 +186,7 @@ YAKL_INLINE RayProps ray_props(const CascadeDims& dims, int num_cascades, int n,
     RayProps ray;
     ray.centre = probe_pos(probe.coord, n);
 
-    fp_t phi = FP(2.0) * FP(M_PI) / fp_t(dims.num_flat_dirs)  * (probe.dir + FP(0.5));
+    fp_t phi = FP(2.0) * FP(M_PI) / fp_t(dims.num_flat_dirs) * (probe.dir + FP(0.5));
     ray.dir(0) = std::cos(phi);
     ray.dir(1) = std::sin(phi);
 
@@ -198,6 +198,14 @@ YAKL_INLINE RayProps ray_props(const CascadeDims& dims, int num_cascades, int n,
     return ray;
 }
 
+YAKL_INLINE RayProps invert_direction(RayProps props) {
+    RayProps invert(props);
+    invert.end = props.start;
+    invert.start = props.end;
+    invert.dir(0) = -props.dir(0);
+    invert.dir(1) = -props.dir(1);
+    return invert;
+}
 
 
 #else

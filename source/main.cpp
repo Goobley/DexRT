@@ -462,7 +462,7 @@ FpConst3d final_cascade_to_J(
     return J;
 }
 
-void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst5d& casc=FpConst5d()) {
+void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst1d& casc=FpConst1d()) {
     fmt::print("Saving output...\n");
     auto dims = J.get_dimensions();
 
@@ -479,7 +479,7 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
         nc.write(wavelengths, "wavelength", {"wavelength"});
         nc.write(pops, "pops", {"level", "z", "x"});
         if (casc.initialized()) {
-            nc.write(casc, "cascade", {"u", "v", "ray_idx", "comp", "incl"});
+            nc.write(casc, "cascade", {"cascade_shape"});
         }
     }
     nc.close();
@@ -593,7 +593,8 @@ int main(int argc, char** argv) {
                 casc_state.eta,
                 casc_state.chi,
                 state.atom.wavelength,
-                state.pops
+                state.pops,
+                casc_state.i_cascades[casc_state.i_cascades.size() - 1]
             );
         // }
         magma_queue_destroy(state.magma_queue);

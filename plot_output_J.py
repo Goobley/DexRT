@@ -20,14 +20,14 @@ if __name__ == "__main__":
     dex_chi = np.array(ds["chi"][...])
     dex_pops = np.array(ds["pops"][...])
 
-    ds = netCDF4.Dataset("build/atmos.nc", "r")
-    nz = ds.dimensions["z"].size
-    z_grid = np.ascontiguousarray((np.arange(nz, dtype=np.float64) * ds["voxel_scale"][...])[::-1])
-    sample_idx = ds["ne"].shape[1] // 2
-    temperature = np.ascontiguousarray(ds["temperature"][:, sample_idx][::-1]).astype(np.float64)
-    ne = np.ascontiguousarray(ds["ne"][:, sample_idx][::-1]).astype(np.float64)
-    nhtot = np.ascontiguousarray(ds["nh_tot"][:, sample_idx][::-1]).astype(np.float64)
-    vturb = np.ascontiguousarray(ds["vturb"][:, sample_idx][::-1]).astype(np.float64)
+    dex_atmos = netCDF4.Dataset("build/atmos.nc", "r")
+    nz = dex_atmos.dimensions["z"].size
+    z_grid = np.ascontiguousarray((np.arange(nz, dtype=np.float64) * dex_atmos["voxel_scale"][...])[::-1])
+    sample_idx = dex_atmos["ne"].shape[1] // 2
+    temperature = np.ascontiguousarray(dex_atmos["temperature"][:, sample_idx][::-1]).astype(np.float64)
+    ne = np.ascontiguousarray(dex_atmos["ne"][:, sample_idx][::-1]).astype(np.float64)
+    nhtot = np.ascontiguousarray(dex_atmos["nh_tot"][:, sample_idx][::-1]).astype(np.float64)
+    vturb = np.ascontiguousarray(dex_atmos["vturb"][:, sample_idx][::-1]).astype(np.float64)
 
     bc_ctx = pw.compute_falc_bc_ctx(["Ca"])
     # bc_table = pw.tabulate_bc(bc_ctx, mu_grid=np.linspace(0.1, 1.0, 10))
@@ -48,7 +48,7 @@ if __name__ == "__main__":
         vturb=vturb,
         ne=ne,
         nHTot=nhtot,
-        lowerBc=pw.UniformJPromBc("filament", bc_provider=bc_provider, altitude_m=ds["offset_z"][...]),
+        lowerBc=pw.UniformJPromBc("filament", bc_provider=bc_provider, altitude_m=dex_atmos["offset_z"][...]),
         # lowerBc=lw.ZeroRadiation(),
         upperBc=lw.ZeroRadiation(),
     )

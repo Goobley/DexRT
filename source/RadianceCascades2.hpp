@@ -10,6 +10,7 @@ struct RaymarchParams {
     fp_t distance_scale;
     fp_t incl;
     fp_t incl_weight;
+    int la;
     vec3 offset;
 };
 
@@ -18,9 +19,10 @@ YAKL_INLINE RadianceInterval march_and_merge_average_interval(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeDims& dims,
     const ProbeIndex& this_probe,
-    const RayProps& ray,
+    RayProps ray,
     const RaymarchParams& params
 ) {
+    ray = invert_direction(ray);
     RadianceInterval ri = dda_raymarch_2d<RcMode, Bc>(
         Raymarch2dArgs<Bc>{
             .casc_state_bc = casc_state,
@@ -29,6 +31,7 @@ YAKL_INLINE RadianceInterval march_and_merge_average_interval(
             .incl = params.incl,
             .incl_weight = params.incl_weight,
             .wave = this_probe.wave,
+            .la = params.la,
             .offset = params.offset,
         }
     );
@@ -41,11 +44,11 @@ YAKL_INLINE RadianceInterval march_and_merge_average_interval(
     if (casc_state.state.upper_I.initialized()) {
         BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
-        // NOTE(cmo): The cascade_size function works with any cascade and a relative level offset for n.
         JasUnpack(casc_state.state, upper_I, upper_tau);
+        // NOTE(cmo): The cascade_size function works with any cascade and a relative level offset for n.
         CascadeDims upper_dims = cascade_size(dims, 1);
         for (int bilin = 0; bilin < 4; ++bilin) {
-            ivec2 bilin_offset = bilinear_offset(base, dims, bilin);
+            ivec2 bilin_offset = bilinear_offset(base, upper_dims, bilin);
             for (
                 int upper_ray_idx = upper_ray_start_idx;
                 upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
@@ -57,8 +60,8 @@ YAKL_INLINE RadianceInterval march_and_merge_average_interval(
                     .incl = this_probe.incl,
                     .wave = this_probe.wave
                 };
-                ri.I += ray_weight * weights(bilin) * probe_fetch(upper_I, upper_dims, upper_probe);
-                ri.tau += ray_weight * weights(bilin) * probe_fetch(upper_tau, upper_dims, upper_probe);
+                interp.I += ray_weight * weights(bilin) * probe_fetch(upper_I, upper_dims, upper_probe);
+                interp.tau += ray_weight * weights(bilin) * probe_fetch(upper_tau, upper_dims, upper_probe);
             }
         }
     }
@@ -95,7 +98,7 @@ void cascade_i_25d(
     };
 
     CascadeDims dims = cascade_size(state.c0_size, cascade_idx);
-    dims.wave_batch = la_end - la_start;
+    int wave_batch = la_end - la_start;
 
     auto offset = get_offsets(atmos);
 
@@ -105,7 +108,7 @@ void cascade_i_25d(
             dims.num_probes(1),
             dims.num_probes(0),
             dims.num_flat_dirs,
-            dims.wave_batch,
+            wave_batch,
             dims.num_incl
         ),
         YAKL_LAMBDA (int v, int u, int phi_idx, int wave, int theta_idx) {
@@ -125,6 +128,7 @@ void cascade_i_25d(
                 .distance_scale = atmos.voxel_scale,
                 .incl = incl_quad.muy(theta_idx),
                 .incl_weight = incl_quad.wmuy(theta_idx),
+                .la = la_start + wave,
                 .offset = offset
             };
 

@@ -126,12 +126,12 @@ if __name__ == "__main__":
 
     Js = []
     Juniform = []
-    alts = np.linspace(30e6, 32e6, 16)
+    alts = np.linspace(10e6, 20e6, 16)
     x_size = 2e6
     grid = np.zeros((alts.shape[0], 16))
     for alt_idx, alt in enumerate(alts):
         for x_idx in range(16):
-            x_pos = ((x_idx + 0.5) - 8) * (2e6 / 16)
+            x_pos = ((x_idx + 0.5) - 8) * (10e6 / 16)
             J = np.zeros_like(spect.wavelength)
             J_uni = 0.0
             for phi_idx in range(Nrays):
