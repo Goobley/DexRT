@@ -388,8 +388,6 @@ void init_state (State* state) {
         // TODO(cmo): This backwards/forwards shuffle is a bit silly, but it's a tiny array.
         state->wavelength_h = state->atom.wavelength.createHostCopy();
 
-        // NOTE(cmo): Allocate ALO array -- used for static wavelengths
-        state->alo = Fp3d("ALO", space_x, space_y, NUM_INCL);
         const int n_level = state->atom.energy.extent(0);
         // state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
         state->Gamma = decltype(state->Gamma)("Gamma", n_level, n_level, space_x, space_y);
@@ -416,6 +414,18 @@ void init_state (State* state) {
     c0_rays.wave_batch = WAVE_BATCH;
 
     state->c0_size = cascade_rays_to_storage<PREAVERAGE>(c0_rays);
+    if constexpr (USE_ATMOSPHERE) {
+        // NOTE(cmo): Allocate ALO array -- used for static wavelengths
+        state->alo = Fp5d(
+            "ALO",
+            state->c0_size.num_probes(1),
+            state->c0_size.num_probes(0),
+            state->c0_size.num_flat_dirs,
+            state->c0_size.wave_batch,
+            state->c0_size.num_incl
+        );
+    }
+
 
     Fp1dHost muy("muy", NUM_INCL);
     Fp1dHost wmuy("wmuy", NUM_INCL);
@@ -465,7 +475,7 @@ FpConst3d final_cascade_to_J(
     return J;
 }
 
-void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst1d& casc=FpConst1d()) {
+void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst1d& casc=FpConst1d(), const FpConst5d& alo=FpConst5d()) {
     fmt::print("Saving output...\n");
     auto dims = J.get_dimensions();
 
@@ -483,6 +493,9 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
         nc.write(pops, "pops", {"level", "z", "x"});
         if (casc.initialized()) {
             nc.write(casc, "cascade", {"cascade_shape"});
+        }
+        if (alo.initialized()) {
+            nc.write(alo, "alo", {"z", "x", "dir", "wave_batch", "incl"});
         }
     }
     nc.close();
@@ -597,7 +610,8 @@ int main(int argc, char** argv) {
                 casc_state.chi,
                 state.atom.wavelength,
                 state.pops,
-                casc_state.i_cascades[casc_state.i_cascades.size() - 1]
+                casc_state.i_cascades[casc_state.i_cascades.size() - 1],
+                state.alo
             );
         // }
         magma_queue_destroy(state.magma_queue);

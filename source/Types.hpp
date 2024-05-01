@@ -61,9 +61,13 @@ struct InclQuadrature {
     Fp1d wmuy;
 };
 
+struct DexEmpty {};
+
+template <typename Alo=DexEmpty>
 struct RadianceInterval {
     fp_t I = FP(0.0);
     fp_t tau = FP(0.0);
+    Alo alo;
 };
 
 struct RayProps {
@@ -90,6 +94,7 @@ struct DeviceCascadeState {
     FpConst1d upper_tau;
     Fp3d eta; // [z, x, wave]
     Fp3d chi; // [z, x, wave]
+    Fp5d alo; // [z, x, phi, wave, theta]
 };
 
 template <typename Bc>

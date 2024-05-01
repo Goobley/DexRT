@@ -23,7 +23,7 @@ struct State {
     FpConst1dHost wavelength_h;
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y]
-    Fp3d alo; /// [x, y, az]
+    Fp5d alo; /// [z, x, phi, wave, theta]
     Fp4d Gamma; /// [i, j, x, y]
     PwBc<> pw_bc;
     ZeroBc zero_bc;

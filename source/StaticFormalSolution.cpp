@@ -207,10 +207,27 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
             flat_chi(k, wave) = result.chi;
         }
     );
+    state.alo = FP(0.0);
     yakl::fence();
     // NOTE(cmo): Compute RC FS
-    constexpr int RcModeBc = (USE_BC ? RC_SAMPLE_BC : 0) | (PREAVERAGE ? RC_PREAVERAGE : 0);
-    constexpr int RcModeNoBc = PREAVERAGE ? RC_PREAVERAGE : 0;
+    constexpr int RcModeBc = RC_flags_pack(RcFlags{
+        .dynamic = false,
+        .preaverage = PREAVERAGE,
+        .sample_bc = USE_BC,
+        .compute_alo = false
+    });
+    constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
+        .dynamic = false,
+        .preaverage = PREAVERAGE,
+        .sample_bc = false,
+        .compute_alo = false
+    });
+    constexpr int RcModeAlo = RC_flags_pack(RcFlags{
+        .dynamic = false,
+        .preaverage = PREAVERAGE,
+        .sample_bc = false,
+        .compute_alo = true
+    });
     cascade_i_25d<RcModeBc>(
         state,
         casc_state,
@@ -219,7 +236,7 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
         la_end
     );
     yakl::fence();
-    for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 0; --casc_idx) {
+    for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
         cascade_i_25d<RcModeNoBc>(
             state,
             casc_state,
@@ -228,6 +245,17 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
             la_end
         );
         yakl::fence();
+    }
+    cascade_i_25d<RcModeAlo>(
+        state,
+        casc_state,
+        0,
+        la_start,
+        la_end
+    );
+    yakl::fence();
+    if (state.alo.initialized()) {
+        // NOTE(cmo): Add terms to Gamma
     }
     // NOTE(cmo): J is not computed in this function, but done in main for now
 }

@@ -6,6 +6,32 @@
 constexpr int RC_DYNAMIC = 0x1;
 constexpr int RC_PREAVERAGE = 0x2;
 constexpr int RC_SAMPLE_BC = 0x4;
+constexpr int RC_COMPUTE_ALO = 0x8;
+
+struct RcFlags {
+    bool dynamic;
+    bool preaverage;
+    bool sample_bc;
+    bool compute_alo;
+};
+
+
+YAKL_INLINE constexpr int RC_flags_pack(const RcFlags& flags) {
+    int flag = 0;
+    if (flags.dynamic) {
+        flag |= RC_DYNAMIC;
+    }
+    if (flags.preaverage) {
+        flag |= RC_PREAVERAGE;
+    }
+    if (flags.sample_bc) {
+        flag |= RC_SAMPLE_BC;
+    }
+    if (flags.compute_alo) {
+        flag |= RC_COMPUTE_ALO;
+    }
+    return flag;
+}
 
 YAKL_INLINE CascadeStorage cascade_size(const CascadeStorage& c0, int n) {
     CascadeStorage c;

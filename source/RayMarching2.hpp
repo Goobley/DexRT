@@ -5,9 +5,10 @@
 #include "CascadeState.hpp"
 #include "RayMarching.hpp"
 
-YAKL_INLINE RadianceInterval merge_intervals(
-    RadianceInterval closer,
-    RadianceInterval further
+template <typename Alo>
+YAKL_INLINE RadianceInterval<Alo> merge_intervals(
+    RadianceInterval<Alo> closer,
+    RadianceInterval<Alo> further
 ) {
     fp_t transmission = std::exp(-closer.tau);
     closer.I += transmission * further.I;
@@ -27,8 +28,8 @@ struct Raymarch2dArgs {
     vec3 offset;
 };
 
-template <int RcMode=0, typename Bc>
-YAKL_INLINE RadianceInterval dda_raymarch_2d(
+template <int RcMode=0, typename Bc, typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     const Raymarch2dArgs<Bc>& args
 ) {
     JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset);
@@ -41,7 +42,7 @@ YAKL_INLINE RadianceInterval dda_raymarch_2d(
     domain_size(1) = domain_dims(0);
     bool start_clipped;
     auto marcher = RayMarch2d_new(ray.start, ray.end, domain_size, &start_clipped);
-    RadianceInterval result{};
+    RadianceInterval<Alo> result{};
     if ((RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped)) {
         // NOTE(cmo): Check the ray is going up along z.
         if ((ray.dir(1) > FP(0.0)) && la != -1) {
@@ -66,7 +67,8 @@ YAKL_INLINE RadianceInterval dda_raymarch_2d(
 
     RayMarchState2d s = *marcher;
 
-    fp_t eta_s, chi_s;
+    // NOTE(cmo): one_m_edt is also the ALO
+    fp_t eta_s, chi_s, one_m_edt;
     do {
         const auto& sample_coord(s.curr_coord);
 
@@ -80,15 +82,13 @@ YAKL_INLINE RadianceInterval dda_raymarch_2d(
         eta_s = state.eta(sample_coord(1), sample_coord(0), wave);
         chi_s = state.chi(sample_coord(1), sample_coord(0), wave);
 
-        const bool final_step = (s.t == s.max_t);
-
         fp_t tau = chi_s * s.dt * distance_scale;
         fp_t source_fn = eta_s / chi_s;
 
         // NOTE(cmo): implicit assumption muy != 1.0
         fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
         fp_t tau_mu = tau / sin_theta;
-        fp_t edt, one_m_edt;
+        fp_t edt;
         if (tau_mu < FP(1e-2)) {
             edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
             one_m_edt = -std::expm1(-tau_mu);
@@ -99,6 +99,10 @@ YAKL_INLINE RadianceInterval dda_raymarch_2d(
         result.tau += tau_mu;
         result.I = result.I * edt + source_fn * one_m_edt;
     } while (next_intersection(&s));
+
+    if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
+        result.alo = one_m_edt;
+    }
 
     return result;
 }

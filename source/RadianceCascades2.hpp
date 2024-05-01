@@ -14,8 +14,8 @@ struct RaymarchParams {
     vec3 offset;
 };
 
-template <int RcMode=0, typename Bc>
-YAKL_INLINE RadianceInterval march_and_merge_average_interval(
+template <int RcMode=0, typename Bc, typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeStorage& dims,
     const ProbeIndex& this_probe,
@@ -23,7 +23,7 @@ YAKL_INLINE RadianceInterval march_and_merge_average_interval(
     const RaymarchParams& params
 ) {
     ray = invert_direction(ray);
-    RadianceInterval ri = dda_raymarch_2d<RcMode, Bc>(
+    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
         Raymarch2dArgs<Bc>{
             .casc_state_bc = casc_state,
             .ray = ray,
@@ -45,7 +45,7 @@ YAKL_INLINE RadianceInterval march_and_merge_average_interval(
     const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
-    RadianceInterval interp{};
+    RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
         BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
@@ -82,6 +82,8 @@ void cascade_i_25d(
     int la_end = -1
 ) {
     JasUnpack(state, atmos, incl_quad);
+    constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
+    using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
 
     CascadeIdxs lookup = cascade_indices(casc_state, cascade_idx);
     Fp1d i_cascade_i = casc_state.i_cascades[lookup.i];
@@ -101,6 +103,9 @@ void cascade_i_25d(
         .eta = casc_state.eta,
         .chi = casc_state.chi,
     };
+    if constexpr (compute_alo) {
+        dev_casc_state.alo = state.alo;
+    }
     constexpr bool preaverage = RcMode & RC_PREAVERAGE;
 
     CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
@@ -119,11 +124,12 @@ void cascade_i_25d(
             dims.num_incl
         ),
         YAKL_LAMBDA (int v, int u, int phi_idx, int wave, int theta_idx) {
+            constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
             ivec2 probe_coord;
             probe_coord(0) = u;
             probe_coord(1) = v;
 
-            RadianceInterval average_ri{};
+            RadianceInterval<AloType> average_ri{};
             const int num_rays_per_texel = ray_set.num_flat_dirs / dims.num_flat_dirs;
             const fp_t sample_weight = FP(1.0) / fp_t(num_rays_per_texel);
             for (int i = 0; i < num_rays_per_texel; ++i) {
@@ -142,7 +148,7 @@ void cascade_i_25d(
                     .offset = offset
                 };
 
-                RadianceInterval ri;
+                RadianceInterval<AloType> ri;
                 BoundaryType boundary = state.boundary;
                 auto& casc_dims = dims;
                 if constexpr (RcMode && RC_SAMPLE_BC) {
@@ -183,6 +189,9 @@ void cascade_i_25d(
                 }
                 average_ri.I += sample_weight * ri.I;
                 average_ri.tau += sample_weight * ri.tau;
+                if constexpr (dev_compute_alo) {
+                    average_ri.alo += sample_weight * ri.alo;
+                }
             }
 
             ProbeIndex probe_storage_idx{
@@ -194,6 +203,9 @@ void cascade_i_25d(
             i64 lin_idx = probe_linear_index(dims, probe_storage_idx);
             dev_casc_state.cascade_I(lin_idx) = average_ri.I;
             dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
+            if constexpr (dev_compute_alo) {
+                dev_casc_state.alo(v, u, phi_idx, wave, theta_idx) = average_ri.alo;
+            }
         }
     );
 }
