@@ -548,12 +548,6 @@ int main(int argc, char** argv) {
             compute_lte_pops(&state);
             constexpr bool non_lte = false;
             constexpr bool static_soln = true;
-            auto flat_Gamma = state.Gamma.reshape<3>(Dims(
-                state.Gamma.extent(0),
-                state.Gamma.extent(1),
-                state.Gamma.extent(2) *state.Gamma.extent(3)
-            ));
-
             auto waves = state.atom.wavelength.createHostCopy();
             // auto fs_fn = dynamic_formal_sol_rc;
             // if (static_soln) {
@@ -561,29 +555,54 @@ int main(int argc, char** argv) {
             // }
             auto fs_fn = static_formal_sol_rc;
             fp_t max_change = FP(1.0);
-            // if (non_lte) {
-            //     constexpr int max_iters = 300;
-            //     int i = 0;
-            //     while (max_change > FP(1e-2) && i < max_iters) {
-            //         fmt::println("FS {}", i);
-            //         compute_collisions_to_gamma(&state);
-            //         yakl::fence();
-            //         for (int la = 0; la < waves.extent(0); ++la) {
-            //             // fmt::println("Computing wavelength {} ({})", la, waves(la));
-            //             fs_fn(state, la);
-            //             final_cascade_to_J(state.cascades[0], &state.J, la);
-            //         }
-            //         // NOTE(cmo): Fixup now done in stateq
-            //         // fixup_gamma(flat_Gamma);
-            //         yakl::fence();
-            //         fmt::println("Stat eq");
-            //         max_change = stat_eq<f64>(&state);
-            //         i += 1;
-            //     }
-            //     int la = 55;
-            //     fs_fn(&state, la);
-            //     final_cascade_to_J(state.cascades[0], &state.J, la);
-            // } else {
+            if (non_lte) {
+                constexpr int max_iters = 300;
+                int i = 0;
+                while (max_change > FP(1e-2) && i < max_iters) {
+                    fmt::println("FS {}", i);
+                    compute_collisions_to_gamma(&state);
+                    state.J = FP(0.0);
+                    yakl::fence();
+                    for (
+                        int la_start = 0;
+                        la_start < waves.extent(0);
+                        la_start += state.c0_size.wave_batch
+                    ) {
+                        int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
+
+                        fs_fn(
+                            state,
+                            casc_state,
+                            la_start,
+                            la_end
+                        );
+                        final_cascade_to_J(
+                            casc_state.i_cascades[0],
+                            state.c0_size,
+                            state.J,
+                            state.incl_quad,
+                            la_start,
+                            la_end
+                        );
+                    }
+                    // NOTE(cmo): Fixup now done in stateq
+                    // fixup_gamma(flat_Gamma);
+                    yakl::fence();
+                    fmt::println("Stat eq");
+                    max_change = stat_eq<f64>(&state);
+                    i += 1;
+                }
+                // compute_collisions_to_gamma(&state);
+                // yakl::fence();
+                // fs_fn(
+                //     state,
+                //     casc_state,
+                //     55,
+                //     59
+                // );
+            } else {
+                state.J = FP(0.0);
+                yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                     fmt::println(
@@ -603,7 +622,7 @@ int main(int argc, char** argv) {
                         la_end
                     );
                 }
-            // }
+            }
             save_results(
                 state.J,
                 casc_state.eta,

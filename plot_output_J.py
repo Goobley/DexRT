@@ -48,8 +48,8 @@ if __name__ == "__main__":
         vturb=vturb,
         ne=ne,
         nHTot=nhtot,
-        lowerBc=pw.UniformJPromBc("filament", bc_provider=bc_provider, altitude_m=dex_atmos["offset_z"][...]),
-        # lowerBc=lw.ZeroRadiation(),
+        # lowerBc=pw.UniformJPromBc("filament", bc_provider=bc_provider, altitude_m=dex_atmos["offset_z"][...]),
+        lowerBc=lw.ZeroRadiation(),
         upperBc=lw.ZeroRadiation(),
     )
     atmos.quadrature(10)
@@ -58,11 +58,12 @@ if __name__ == "__main__":
     a_set = lw.RadiativeSet([H_6_atom(), CaII_atom()])
     a_set.set_active("Ca")
     eq_pops = a_set.compute_eq_pops(atmos)
-    eq_pops["Ca"][...] = dex_pops[:, 0, 0][:, None]
+    # eq_pops["Ca"][...] = dex_pops[:, 0, 0][:, None]
+
     # spect = a_set.compute_wavelength_grid(lambdaReference=CaII_atom().lines[-1].lambda0 - 1.0)
     spect = a_set.compute_wavelength_grid()
 
-    ctx = lw.Context(atmos, spect, eq_pops, formalSolver="piecewise_besser_1d", Nthreads=12)
+    ctx = lw.Context(atmos, spect, eq_pops, formalSolver="piecewise_linear_1d", Nthreads=12)
     ctx.background.eta[...] = 0.0
     ctx.background.chi[...] = 0.0
     ctx.background.sca[...] = 0.0

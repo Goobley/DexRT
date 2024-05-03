@@ -454,7 +454,8 @@ inline fp_t stat_eq(State* state) {
                 //     n_total += pops(ii, k);
                 // }
                 // new_pops(k, i) = n_total;
-                new_pops(k, i) = FP(1.0);
+                // new_pops(k, i) = FP(1.0);
+                new_pops(k, i) = n_total(k);
             } else {
                 new_pops(k, i) = FP(0.0);
             }
@@ -471,6 +472,25 @@ inline fp_t stat_eq(State* state) {
     );
     yakl::fence();
 
+    auto GammaT_host = GammaT.createHostCopy();
+    auto pops_host = pops.createHostCopy();
+    // const int print_idx = 452 * state->atmos.temperature.extent(1) + 519;
+    const int print_idx = std::min(
+        int(128 * state->atmos.temperature.extent(1) + 128),
+        int(state->atmos.temperature.extent(0) * state->atmos.temperature.extent(1) - 1)
+    );
+    for (int i = 0; i < GammaT_host.extent(2); ++i) {
+        for (int j = 0; j < GammaT_host.extent(1); ++j) {
+            fmt::print("{:e}, ", GammaT_host(print_idx, j, i));
+        }
+        fmt::print("\n");
+    }
+    fmt::print("pops pre ");
+    for (int i = 0; i < pops_host.extent(0); ++i) {
+        fmt::print("{:e}, ", pops_host(i, print_idx));
+    }
+    fmt::print("\n");
+
 
     parallel_for(
         "Conservation eqn",
@@ -481,25 +501,6 @@ inline fp_t stat_eq(State* state) {
             }
         }
     );
-
-    auto GammaT_host = GammaT.createHostCopy();
-    auto pops_host = pops.createHostCopy();
-    // const int print_idx = 452 * state->atmos.temperature.extent(1) + 519;
-    const int print_idx = std::min(
-        int(128 * state->atmos.temperature.extent(1) + 128),
-        int(state->atmos.temperature.extent(0) * state->atmos.temperature.extent(1) - 1)
-    );
-    for (int i = 0; i < GammaT_host.extent(2); ++i) {
-        for (int j = 0; j < GammaT_host.extent(1); ++j) {
-            fmt::print("{}, ", GammaT_host(print_idx, j, i));
-        }
-        fmt::print("\n");
-    }
-    fmt::print("pops pre ");
-    for (int i = 0; i < pops_host.extent(0); ++i) {
-        fmt::print("{:e}, ", pops_host(i, print_idx));
-    }
-    fmt::print("\n");
 
     yakl::fence();
 
@@ -547,19 +548,19 @@ inline fp_t stat_eq(State* state) {
         }
     );
 
-    parallel_for(
-        "Normalise new pops vec",
-        SimpleBounds<1>(new_pops.extent(0)),
-        YAKL_LAMBDA (i64 k) {
-            T sum = FP(0.0);
-            for (int i = 0; i < new_pops.extent(1); ++i) {
-                sum += new_pops(k, i);
-            }
-            for (int i = 0; i < new_pops.extent(1); ++i) {
-                new_pops(k, i) /= sum;
-            }
-        }
-    );
+    // parallel_for(
+    //     "Normalise new pops vec",
+    //     SimpleBounds<1>(new_pops.extent(0)),
+    //     YAKL_LAMBDA (i64 k) {
+    //         T sum = FP(0.0);
+    //         for (int i = 0; i < new_pops.extent(1); ++i) {
+    //             sum += new_pops(k, i);
+    //         }
+    //         for (int i = 0; i < new_pops.extent(1); ++i) {
+    //             new_pops(k, i) /= sum;
+    //         }
+    //     }
+    // );
 
     yakl::fence();
 
@@ -571,7 +572,8 @@ inline fp_t stat_eq(State* state) {
         YAKL_LAMBDA (int64_t k, int i) {
             fp_t change = FP(0.0);
             // if (flat_temp(k) < FP(5.0e4)) {
-                change = std::abs(FP(1.0) - pops(i, k) / (new_pops(k, i) * n_total(k)));
+                // change = std::abs(FP(1.0) - pops(i, k) / (new_pops(k, i) * n_total(k)));
+                change = std::abs(FP(1.0) - pops(i, k) / new_pops(k, i));
             // }
             max_rel_change(k, i) = change;
         }
@@ -581,7 +583,8 @@ inline fp_t stat_eq(State* state) {
         "Copy & transpose pops",
         SimpleBounds<2>(pops.extent(0), pops.extent(1)),
         YAKL_LAMBDA (int i, int64_t k) {
-            pops(i, k) = new_pops(k, i) * n_total(k);
+            // pops(i, k) = new_pops(k, i) * n_total(k);
+            pops(i, k) = new_pops(k, i);
         }
     );
     pops_host = pops.createHostCopy();
