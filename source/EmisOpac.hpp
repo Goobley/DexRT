@@ -52,10 +52,11 @@ struct EmisOpacState {
     const VoigtProfile<T, false, mem_space>& profile;
     int la;
     const yakl::Array<fp_t const, 2, mem_space>& n;
-    const yakl::Array<fp_t, 2, mem_space>& n_star_scratch;
+    const yakl::Array<fp_t, 2, mem_space>& n_star_scratch = {};
     int64_t k;
     const AtmosPointParams& atmos;
-    const yakl::Array<i32 const, 1, mem_space>& active_set = {};
+    const yakl::Array<u16 const, 1, mem_space>& active_set = {};
+    const yakl::Array<u16 const, 1, mem_space>& active_set_cont = {};
     EmisOpacMode mode = EmisOpacMode::All;
 };
 
@@ -268,7 +269,7 @@ template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacState<T, mem_space>& args
 ) {
-    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
+    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode, active_set, active_set_cont);
     EmisOpac result{FP(0.0), FP(0.0)};
     fp_t lambda = atom.wavelength(la);
     const bool lines = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::DynamicOnly);
@@ -306,10 +307,12 @@ YAKL_INLINE EmisOpac emis_opac(
     }
 
     if (conts) {
-        bool any_active = false;
-        for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
-            const auto& cont = atom.continua(kr);
-            any_active = any_active || cont.is_active(la);
+        bool any_active = false || (active_set_cont.initialized() && active_set_cont.extent(0) > 0);
+        if (!active_set_cont.initialized()) {
+            for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+                const auto& cont = atom.continua(kr);
+                any_active = any_active || cont.is_active(la);
+            }
         }
         if (!any_active) {
             return result;
@@ -326,20 +329,36 @@ YAKL_INLINE EmisOpac emis_opac(
             n_star,
             k
         );
-        for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
-            const auto& cont = atom.continua(kr);
-            if (!cont.is_active(la)) {
-                continue;
-            }
+        if (active_set_cont.initialized()) {
+            for (int i = 0; i < active_set_cont.extent(0); ++i) {
+                const int kr = active_set_cont(i);
+                const auto& cont = atom.continua(kr);
 
-            const UV uv = compute_uv_cont(
-                args,
-                kr
-            );
-            const fp_t nj = n(cont.j, k);
-            const fp_t ni = n(cont.i, k);
-            result.eta += nj * uv.Uji;
-            result.chi += ni * uv.Vij - nj * uv.Vji;
+                const UV uv = compute_uv_cont(
+                    args,
+                    kr
+                );
+                const fp_t nj = n(cont.j, k);
+                const fp_t ni = n(cont.i, k);
+                result.eta += nj * uv.Uji;
+                result.chi += ni * uv.Vij - nj * uv.Vji;
+            }
+        } else {
+            for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+                const auto& cont = atom.continua(kr);
+                if (!cont.is_active(la)) {
+                    continue;
+                }
+
+                const UV uv = compute_uv_cont(
+                    args,
+                    kr
+                );
+                const fp_t nj = n(cont.j, k);
+                const fp_t ni = n(cont.i, k);
+                result.eta += nj * uv.Uji;
+                result.chi += ni * uv.Vij - nj * uv.Vji;
+            }
         }
     }
 

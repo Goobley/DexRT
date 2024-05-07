@@ -6,25 +6,31 @@
 #include "RayMarching2.hpp"
 #include "Atmosphere.hpp"
 
+template <typename DynamicState>
 struct RaymarchParams {
     fp_t distance_scale;
     fp_t incl;
     fp_t incl_weight;
     int la;
     vec3 offset;
+    DynamicState dyn_state;
 };
 
-template <int RcMode=0, typename Bc, typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>>
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>>
 YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeStorage& dims,
     const ProbeIndex& this_probe,
     RayProps ray,
-    const RaymarchParams& params
+    const RaymarchParams<DynamicState>& params
 ) {
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
-        Raymarch2dArgs<Bc>{
+        Raymarch2dArgs<Bc, DynamicState>{
             .casc_state_bc = casc_state,
             .ray = ray,
             .distance_scale = params.distance_scale,
@@ -33,6 +39,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
             .wave = this_probe.wave,
             .la = params.la,
             .offset = params.offset,
+            .dyn_state = params.dyn_state
         }
     );
     constexpr bool preaverage = RcMode & RC_PREAVERAGE;
@@ -73,6 +80,50 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     return merge_intervals(ri, interp);
 }
 
+template <typename DynamicState>
+YAKL_INLINE
+DynamicState get_dyn_state(
+    int la,
+    const RayProps& ray,
+    const fp_t incl,
+    const Atmosphere& atmos,
+    const CompAtom<fp_t>& atom,
+    const VoigtProfile<fp_t>& profile,
+    const Fp3d& n,
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+) {
+    return DynamicState{};
+}
+
+template <>
+YAKL_INLINE
+Raymarch2dDynamicState get_dyn_state(
+    int la,
+    const RayProps& ray,
+    const fp_t incl,
+    const Atmosphere& atmos,
+    const CompAtom<fp_t>& atom,
+    const VoigtProfile<fp_t>& profile,
+    const Fp3d& n,
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+) {
+    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
+    vec3 mu;
+    mu(0) = ray.dir(0) * sin_theta;
+    mu(1) = incl;
+    mu(2) = ray.dir(1) * sin_theta;
+    return Raymarch2dDynamicState{
+        .mu = mu,
+        .active_set = slice_active_set(atom, la),
+        .dynamic_opac = dynamic_opac,
+        .atmos = atmos,
+        .atom = atom,
+        .profile = profile,
+        .nh0 = atmos.nh0,
+        .n = n.reshape<2>(Dims(n.extent(0), n.extent(1) * n.extent(2))),
+    };
+}
+
 template <int RcMode=0>
 void cascade_i_25d(
     const State& state,
@@ -81,9 +132,12 @@ void cascade_i_25d(
     int la_start = -1,
     int la_end = -1
 ) {
-    JasUnpack(state, atmos, incl_quad);
+    JasUnpack(state, atmos, incl_quad, atom, pops, dynamic_opac);
+    const auto& profile = state.phi;
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
+    constexpr bool dynamic = RcMode & RC_DYNAMIC;
+    using DynamicState = std::conditional_t<dynamic, Raymarch2dDynamicState, DexEmpty>;
 
     CascadeIdxs lookup = cascade_indices(casc_state, cascade_idx);
     Fp1d i_cascade_i = casc_state.i_cascades[lookup.i];
@@ -128,6 +182,7 @@ void cascade_i_25d(
             ivec2 probe_coord;
             probe_coord(0) = u;
             probe_coord(1) = v;
+            int la = la_start + wave;
 
             RadianceInterval<AloType> average_ri{};
             const int num_rays_per_texel = ray_set.num_flat_dirs / dims.num_flat_dirs;
@@ -140,12 +195,23 @@ void cascade_i_25d(
                     .wave=wave
                 };
                 RayProps ray = ray_props(ray_set, dev_casc_state.num_cascades, cascade_idx, probe_idx);
-                RaymarchParams params {
+                DynamicState dyn_state = get_dyn_state<DynamicState>(
+                    la,
+                    ray,
+                    incl_quad.muy(theta_idx),
+                    atmos,
+                    atom,
+                    profile,
+                    pops,
+                    dynamic_opac
+                );
+                RaymarchParams<DynamicState> params {
                     .distance_scale = atmos.voxel_scale,
                     .incl = incl_quad.muy(theta_idx),
                     .incl_weight = incl_quad.wmuy(theta_idx),
-                    .la = la_start + wave,
-                    .offset = offset
+                    .la = la,
+                    .offset = offset,
+                    .dyn_state = dyn_state
                 };
 
                 RadianceInterval<AloType> ri;

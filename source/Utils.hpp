@@ -60,7 +60,7 @@ YAKL_INLINE void mipmap_arr(const FpConst3d& arr, const Fp3d& result, int factor
 }
 
 /** Upper bound on YAKL arrays, returns index rather than iterator.
- * 
+ *
 */
 template <typename T, int mem_space=yakl::memDevice>
 YAKL_INLINE int upper_bound(const yakl::Array<const T, 1, mem_space>& x, T value) {
@@ -68,13 +68,13 @@ YAKL_INLINE int upper_bound(const yakl::Array<const T, 1, mem_space>& x, T value
     int step;
     const T* first = &x(0);
     const T* it;
- 
+
     while (count > 0)
     {
-        it = first; 
-        step = count / 2; 
+        it = first;
+        step = count / 2;
         it += step;
- 
+
         if (!(value < *it)) {
             // target in right sub-array
             first = ++it;
@@ -93,7 +93,7 @@ YAKL_INLINE int upper_bound(const yakl::Array<const T, 1, mem_space>& x, T value
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE T interp(
     T alpha,
-    const yakl::Array<T const, 1, mem_space>& x, 
+    const yakl::Array<T const, 1, mem_space>& x,
     const yakl::Array<T const, 1, mem_space>& y
 ) {
     if (alpha <= x(0)) {
@@ -115,7 +115,7 @@ YAKL_INLINE T interp(
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE T interp(
     T alpha,
-    const yakl::Array<T, 1, mem_space>& x, 
+    const yakl::Array<T, 1, mem_space>& x,
     const yakl::Array<T, 1, mem_space>& y
 ) {
     // NOTE(cmo): The optimiser should eat this up
@@ -124,5 +124,26 @@ YAKL_INLINE T interp(
     return interp(alpha, xx, yy);
 }
 
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE
+yakl::Array<const u16, 1, mem_space> slice_active_set(const CompAtom<T>& atom, int la) {
+    yakl::Array<const u16, 1, mem_space> result(
+        "active set",
+        &atom.active_lines(atom.active_lines_start(la)),
+        atom.active_lines_end(la) - atom.active_lines_start(la)
+    );
+    return result;
+}
+
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE
+yakl::Array<const u16, 1, mem_space> slice_active_cont_set(const CompAtom<T>& atom, int la) {
+    yakl::Array<const u16, 1, mem_space> result(
+        "active set",
+        &atom.active_cont(atom.active_cont_start(la)),
+        atom.active_cont_end(la) - atom.active_cont_start(la)
+    );
+    return result;
+}
 #else
 #endif

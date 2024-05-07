@@ -162,7 +162,7 @@ if __name__ == "__main__":
     ctx.background.sca[...] = 0.0
     ctx.depthData.fill = True
     # ctx.formal_sol_gamma_matrices()
-    lw.iterate_ctx_se(ctx, popsTol=1e-3, JTol=1.0)
+    lw.iterate_ctx_se(ctx, popsTol=1e-6, JTol=1.0)
     fil_atmos.zLowerBc.final_synthesis = True
     ray_output = netCDF4.Dataset("build/ray_output.nc")
     dex_wave = ray_output["wavelength"][...]
@@ -203,7 +203,7 @@ if __name__ == "__main__":
     prom_ctx.background.sca[...] = 0.0
     prom_ctx.depthData.fill = True
     # ctx.formal_sol_gamma_matrices()
-    lw.iterate_ctx_se(prom_ctx, popsTol=1e-3, JTol=1.0)
+    lw.iterate_ctx_se(prom_ctx, popsTol=1e-6, JTol=1.0)
     prom_atmos.zLowerBc.final_synthesis = True
     prom_atmos.zUpperBc.final_synthesis = True
     Ivert_prom = lw.convert_specific_intensity(

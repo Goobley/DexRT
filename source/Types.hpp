@@ -108,10 +108,12 @@ struct Atmosphere {
     fp_t offset_x = FP(0.0);
     fp_t offset_y = FP(0.0);
     fp_t offset_z = FP(0.0);
+    bool moving = false;
     Fp2d temperature;
     Fp2d pressure;
     Fp2d ne;
     Fp2d nh_tot;
+    Fp2d nh0;
     Fp2d vturb;
     Fp2d vx;
     Fp2d vy;
@@ -121,10 +123,15 @@ struct Atmosphere {
 template <typename T=fp_t>
 struct FlatAtmosphere {
     fp_t voxel_scale;
+    fp_t offset_x = FP(0.0);
+    fp_t offset_y = FP(0.0);
+    fp_t offset_z = FP(0.0);
+    bool moving = false;
     yakl::Array<T, 1, yakl::memDevice> temperature;
     yakl::Array<T, 1, yakl::memDevice> pressure;
     yakl::Array<T, 1, yakl::memDevice> ne;
     yakl::Array<T, 1, yakl::memDevice> nh_tot;
+    yakl::Array<T, 1, yakl::memDevice> nh0;
     yakl::Array<T, 1, yakl::memDevice> vturb;
     yakl::Array<T, 1, yakl::memDevice> vx;
     yakl::Array<T, 1, yakl::memDevice> vy;
@@ -358,6 +365,14 @@ struct CompAtom {
     yakl::Array<CompColl<T> const, 1, mem_space> collisions;
     yakl::Array<T const, 1, mem_space> temperature;
     yakl::Array<T const, 1, mem_space> coll_rates;
+
+    // Active set stuff
+    yakl::Array<u16 const, 1, mem_space> active_lines;
+    yakl::Array<i32 const, 1, mem_space> active_lines_start;
+    yakl::Array<i32 const, 1, mem_space> active_lines_end;
+    yakl::Array<u16 const, 1, mem_space> active_cont;
+    yakl::Array<i32 const, 1, mem_space> active_cont_start;
+    yakl::Array<i32 const, 1, mem_space> active_cont_end;
 };
 
 #else

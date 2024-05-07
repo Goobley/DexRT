@@ -115,6 +115,19 @@ inline Atmosphere load_atmos(const std::string& path) {
 
 #endif
 
+    result.nh0 = Fp2d("nh0", z_dim, x_dim);
+    result.nh0 = FP(0.0);
+
+    Fp2d vel2 = result.vz.createDeviceObject();
+    parallel_for(
+        SimpleBounds<2>(z_dim, x_dim),
+        YAKL_LAMBDA (int z, int x) {
+            vel2(z, x) = square(result.vz(z, x)) + square(result.vy(z, x)) + square(result.vx(z, x));
+        }
+    );
+    yakl::fence();
+    result.moving = yakl::intrinsics::maxval(vel2) > FP(10.0);
+
     return result;
 }
 
@@ -122,10 +135,15 @@ template <typename T=fp_t>
 FlatAtmosphere<T> flatten(const Atmosphere& atmos) {
     FlatAtmosphere<T> result;
     result.voxel_scale = atmos.voxel_scale;
+    result.offset_x = atmos.offset_x;
+    result.offset_y = atmos.offset_y;
+    result.offset_z = atmos.offset_z;
+    result.moving = atmos.moving;
     result.temperature = atmos.temperature.collapse();
     result.pressure = atmos.pressure.collapse();
     result.ne = atmos.ne.collapse();
     result.nh_tot = atmos.nh_tot.collapse();
+    result.nh0 = atmos.nh0.collapse();
     result.vturb = atmos.vturb.collapse();
     result.vx = atmos.vx.collapse();
     result.vy = atmos.vy.collapse();

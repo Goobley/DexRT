@@ -1,166 +1,304 @@
-// #include "DynamicFormalSolution.hpp"
-// #include "RadianceCascades.hpp"
-// #include "DynamicRadianceCascades.hpp"
-// #include "StaticFormalSolution.hpp"
-// #include "Populations.hpp"
-// #include "EmisOpac.hpp"
-// #include "LteHPops.hpp"
-// #include "Utils.hpp"
+#include "DynamicFormalSolution.hpp"
+#include "StaticFormalSolution.hpp"
+#include "RadianceCascades2.hpp"
+#include "Populations.hpp"
+#include "EmisOpac.hpp"
+#include "LteHPops.hpp"
+#include "GammaMatrix.hpp"
+#include "Atmosphere.hpp"
+#include "RcUtilsModes.hpp"
 
-// void dynamic_formal_sol_rc(State* state, int la) {
-//     // 1. Accumulate the static components of eta/chi; where norm(v) is low (< 1km/s?), add lines to this too
-//     // 1b. Don't mipmap as the next steps aren't compatible.
-//     // 2. Radiance cascade solver, propagating atomic state downwards to 2b.
-//     // 2b. Raymarch the grid with new march function that samples the constant eta/chi where norm(v) is small, and adds the local doppler shifted values where norm(v) is larger. For this it requires access to the state
-//     // 2c. When computing C0, accumulate necessary terms into gamma - alo array is unneeded here as it's done in one pass
+void dynamic_compute_gamma(
+    const State& state,
+    const CascadeState& casc_state,
+    int la_start,
+    int la_end,
+    const Fp3d& lte_scratch
+) {
+    using namespace ConstantsFP;
+    const auto flat_atmos = flatten<const fp_t>(state.atmos);
+    const auto& atom = state.atom;
+    const auto& phi = state.phi;
+    const auto& pops = state.pops;
+    const auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    const auto flat_lte_pops = lte_scratch.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    const auto& Gamma = state.Gamma;
+    const auto flat_Gamma = Gamma.reshape<3>(Dims(
+        Gamma.extent(0),
+        Gamma.extent(1),
+        Gamma.extent(2) * Gamma.extent(3)
+    ));
+    const auto& alo = state.alo.reshape<4>(Dims(
+        state.alo.extent(0) * state.alo.extent(1),
+        state.alo.extent(2),
+        state.alo.extent(3),
+        state.alo.extent(4)
+    ));
+    const auto& I = casc_state.i_cascades[0];
+    const auto& nh_lte = state.nh_lte;
+    const auto& incl_quad = state.incl_quad;
+    int wave_batch = la_end - la_start;
 
-//     auto& march_state = state->raymarch_state;
+    CascadeStorage dims = state.c0_size;
+    CascadeRays ray_set = cascade_compute_size<PREAVERAGE>(state.c0_size, 0);
+    const int num_cascades = casc_state.num_cascades;
 
-//     auto& atmos = state->atmos;
-//     auto& phi = state->phi;
-//     auto& pops = state->pops;
-//     auto& atom = state->atom;
-//     auto& nh_lte = state->nh_lte;
-//     auto& eta = march_state.emission;
-//     auto& chi = march_state.absorption;
+    const auto& wavelength = state.atom.wavelength;
+    parallel_for(
+        "compute Gamma",
+        SimpleBounds<4>(
+            flat_atmos.temperature.extent(0),
+            dims.num_flat_dirs,
+            wave_batch,
+            dims.num_incl
+        ),
+        YAKL_LAMBDA (i64 k, int phi_idx, int wave, int theta_idx) {
+            ivec2 probe_coord;
+            probe_coord(0) = k % dims.num_probes(1);
+            probe_coord(1) = k / dims.num_probes(1);
+            const ProbeIndex probe_idx{
+                .coord=probe_coord,
+                .dir=phi_idx,
+                .incl=theta_idx,
+                .wave=wave
+            };
+            RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
+            const fp_t intensity = probe_fetch(I, dims, probe_idx);
 
-//     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
-//     // it, for now, trust the pool allocator
-//     auto pops_dims = pops.get_dimensions();
-//     Fp3d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1), pops_dims(2));
-//     // TODO(cmo): Same for this one... it's dumb to calculate it in the inner loop...
-//     Fp2d nh0("nh0", pops_dims(1), pops_dims(2));
+            const int la = la_start + wave;
+            fp_t lambda = wavelength(la);
+            const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
+            fp_t wl_weight = FP(1.0) / hnu_4pi;
+            if (la == 0) {
+                wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
+            } else if (la == wavelength.extent(0) - 1) {
+                wl_weight *= FP(0.5) * (
+                    wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
+                );
+            } else {
+                wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
+            }
+            const fp_t wl_ray_weight = wl_weight / fp_t(dims.num_flat_dirs);
 
-//     auto flat_temperature = atmos.temperature.collapse();
-//     auto flat_ne = atmos.ne.collapse();
-//     auto flat_vturb = atmos.vturb.collapse();
-//     auto flat_nhtot = atmos.nh_tot.collapse();
-//     auto flat_vx = atmos.vx.collapse();
-//     auto flat_vy = atmos.vy.collapse();
-//     auto flat_vz = atmos.vz.collapse();
-//     auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
-//     auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
-//     auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
-//     auto flat_chi = chi.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
-//     auto flat_nh0 = nh0.collapse();
-//     // TODO(cmo): This bad.
-//     const auto& lines = atom.lines.createHostCopy();
-//     // NOTE(cmo): Compute emis/opac
-//     parallel_for(
-//         "Compute eta, chi",
-//         SimpleBounds<1>(flat_temperature.extent(0)),
-//         YAKL_LAMBDA (int64_t k) {
-//             AtmosPointParams local_atmos;
-//             local_atmos.temperature = flat_temperature(k);
-//             local_atmos.ne = flat_ne(k);
-//             local_atmos.vturb = flat_vturb(k);
-//             local_atmos.nhtot = flat_nhtot(k);
-//             local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            vec3 mu;
+            const fp_t cos_theta = incl_quad.muy(probe_idx.incl);
+            const fp_t sin_theta = std::sqrt(1.0 - square(cos_theta));
+            mu(0) = ray.dir(0) * sin_theta;
+            mu(1) = cos_theta;
+            mu(2) = ray.dir(1) * sin_theta;
 
-//             fp_t vel = std::sqrt(square(flat_vx(k)) + square(flat_vy(k)) + square(flat_vz(k)));
-//             auto mode = EmisOpacMode::StaticOnly;
-//             if (
-//                 vel <= ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(atom.mass, local_atmos.temperature)
-//             ) {
-//                 mode = EmisOpacMode::All;
-//             }
+            AtmosPointParams local_atmos;
+            local_atmos.temperature = flat_atmos.temperature(k);
+            local_atmos.ne = flat_atmos.ne(k);
+            local_atmos.vturb = flat_atmos.vturb(k);
+            local_atmos.nhtot = flat_atmos.nh_tot(k);
+            local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            local_atmos.vel = (
+                    flat_atmos.vx(k) * mu(0)
+                    + flat_atmos.vy(k) * mu(1)
+                    + flat_atmos.vz(k) * mu(2)
+            );
 
-//             auto result = emis_opac(
-//                 EmisOpacState<fp_t>{
-//                     .atom = atom,
-//                     .profile = phi,
-//                     .la = la,
-//                     .n = flat_pops,
-//                     .n_star_scratch = flat_n_star,
-//                     .k = k,
-//                     .atmos = local_atmos,
-//                     .mode = mode
-//                 }
-//             );
-//             flat_nh0(k) = local_atmos.nh0;
-//             flat_eta(k, 0) = result.eta;
-//             flat_chi(k, 0) = result.chi;
-//         }
-//     );
+            for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
+                const auto& l = atom.lines(kr);
+                if (!l.is_active(la)) {
+                    continue;
+                }
+                const UV uv = compute_uv_line(
+                    EmisOpacState<>{
+                        .atom = atom,
+                        .profile = phi,
+                        .la = la,
+                        .n = flat_pops,
+                        .n_star_scratch = flat_lte_pops,
+                        .k = k,
+                        .atmos = local_atmos
+                    },
+                    kr
+                );
 
-//     yakl::Array<i32, 1, yakl::memHost> active_host("active set", lines.extent(0));
-//     int num_active_lines = 0;
-//     for (int line_idx = 0; line_idx < lines.extent(0); ++line_idx) {
-//         const auto& line = lines(line_idx);
-//         if (line.is_active(la)) {
-//             active_host(num_active_lines) = line_idx;
-//             num_active_lines += 1;
-//         }
-//     }
-//     yakl::Array<i32, 1, yakl::memHost>active_host_cut("active set", active_host.get_data(), num_active_lines);
-//     auto active_set = active_host_cut.createDeviceCopy();
+                const fp_t eta = flat_pops(l.j, k) * uv.Uji;
+                const fp_t chi = flat_pops(l.i, k) * uv.Vij - flat_pops(l.j, k) * uv.Vji;
 
-//     // NOTE(cmo): Compute RC FS
-//     const auto& wavelength = state->wavelength_h;
-//     fp_t lambda = wavelength(la);
-//     using namespace ConstantsFP;
-//     const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
-//     fp_t wl_weight = FP(1.0) / hnu_4pi;
-//     if (la == 0) {
-//         wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
-//     } else if (la == wavelength.extent(0) - 1) {
-//         wl_weight *= FP(0.5) * (
-//             wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
-//         );
-//     } else {
-//         wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
-//     }
-//     const fp_t wl_ray_weight = wl_weight / fp_t(PROBE0_NUM_RAYS);
-//     yakl::fence();
+                add_to_gamma<true>(GammaAccumState{
+                    .eta = eta,
+                    .chi = chi,
+                    .uv = uv,
+                    .I = intensity,
+                    .alo = alo(k, phi_idx, wave, theta_idx),
+                    .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx),
+                    .Gamma = flat_Gamma,
+                    .i = l.i,
+                    .j = l.j,
+                    .k = k
+                });
+            }
+            for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
+                const auto& cont = atom.continua(kr);
+                if (!cont.is_active(la)) {
+                    continue;
+                }
 
-//     // NOTE(cmo): Compute RC FS
-//     if (num_active_lines == 0) {
-//         // NOTE(cmo): Use the static solver
-//         compute_cascade_i_2d<USE_BC>(state, MAX_LEVEL, la, false);
-//         yakl::fence();
-//         for (int i = MAX_LEVEL-1; i >= 0; --i) {
-//             const bool compute_alo = ((i == 0) && state->alo.initialized());
-//             compute_cascade_i_2d(state, i, la, compute_alo);
-//             yakl::fence();
-//         }
-//         if (state->alo.initialized()) {
-//             static_compute_gamma(state, la, lte_scratch);
-//         }
-//     } else {
-//         compute_dynamic_cascade_i_2d<false, USE_BC>(
-//             state,
-//             lte_scratch,
-//             nh0,
-//             MAX_LEVEL,
-//             la,
-//             active_set,
-//             wl_ray_weight
-//         );
-//         yakl::fence();
-//         for (int i = MAX_LEVEL-1; i >= 0; --i) {
-//             const bool compute_alo = (i == 0);
-//             if (compute_alo) {
-//                 compute_dynamic_cascade_i_2d<true>(
-//                     state,
-//                     lte_scratch,
-//                     nh0,
-//                     i,
-//                     la,
-//                     active_set,
-//                     wl_ray_weight
-//                 );
-//             } else {
-//                 compute_dynamic_cascade_i_2d<false>(
-//                     state,
-//                     lte_scratch,
-//                     nh0,
-//                     i,
-//                     la,
-//                     active_set,
-//                     wl_ray_weight
-//                 );
-//             }
-//             yakl::fence();
-//         }
-//     }
-// }
+                const UV uv = compute_uv_cont(
+                    EmisOpacState<>{
+                        .atom = atom,
+                        .profile = phi,
+                        .la = la,
+                        .n = flat_pops,
+                        .n_star_scratch = flat_lte_pops,
+                        .k = k,
+                        .atmos = local_atmos
+                    },
+                    kr
+                );
+
+                const fp_t eta = flat_pops(cont.j, k) * uv.Uji;
+                const fp_t chi = flat_pops(cont.i, k) * uv.Vij - flat_pops(cont.j, k) * uv.Vji;
+
+                add_to_gamma<true>(GammaAccumState{
+                    .eta = eta,
+                    .chi = chi,
+                    .uv = uv,
+                    .I = intensity,
+                    .alo = alo(k, phi_idx, wave, theta_idx),
+                    .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx),
+                    .Gamma = flat_Gamma,
+                    .i = cont.i,
+                    .j = cont.j,
+                    .k = k
+                });
+            }
+        }
+    );
+    yakl::fence();
+}
+
+void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, int la_start, int la_end) {
+    auto& atmos = state.atmos;
+    auto& phi = state.phi;
+    auto& pops = state.pops;
+    auto& atom = state.atom;
+    auto& dynamic_opac = state.dynamic_opac;
+    auto& eta = casc_state.eta;
+    auto& chi = casc_state.chi;
+    const auto& nh_lte = state.nh_lte;
+
+    // if (!atmos.moving) {
+    //     return static_formal_sol_rc(state, casc_state, la_start, la_end);
+    // }
+
+    // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
+    // it, for now, trust the pool allocator
+    auto pops_dims = pops.get_dimensions();
+    Fp3d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1), pops_dims(2));
+
+    if (la_end == -1) {
+        la_end = la_start + 1;
+    }
+    if ((la_end - la_start) > WAVE_BATCH) {
+        assert(false && "Wavelength batch too big.");
+    }
+    int wave_batch = la_end - la_start;
+
+    const auto flatmos = flatten<const fp_t>(atmos);
+    auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
+    auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
+    auto flat_chi = chi.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
+    auto flat_dynamic_opac = dynamic_opac.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
+    // NOTE(cmo): Compute emis/opac
+    parallel_for(
+        "Compute eta, chi",
+        SimpleBounds<2>(flatmos.temperature.extent(0), wave_batch),
+        YAKL_LAMBDA (int64_t k, int wave) {
+            AtmosPointParams local_atmos;
+            local_atmos.temperature = flatmos.temperature(k);
+            local_atmos.ne = flatmos.ne(k);
+            local_atmos.vturb = flatmos.vturb(k);
+            local_atmos.nhtot = flatmos.nh_tot(k);
+            local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            const fp_t v_norm = std::sqrt(
+                    square(flatmos.vx(k))
+                    + square(flatmos.vy(k))
+                    + square(flatmos.vz(k))
+            );
+            bool static_only = v_norm > ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(atom.mass, local_atmos.temperature);
+            flat_dynamic_opac(k, wave) = static_only;
+            EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
+
+            auto result = emis_opac(
+                EmisOpacState<fp_t>{
+                    .atom = atom,
+                    .profile = phi,
+                    .la = la_start + wave,
+                    .n = flat_pops,
+                    .n_star_scratch = flat_n_star,
+                    .k = k,
+                    .atmos = local_atmos,
+                    .active_set_cont = slice_active_cont_set(atom, la_start + wave),
+                    .mode = mode
+                }
+            );
+            flat_eta(k, wave) = result.eta;
+            flat_chi(k, wave) = result.chi;
+        }
+    );
+    state.alo = FP(0.0);
+    yakl::fence();
+    // NOTE(cmo): Compute RC FS
+    constexpr int RcModeBc = RC_flags_pack(RcFlags{
+        .dynamic = true,
+        .preaverage = PREAVERAGE,
+        .sample_bc = USE_BC,
+        .compute_alo = false
+    });
+    constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
+        .dynamic = true,
+        .preaverage = PREAVERAGE,
+        .sample_bc = false,
+        .compute_alo = false
+    });
+    constexpr int RcModeAlo = RC_flags_pack(RcFlags{
+        .dynamic = true,
+        .preaverage = PREAVERAGE,
+        .sample_bc = false,
+        .compute_alo = true
+    });
+    cascade_i_25d<RcModeBc>(
+        state,
+        casc_state,
+        casc_state.num_cascades,
+        la_start,
+        la_end
+    );
+    yakl::fence();
+    for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
+        cascade_i_25d<RcModeNoBc>(
+            state,
+            casc_state,
+            casc_idx,
+            la_start,
+            la_end
+        );
+        yakl::fence();
+    }
+    cascade_i_25d<RcModeAlo>(
+        state,
+        casc_state,
+        0,
+        la_start,
+        la_end
+    );
+    yakl::fence();
+    if (state.alo.initialized()) {
+        // NOTE(cmo): Add terms to Gamma
+        dynamic_compute_gamma(
+            state,
+            casc_state,
+            la_start,
+            la_end,
+            lte_scratch
+        );
+    }
+    // NOTE(cmo): J is not computed in this function, but done in main for now
+}

@@ -44,12 +44,13 @@ Ideas
 - [ ] Move LTE populations to be partition function based (allows for calculation of only the levels of interest)
 - [x] Use magma to abstract batched LU solved for populations
     - [ ] Needs non-GPU alternative
-- [ ] Store rays per cascade pre-averaged (groups of 4) - should reduce bandwidth and storage requirements, but requires atomic operation
+- [x] Store rays per cascade pre-averaged (groups of 4) - should reduce bandwidth and storage requirements, but requires atomic operation (available in refactor)
 - [x] Avoid local memory in dda ray traversal -- seems to be causing stalls
     - Implemented fully register-based approach using the switch/template method from nanovdb - big perf difference.
-- [ ] Full per-wavelength active set treatment. GPU benefits a lot more from this
-- [ ] Bring back wavelength batches -- consider a warp (32 threads) of inclination rays (e.g. 4) with e.g. 8 wavelengths. The raymarching will be entirely coherent for these. Emissivity/Opacity gather will be almost perfectly coherent too.
-- [ ] Refactor to only have one raymarch/RC impl
+- [x] Full per-wavelength active set treatment. GPU benefits a lot more from this
+- [x] Bring back wavelength batches -- consider a warp (32 threads) of inclination rays (e.g. 4) with e.g. 8 wavelengths. The raymarching will be entirely coherent for these. Emissivity/Opacity gather will be almost perfectly coherent too.
+- [x] Refactor to only have one raymarch/RC impl
+- [ ] Handle case of solving one direction of c0 at a time (with all necessary components of upper cascades) - same memory as preaveraging, but useful for e.g. dynamic models in 3D
 
 
 Notes

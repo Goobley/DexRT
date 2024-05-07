@@ -210,7 +210,9 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
                     .n = flat_pops,
                     .n_star_scratch = flat_n_star,
                     .k = k,
-                    .atmos = local_atmos
+                    .atmos = local_atmos,
+                    .active_set = slice_active_set(atom, la_start + wave),
+                    .active_set_cont = slice_active_cont_set(atom, la_start + wave)
                 }
             );
             flat_eta(k, wave) = result.eta;

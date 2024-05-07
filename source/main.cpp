@@ -13,6 +13,7 @@
 #include "Collisions.hpp"
 #include "Voigt.hpp"
 #include "StaticFormalSolution.hpp"
+#include "DynamicFormalSolution.hpp"
 #include "GammaMatrix.hpp"
 #include "PromweaverBoundary.hpp"
 #ifdef HAVE_MPI
@@ -415,7 +416,6 @@ void init_state (State* state) {
 
     state->c0_size = cascade_rays_to_storage<PREAVERAGE>(c0_rays);
     if constexpr (USE_ATMOSPHERE) {
-        // NOTE(cmo): Allocate ALO array -- used for static wavelengths
         state->alo = Fp5d(
             "ALO",
             state->c0_size.num_probes(1),
@@ -423,6 +423,12 @@ void init_state (State* state) {
             state->c0_size.num_flat_dirs,
             state->c0_size.wave_batch,
             state->c0_size.num_incl
+        );
+        state->dynamic_opac = decltype(state->dynamic_opac)(
+            "Dynamic Emis/Opac",
+            state->c0_size.num_probes(1),
+            state->c0_size.num_probes(0),
+            state->c0_size.wave_batch
         );
     }
 
@@ -546,19 +552,18 @@ int main(int argc, char** argv) {
         //     save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         // } else {
             compute_lte_pops(&state);
-            constexpr bool non_lte = false;
-            constexpr bool static_soln = true;
+            constexpr bool non_lte = true;
+            constexpr bool static_soln = false;
             auto waves = state.atom.wavelength.createHostCopy();
-            // auto fs_fn = dynamic_formal_sol_rc;
-            // if (static_soln) {
-            //     fs_fn = static_formal_sol_rc;
-            // }
-            auto fs_fn = static_formal_sol_rc;
+            auto fs_fn = dynamic_formal_sol_rc;
+            if (static_soln) {
+                fs_fn = static_formal_sol_rc;
+            }
             fp_t max_change = FP(1.0);
             if (non_lte) {
                 constexpr int max_iters = 300;
                 int i = 0;
-                while (max_change > FP(1e-2) && i < max_iters) {
+                while (max_change > FP(1e-3) && i < max_iters) {
                     fmt::println("FS {}", i);
                     compute_collisions_to_gamma(&state);
                     state.J = FP(0.0);
@@ -592,25 +597,18 @@ int main(int argc, char** argv) {
                     max_change = stat_eq<f64>(&state);
                     i += 1;
                 }
-                // compute_collisions_to_gamma(&state);
-                // yakl::fence();
-                // fs_fn(
-                //     state,
-                //     casc_state,
-                //     55,
-                //     59
-                // );
             } else {
                 state.J = FP(0.0);
                 yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                     fmt::println(
-                        "Computing wavelengths [{}, {}] ({}, {})",
+                        "Computing wavelengths [{}, {}] ({}, {}) (static: {})",
                         la_start,
                         la_end,
                         waves(la_start),
-                        waves(la_end-1)
+                        waves(la_end-1),
+                        static_soln
                     );
                     fs_fn(state, casc_state, la_start, la_end);
                     final_cascade_to_J(

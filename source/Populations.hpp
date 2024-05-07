@@ -272,6 +272,48 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     host_atom.coll_rates = coll_rates;
     host_atom.collisions = collisions;
 
+    yakl::Array<i32, 1, yakl::memHost> lines_start("active lines start idx", wavelength.extent(0));
+    yakl::Array<i32, 1, yakl::memHost> lines_end("active lines end idx", wavelength.extent(0));
+    yakl::Array<i32, 1, yakl::memHost> cont_start("active cont start idx", wavelength.extent(0));
+    yakl::Array<i32, 1, yakl::memHost> cont_end("active cont end idx", wavelength.extent(0));
+    std::vector<u16> active_lines;
+    active_lines.reserve(3 * wavelength.extent(0));
+    std::vector<u16> active_cont;
+    active_cont.reserve(3 * wavelength.extent(0));
+    for (int la = 0; la < wavelength.extent(0); ++la) {
+        lines_start(la) = active_lines.size();
+        for (int kr = 0; kr < lines.extent(0); ++kr) {
+            const auto& line = lines(kr);
+            if (line.is_active(la)) {
+                active_lines.emplace_back(kr);
+            }
+        }
+        lines_end(la) = active_lines.size();
+        cont_start(la) = active_cont.size();
+        for (int kr = 0; kr < continua.extent(0); ++kr) {
+            const auto& cont = continua(kr);
+            if (cont.is_active(la)) {
+                active_cont.emplace_back(kr);
+            }
+        }
+        cont_end(la) = active_cont.size();
+    }
+    yakl::Array<u16, 1, yakl::memHost> line_active_set("active lines flat buffer", active_lines.size());
+    for (int i = 0; i < active_lines.size(); ++i) {
+        line_active_set(i) = active_lines[i];
+    }
+    yakl::Array<u16, 1, yakl::memHost> cont_active_set("active lines flat buffer", active_cont.size());
+    for (int i = 0; i < active_cont.size(); ++i) {
+        cont_active_set(i) = active_cont[i];
+    }
+    host_atom.active_lines = line_active_set;
+    host_atom.active_lines_start = lines_start;
+    host_atom.active_lines_end = lines_end;
+    host_atom.active_cont = cont_active_set;
+    host_atom.active_cont_start = cont_start;
+    host_atom.active_cont_end = cont_end;
+
+
     if constexpr (mem_space == yakl::memDevice) {
         CompAtom<T, mem_space> result;
         result.mass = host_atom.mass;
@@ -289,6 +331,13 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         result.temperature = host_atom.temperature.createDeviceCopy();
         result.coll_rates = host_atom.coll_rates.createDeviceCopy();
         result.collisions = host_atom.collisions.createDeviceCopy();
+
+        result.active_lines = host_atom.active_lines.createDeviceCopy();
+        result.active_lines_start = host_atom.active_lines_start.createDeviceCopy();
+        result.active_lines_end = host_atom.active_lines_end.createDeviceCopy();
+        result.active_cont = host_atom.active_cont.createDeviceCopy();
+        result.active_cont_start = host_atom.active_cont_start.createDeviceCopy();
+        result.active_cont_end = host_atom.active_cont_end.createDeviceCopy();
 
         return result;
     } else {

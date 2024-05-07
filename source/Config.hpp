@@ -13,6 +13,8 @@ typedef double fp_t;
 #endif
 typedef float f32;
 typedef double f64;
+typedef int16_t i16;
+typedef uint16_t u16;
 typedef int32_t i32;
 typedef int64_t i64;
 
@@ -38,7 +40,7 @@ constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
 constexpr bool PINGPONG_BUFFERS = false;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
-constexpr bool USE_BC = false;
+constexpr bool USE_BC = true;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 constexpr bool PWBC_SAMPLE_CONE = false;

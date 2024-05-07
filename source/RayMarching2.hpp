@@ -4,6 +4,7 @@
 #include "State.hpp"
 #include "CascadeState.hpp"
 #include "RayMarching.hpp"
+#include "EmisOpac.hpp"
 
 template <typename Alo>
 YAKL_INLINE RadianceInterval<Alo> merge_intervals(
@@ -16,7 +17,18 @@ YAKL_INLINE RadianceInterval<Alo> merge_intervals(
     return closer;
 }
 
-template <typename Bc>
+struct Raymarch2dDynamicState {
+    vec3 mu;
+    const yakl::Array<const u16, 1, yakl::memDevice> active_set;
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
+    const Atmosphere& atmos;
+    const CompAtom<fp_t>& atom;
+    const VoigtProfile<fp_t, false>& profile;
+    const Fp2d& nh0;
+    const Fp2d& n; // flattened
+};
+
+template <typename Bc, class DynamicState=DexEmpty>
 struct Raymarch2dArgs {
     const CascadeStateAndBc<Bc>& casc_state_bc;
     RayProps ray;
@@ -26,14 +38,22 @@ struct Raymarch2dArgs {
     int wave;
     int la;
     vec3 offset;
+    DynamicState dyn_state;
 };
 
-template <int RcMode=0, typename Bc, typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>>
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>
+>
 YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
-    const Raymarch2dArgs<Bc>& args
+    const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
-    JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset);
+    JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(casc_state_bc, state, bc);
+    constexpr bool dynamic = RcMode & RC_DYNAMIC;
+    static_assert(!dynamic || (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicState>), "If dynamic must provide dynamic state");
 
     auto domain_dims = state.eta.get_dimensions();
     ivec2 domain_size;
@@ -71,16 +91,54 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     fp_t eta_s, chi_s, one_m_edt;
     do {
         const auto& sample_coord(s.curr_coord);
+        const int u = sample_coord(0);
+        const int v = sample_coord(1);
 
-        if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
+        if (u < 0 || u >= domain_size(0)) {
             break;
         }
-        if (sample_coord(1) < 0 || sample_coord(1) >= domain_size(1)) {
+        if (v < 0 || v >= domain_size(1)) {
             break;
         }
 
-        eta_s = state.eta(sample_coord(1), sample_coord(0), wave);
-        chi_s = state.chi(sample_coord(1), sample_coord(0), wave);
+        eta_s = state.eta(v, u, wave);
+        chi_s = state.chi(v, u, wave) + FP(1e-20);
+        if constexpr (dynamic) {
+            const Atmosphere& atmos = dyn_state.atmos;
+            const i64 k = v * atmos.temperature.extent(1) + u;
+            if (
+                dyn_state.dynamic_opac(v, u, wave)
+                && dyn_state.active_set.extent(0) > 0
+            ) {
+                const auto& mu = dyn_state.mu;
+                fp_t vel = (
+                    atmos.vx.get_data()[k] * mu(0)
+                    + atmos.vy.get_data()[k] * mu(1)
+                    + atmos.vz.get_data()[k] * mu(2)
+                );
+                AtmosPointParams local_atmos{
+                    .temperature = atmos.temperature.get_data()[k],
+                    .ne = atmos.ne.get_data()[k],
+                    .vturb = atmos.vturb.get_data()[k],
+                    .nhtot = atmos.nh_tot.get_data()[k],
+                    .vel = vel,
+                    .nh0 = dyn_state.nh0.get_data()[k]
+                };
+                EmisOpacState<fp_t> emis_opac_state{
+                    .atom = dyn_state.atom,
+                    .profile = dyn_state.profile,
+                    .la = la,
+                    .n = dyn_state.n,
+                    .k = k,
+                    .atmos = local_atmos,
+                    .active_set = dyn_state.active_set,
+                    .mode = EmisOpacMode::DynamicOnly
+                };
+                auto lines = emis_opac(emis_opac_state);
+                eta_s += lines.eta;
+                chi_s += lines.chi;
+            }
+        }
 
         fp_t tau = chi_s * s.dt * distance_scale;
         fp_t source_fn = eta_s / chi_s;
