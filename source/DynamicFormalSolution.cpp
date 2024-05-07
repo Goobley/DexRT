@@ -82,7 +82,7 @@ void dynamic_compute_gamma(
 
             vec3 mu;
             const fp_t cos_theta = incl_quad.muy(probe_idx.incl);
-            const fp_t sin_theta = std::sqrt(1.0 - square(cos_theta));
+            const fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
             mu(0) = ray.dir(0) * sin_theta;
             mu(1) = cos_theta;
             mu(2) = ray.dir(1) * sin_theta;
