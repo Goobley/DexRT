@@ -10,10 +10,14 @@ from pathlib import Path
 atom_name = "Ca II"
 lambda0 = 393.47771342231175
 delta_lambda = 0.017
+delta_lambda = 0.082
 outdir = Path("SnowKHIRay")
 outdir.mkdir(parents=True, exist_ok=True)
 
+# atom_name = "Ca II"
 # lambda0 = 854.4437912696352
+# delta_lambda = 0.017
+# delta_lambda = 0.11
 
 line_name = f"Ca II {lambda0:.2f} nm"
 line_name_save = line_name.replace(" ", "_")
@@ -178,7 +182,8 @@ if __name__ == "__main__":
         tax.set_xlim(-delta_lambda, delta_lambda)
         tax.set_xlabel(r"$\Delta\lambda$ [nm]")
         tax.set_ylabel(r"Slit Position [Mm]")
-        tax.set_title(f"{line_name} Spectrogram")
+        tax.set_title(f"{line_name} Optical Depth")
+        tax.grid()
         tax.tick_params("both", direction="in")
         tax.tick_params("x", labelrotation=30.0)
         tau_fig.colorbar(mappable, ax=tax)

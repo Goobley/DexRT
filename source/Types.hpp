@@ -280,11 +280,13 @@ struct CompLine {
     /// Long wavelength index
     int blue_idx;
 
-    LineProfileType type;
+    /// atom index
+    int atom = 0;
     /// upper level
     int j;
     /// lower level
     int i;
+    LineProfileType type;
     /// oscillator strength
     T f;
     /// natural broadening
@@ -314,6 +316,8 @@ struct CompCont {
     /// Long wavelength index
     int blue_idx;
 
+    /// atom index
+    int atom = 0;
     /// upper level
     int j;
     /// lower level
@@ -331,6 +335,8 @@ struct CompCont {
 
 template <typename T=fp_t>
 struct CompColl {
+    /// atom index
+    int atom = 0;
     /// Upper level index
     int j;
     /// Lower level index
@@ -363,6 +369,54 @@ struct CompAtom {
     yakl::Array<T const, 1, mem_space> sigma;
 
     yakl::Array<CompColl<T> const, 1, mem_space> collisions;
+    yakl::Array<T const, 1, mem_space> temperature;
+    yakl::Array<T const, 1, mem_space> coll_rates;
+
+    // Active set stuff
+    yakl::Array<u16 const, 1, mem_space> active_lines;
+    yakl::Array<i32 const, 1, mem_space> active_lines_start;
+    yakl::Array<i32 const, 1, mem_space> active_lines_end;
+    yakl::Array<u16 const, 1, mem_space> active_cont;
+    yakl::Array<i32 const, 1, mem_space> active_cont_start;
+    yakl::Array<i32 const, 1, mem_space> active_cont_end;
+};
+
+struct TransitionIndex {
+    int atom;
+    u16 kr;
+    bool line;
+};
+
+template <typename T=fp_t, int mem_space=memDevice>
+struct AtomicData {
+    yakl::Array<T const, 1, mem_space> mass; // num_atom
+    yakl::Array<T const, 1, mem_space> abundance; // num_atom
+    yakl::Array<int const, 1, mem_space> Z; // num_atom
+
+    yakl::Array<int const, 1, mem_space> level_start; // num_atom
+    yakl::Array<int const, 1, mem_space> num_level; // num_atom
+    yakl::Array<int const, 1, mem_space> line_start; // num_atom
+    yakl::Array<int const, 1, mem_space> num_line; // num_atom
+    yakl::Array<int const, 1, mem_space> cont_start; // num_atom
+    yakl::Array<int const, 1, mem_space> num_cont; // num_atom
+    yakl::Array<int const, 1, mem_space> coll_start; // num_atom
+    yakl::Array<int const, 1, mem_space> num_coll; // num_atom
+
+    yakl::Array<T const, 1, mem_space> energy; // num_atom * num_level
+    yakl::Array<T const, 1, mem_space> g; // num_atom * num_level
+    yakl::Array<T const, 1, mem_space> stage; // num_atom * num_level
+
+    yakl::Array<CompLine<T> const, 1, mem_space> lines; // num_atom * num_line
+    /// Shared array of broadeners
+    yakl::Array<ScaledExponentsBroadening<T> const, 1, mem_space> broadening;
+
+    yakl::Array<CompCont<T> const, 1, mem_space> continua; // num_atom * num_cont
+    yakl::Array<T const, 1, mem_space> sigma;
+
+    yakl::Array<T const, 1, mem_space> wavelength;
+    yakl::Array<TransitionIndex const, 1, mem_space> governing_trans;
+
+    yakl::Array<CompColl<T> const, 1, mem_space> collisions; // num_atom * num_coll
     yakl::Array<T const, 1, mem_space> temperature;
     yakl::Array<T const, 1, mem_space> coll_rates;
 
