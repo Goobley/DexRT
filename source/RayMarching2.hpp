@@ -22,7 +22,7 @@ struct Raymarch2dDynamicState {
     const yakl::Array<const u16, 1, yakl::memDevice> active_set;
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
     const Atmosphere& atmos;
-    const CompAtom<fp_t>& atom;
+    const AtomicData<fp_t>& adata;
     const VoigtProfile<fp_t, false>& profile;
     const Fp2d& nh0;
     const Fp2d& n; // flattened
@@ -125,7 +125,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
                     .nh0 = dyn_state.nh0.get_data()[k]
                 };
                 EmisOpacState<fp_t> emis_opac_state{
-                    .atom = dyn_state.atom,
+                    .adata = dyn_state.adata,
                     .profile = dyn_state.profile,
                     .la = la,
                     .n = dyn_state.n,

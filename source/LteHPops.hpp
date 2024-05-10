@@ -8,7 +8,7 @@
  * Temporary function to give us the LTE ground state fraction of h for
  * broadening things. Uses tabulated partition function based on classical 5+1
  * level H.
- * 
+ *
  * N.B. This seems to be able to overflow the stack in deep functions - use a properly allocated one!!
 */
 YAKL_INLINE fp_t nh0_lte(fp_t temperature, fp_t ne, fp_t nh_tot, fp_t* nhii=nullptr) {
@@ -66,7 +66,7 @@ struct HPartFn {
     YAKL_INLINE fp_t operator()(fp_t temperature, fp_t ne, fp_t nh_tot, fp_t* nhii=nullptr) const {
 #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
         YAKL_EXECUTE_ON_HOST_ONLY(
-            if constexpr (mem_space == memDevice) {
+            if constexpr (mem_space == yakl::memDevice) {
                 throw std::runtime_error(fmt::format("Cannot access a partition function in device memory from CPU..."));
             }
         );

@@ -87,12 +87,12 @@ struct ContParams {
 };
 
 template <int mem_space=yakl::memDevice>
-YAKL_INLINE SigmaInterp<mem_space> get_sigma(const CompAtom<fp_t, mem_space>& atom, const CompCont<fp_t>& cont) {
+YAKL_INLINE SigmaInterp<mem_space> get_sigma(const AtomicData<fp_t, mem_space>& adata, const CompCont<fp_t>& cont) {
     SigmaInterp<mem_space> result;
 
     result.sigma = yakl::Array<fp_t const, 1, mem_space>(
         "cont_sigma",
-        &atom.sigma(cont.sigma_start),
+        &adata.sigma(cont.sigma_start),
         // TODO(cmo): Can we do away with sigma end? The array length should be the same as red_idx - blue_idx
         cont.sigma_end - cont.sigma_start
     );
@@ -222,13 +222,13 @@ YAKL_INLINE UV compute_uv_line(
     const EmisOpacState<T, mem_space>& args,
     int line_idx
 ) {
-    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
-    const fp_t lambda = atom.wavelength(la);
-    const auto& l = atom.lines(line_idx);
+    JasUnpack(args, adata, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
+    const fp_t lambda = adata.wavelength(la);
+    const auto& l = adata.lines(line_idx);
 
     LineParams params;
-    params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
-    params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
+    params.dop_width = doppler_width(l.lambda0, adata.mass(l.atom), atmos.temperature, atmos.vturb);
+    params.gamma = gamma_from_broadening(l, adata.broadening, atmos.temperature, atmos.ne, atmos.nh0);
     params.vel = atmos.vel;
 
     const UV uv = compute_uv(
@@ -245,16 +245,17 @@ YAKL_INLINE UV compute_uv_cont(
     const EmisOpacState<T, mem_space>& args,
     int cont_idx
 ) {
-    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
+    JasUnpack(args, adata, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
     const auto& n_star = args.n_star_scratch;
-    const fp_t lambda = atom.wavelength(la);
-    const auto& cont = atom.continua(cont_idx);
+    const fp_t lambda = adata.wavelength(la);
+    const auto& cont = adata.continua(cont_idx);
 
     using namespace ConstantsFP;
     ContParams<mem_space> params;
     params.la = la;
-    params.thermal_ratio = n_star(cont.i, k) / n_star(cont.j, k) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
-    params.sigma_grid = get_sigma<mem_space>(atom, cont);
+    const int offset = adata.level_start(cont.atom);
+    params.thermal_ratio = n_star(offset + cont.i, k) / n_star(offset + cont.j, k) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
+    params.sigma_grid = get_sigma<mem_space>(adata, cont);
 
     const UV uv = compute_uv<mem_space>(
         cont,
@@ -269,28 +270,29 @@ template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacState<T, mem_space>& args
 ) {
-    JasUnpack(args, atom, profile, la, n, n_star_scratch, k, atmos, mode, active_set, active_set_cont);
+    JasUnpack(args, adata, profile, la, n, n_star_scratch, k, atmos, mode, active_set, active_set_cont);
     EmisOpac result{FP(0.0), FP(0.0)};
-    fp_t lambda = atom.wavelength(la);
+    fp_t lambda = adata.wavelength(la);
     const bool lines = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::DynamicOnly);
     const bool conts = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::StaticOnly);
 
     if (lines) {
         if (active_set.initialized()) {
             for (int kr = 0; kr < active_set.extent(0); ++kr) {
-                const auto& l = atom.lines(active_set(kr));
+                const auto& l = adata.lines(active_set(kr));
                 const UV uv = compute_uv_line(
                     args,
                     active_set(kr)
                 );
-                const fp_t nj = n(l.j, k);
-                const fp_t ni = n(l.i, k);
+                const int offset = adata.level_start(l.atom);
+                const fp_t nj = n(offset + l.j, k);
+                const fp_t ni = n(offset + l.i, k);
                 result.eta += nj * uv.Uji;
                 result.chi += ni * uv.Vij - nj * uv.Vji;
             }
         } else {
-            for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
-                const auto& l = atom.lines(kr);
+            for (int kr = 0; kr < adata.lines.extent(0); ++kr) {
+                const auto& l = adata.lines(kr);
                 if (!l.is_active(la)) {
                     continue;
                 }
@@ -298,8 +300,9 @@ YAKL_INLINE EmisOpac emis_opac(
                     args,
                     kr
                 );
-                const fp_t nj = n(l.j, k);
-                const fp_t ni = n(l.i, k);
+                const int offset = adata.level_start(l.atom);
+                const fp_t nj = n(offset + l.j, k);
+                const fp_t ni = n(offset + l.i, k);
                 result.eta += nj * uv.Uji;
                 result.chi += ni * uv.Vij - nj * uv.Vji;
             }
@@ -309,43 +312,54 @@ YAKL_INLINE EmisOpac emis_opac(
     if (conts) {
         bool any_active = false || (active_set_cont.initialized() && active_set_cont.extent(0) > 0);
         if (!active_set_cont.initialized()) {
-            for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
-                const auto& cont = atom.continua(kr);
+            for (int kr = 0; kr < adata.continua.extent(0); ++kr) {
+                const auto& cont = adata.continua(kr);
                 any_active = any_active || cont.is_active(la);
+                if (any_active) {
+                    break;
+                }
             }
         }
         if (!any_active) {
             return result;
         }
 
-        auto& n_star = n_star_scratch;
-        lte_pops<T, fp_t, mem_space>(
-            atom.energy,
-            atom.g,
-            atom.stage,
-            atmos.temperature,
-            atmos.ne,
-            atom.abundance * atmos.nhtot,
-            n_star,
-            k
-        );
+        for (int ia = 0; ia < adata.num_level.extent(0); ++ia) {
+            const auto n_star = slice_pops(
+                n_star_scratch,
+                adata,
+                ia
+            );
+            const auto lte_data = extract_lte_terms_dev(adata, ia);
+            lte_pops<T, fp_t, mem_space>(
+                lte_data.energy,
+                lte_data.g,
+                lte_data.stage,
+                atmos.temperature,
+                atmos.ne,
+                lte_data.abundance * atmos.nhtot,
+                n_star,
+                k
+            );
+        }
         if (active_set_cont.initialized()) {
             for (int i = 0; i < active_set_cont.extent(0); ++i) {
                 const int kr = active_set_cont(i);
-                const auto& cont = atom.continua(kr);
+                const auto& cont = adata.continua(kr);
 
                 const UV uv = compute_uv_cont(
                     args,
                     kr
                 );
-                const fp_t nj = n(cont.j, k);
-                const fp_t ni = n(cont.i, k);
+                const int offset = adata.level_start(cont.atom);
+                const fp_t nj = n(offset + cont.j, k);
+                const fp_t ni = n(offset + cont.i, k);
                 result.eta += nj * uv.Uji;
                 result.chi += ni * uv.Vij - nj * uv.Vji;
             }
         } else {
-            for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
-                const auto& cont = atom.continua(kr);
+            for (int kr = 0; kr < adata.continua.extent(0); ++kr) {
+                const auto& cont = adata.continua(kr);
                 if (!cont.is_active(la)) {
                     continue;
                 }
@@ -354,8 +368,9 @@ YAKL_INLINE EmisOpac emis_opac(
                     args,
                     kr
                 );
-                const fp_t nj = n(cont.j, k);
-                const fp_t ni = n(cont.i, k);
+                const int offset = adata.level_start(cont.atom);
+                const fp_t nj = n(offset + cont.j, k);
+                const fp_t ni = n(offset + cont.i, k);
                 result.eta += nj * uv.Uji;
                 result.chi += ni * uv.Vij - nj * uv.Vji;
             }
@@ -370,20 +385,20 @@ template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacSpecState<T, mem_space>& args
 ) {
-    JasUnpack(args, atom, profile, lambda, n, n_star_scratch, k, atmos);
+    JasUnpack(args, adata, profile, lambda, n, n_star_scratch, k, atmos);
     EmisOpac result{FP(0.0), FP(0.0)};
 
-    int la_effective = upper_bound(atom.wavelength, lambda) - 1;
+    int la_effective = upper_bound(adata.wavelength, lambda) - 1;
 
-    for (int kr = 0; kr < atom.lines.extent(0); ++kr) {
-        const auto& l = atom.lines(kr);
+    for (int kr = 0; kr < adata.lines.extent(0); ++kr) {
+        const auto& l = adata.lines(kr);
         if (!l.is_active(la_effective)) {
             continue;
         }
 
         LineParams params;
-        params.dop_width = doppler_width(l.lambda0, atom.mass, atmos.temperature, atmos.vturb);
-        params.gamma = gamma_from_broadening(l, atom.broadening, atmos.temperature, atmos.ne, atmos.nh0);
+        params.dop_width = doppler_width(l.lambda0, adata.mass(l.atom), atmos.temperature, atmos.vturb);
+        params.gamma = gamma_from_broadening(l, adata.broadening, atmos.temperature, atmos.ne, atmos.nh0);
         params.vel = atmos.vel;
 
         const UV uv = compute_uv(
@@ -393,49 +408,63 @@ YAKL_INLINE EmisOpac emis_opac(
             lambda
         );
 
-        const fp_t nj = n(l.j, k);
-        const fp_t ni = n(l.i, k);
+        const int offset = adata.level_start(l.atom);
+        const fp_t nj = n(offset + l.j, k);
+        const fp_t ni = n(offset + l.i, k);
         result.eta += nj * uv.Uji;
         result.chi += ni * uv.Vij - nj * uv.Vji;
     }
 
     bool any_active = false;
-    for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
-        const auto& cont = atom.continua(kr);
+    for (int kr = 0; kr < adata.continua.extent(0); ++kr) {
+        const auto& cont = adata.continua(kr);
         any_active = any_active || cont.is_active(la_effective);
+        if (any_active) {
+            break;
+        }
     }
     if (!any_active) {
         return result;
     }
 
-    auto& n_star = n_star_scratch;
-    lte_pops<T, fp_t, mem_space>(
-        atom.energy,
-        atom.g,
-        atom.stage,
-        atmos.temperature,
-        atmos.ne,
-        atom.abundance * atmos.nhtot,
-        n_star,
-        k
-    );
-    for (int kr = 0; kr < atom.continua.extent(0); ++kr) {
-        const auto& cont = atom.continua(kr);
+    for (int ia = 0; ia < adata.num_level.extent(0); ++ia) {
+        const auto n_star = slice_pops(
+            n_star_scratch,
+            adata,
+            ia
+        );
+        const auto lte_data = extract_lte_terms_dev(adata, ia);
+        lte_pops<T, fp_t, mem_space>(
+            lte_data.energy,
+            lte_data.g,
+            lte_data.stage,
+            atmos.temperature,
+            atmos.ne,
+            lte_data.abundance * atmos.nhtot,
+            n_star,
+            k
+        );
+    }
+    const auto& n_star = n_star_scratch;
+    for (int kr = 0; kr < adata.continua.extent(0); ++kr) {
+        const auto& cont = adata.continua(kr);
         if (!cont.is_active(la_effective)) {
             continue;
         }
         int la_effective_p = std::min(la_effective + 1, cont.red_idx - 1);
         fp_t t;
+        // NOTE(cmo): Weight for linear interpolation of sigma
         if (la_effective == la_effective_p) {
             t = FP(1.0);
         } else {
-            t = lambda - atom.wavelength(la_effective) / (atom.wavelength(la_effective_p) - atom.wavelength(la_effective));
+            t = lambda - adata.wavelength(la_effective) / (adata.wavelength(la_effective_p) - adata.wavelength(la_effective));
         }
 
         using namespace ConstantsFP;
         ContParams<mem_space> params;
-        params.thermal_ratio = n_star(cont.i, k) / n_star(cont.j, k) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
-        params.sigma_grid = get_sigma<mem_space>(atom, cont);
+        const int offset = adata.level_start(cont.atom);
+        params.thermal_ratio = n_star(offset + cont.i, k) / n_star(offset + cont.j, k) * std::exp(-hc_k_B_nm / (lambda * atmos.temperature));
+        params.sigma_grid = get_sigma<mem_space>(adata, cont);
 
         UV uv;
         uv.Vij = (
@@ -445,8 +474,8 @@ YAKL_INLINE EmisOpac emis_opac(
         uv.Vji = params.thermal_ratio * uv.Vij;
         uv.Uji = twohc2_kW_nm2 / (cube(lambda) * square(lambda) * FP(1e-18)) * uv.Vji;
 
-        const fp_t nj = n(cont.j, k);
-        const fp_t ni = n(cont.i, k);
+        const fp_t nj = n(offset + cont.j, k);
+        const fp_t ni = n(offset + cont.i, k);
         result.eta += nj * uv.Uji;
         result.chi += ni * uv.Vij - nj * uv.Vji;
     }

@@ -220,7 +220,7 @@ inline void compute_collisions_to_gamma(State* state) {
     for (int ia = 0; ia < state->atoms_with_gamma.size(); ++ia) {
         auto& Gamma = Gamma_store[ia];
         auto& atom = state->atoms_with_gamma[ia];
-        auto& n_star_slice = slice_pops(
+        const auto n_star_slice = slice_pops(
             n_star,
             state->adata_host,
             state->atoms_with_gamma_mapping[ia]

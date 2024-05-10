@@ -383,17 +383,20 @@ void init_state (State* state) {
         // TODO(cmo): Need to decide whether to allow non-probe 1 spacing... it
         // probably doesn't make sense for us to have any interest in the level
         // populations not on a probe - we don't have any way to compute this outside LTE.
-        state->pops = Fp3d("pops", state->atom.energy.extent(0), space_x, space_y);
-        state->J = Fp3d("J", state->atom.wavelength.extent(0), space_x, space_y);
+        const int n_level_total = state->adata.energy.extent(0);
+        state->pops = Fp3d("pops", n_level_total, space_x, space_y);
+        state->J = Fp3d("J", state->adata.wavelength.extent(0), space_x, space_y);
         state->J = FP(0.0);
-        // TODO(cmo): This backwards/forwards shuffle is a bit silly, but it's a tiny array.
-        state->wavelength_h = state->atom.wavelength.createHostCopy();
 
-        const int n_level = state->atom.energy.extent(0);
         // state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
-        state->Gamma = decltype(state->Gamma)("Gamma", n_level, n_level, space_x, space_y);
+        for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
+            const int n_level = state->adata_host.num_level(ia);
+            state->Gamma.emplace_back(
+                Fp4d("Gamma", n_level, n_level, space_x, space_y)
+            );
+        }
 
-        state->pw_bc = load_bc(ATMOS_PATH, state->atom.wavelength);
+        state->pw_bc = load_bc(ATMOS_PATH, state->adata.wavelength);
         if constexpr (USE_BC) {
             state->boundary = BoundaryType::Promweaver;
         } else {
@@ -522,9 +525,15 @@ int main(int argc, char** argv) {
         if constexpr (USE_ATMOSPHERE) {
             Atmosphere atmos = load_atmos(ATMOS_PATH);
             ModelAtom<f64> model = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
-            CompAtom atom = to_comp_atom(model);
+            AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({model});
+            state.adata = atomic_data.device;
+            state.adata_host = atomic_data.host;
+            state.have_h = atomic_data.have_h_model;
+            state.atoms = extract_atoms(atomic_data.device);
+            GammaAtomsAndMapping gamma_atoms = extract_atoms_with_gamma_and_mapping(atomic_data.device, atomic_data.host);
+            state.atoms_with_gamma = gamma_atoms.atoms;
+            state.atoms_with_gamma_mapping = gamma_atoms.mapping;
             state.atmos = atmos;
-            state.atom = atom;
             state.phi = VoigtProfile<fp_t>(
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.15), 1024},
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(1.5e3), 64 * 1024}
@@ -552,9 +561,9 @@ int main(int argc, char** argv) {
         //     save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         // } else {
             compute_lte_pops(&state);
-            constexpr bool non_lte = true;
+            constexpr bool non_lte = false;
             constexpr bool static_soln = false;
-            auto waves = state.atom.wavelength.createHostCopy();
+            auto& waves = state.adata_host.wavelength;
             auto fs_fn = dynamic_formal_sol_rc;
             if (static_soln) {
                 fs_fn = static_formal_sol_rc;
@@ -625,7 +634,7 @@ int main(int argc, char** argv) {
                 state.J,
                 casc_state.eta,
                 casc_state.chi,
-                state.atom.wavelength,
+                state.adata.wavelength,
                 state.pops,
                 casc_state.i_cascades[casc_state.i_cascades.size() - 1],
                 state.alo

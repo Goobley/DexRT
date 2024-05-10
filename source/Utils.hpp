@@ -151,10 +151,22 @@ YAKL_INLINE
 Fp3d slice_pops(const Fp3d& pops, const AtomicData<T, mem_space>& adata, int ia) {
     Fp3d result(
         "pops_slice",
-        pops.data() + adata.level_start(ia) * (pops.extent(1) * pops.extent(2),
+        pops.data() + adata.level_start(ia) * (pops.extent(1) * pops.extent(2)),
         adata.num_level(ia),
         pops.extent(1),
         pops.extent(2)
+    );
+    return result;
+}
+
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE
+Fp2d slice_pops(const Fp2d& pops, const AtomicData<T, mem_space>& adata, int ia) {
+    Fp2d result(
+        "pops_slice",
+        pops.data() + adata.level_start(ia) * pops.extent(1),
+        adata.num_level(ia),
+        pops.extent(1)
     );
     return result;
 }

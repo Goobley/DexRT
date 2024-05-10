@@ -256,6 +256,12 @@ struct InterpCollRate {
     std::vector<T> data;
 };
 
+enum class AtomicTreatment {
+    Detailed,
+    Golding,
+    Active
+};
+
 template <typename T=fp_t>
 struct ModelAtom {
     Element<T> element;
@@ -263,6 +269,8 @@ struct ModelAtom {
     std::vector<AtomicLine<T>> lines;
     std::vector<AtomicContinuum<T>> continua;
     std::vector<InterpCollRate<T>> coll_rates;
+    // TODO(cmo): Only here temporarily
+    AtomicTreatment treatment = AtomicTreatment::Active;
 
     /// Compute the wavelength [nm] (lambda0 for lines, lambda_edge for
     /// continua) for a transition between levels j and i (j > i)
@@ -349,11 +357,6 @@ struct CompColl {
     int end_idx;
 };
 
-enum class AtomicTreatment {
-    Detailed,
-    Golding,
-    Active
-};
 
 inline bool has_gamma(AtomicTreatment t) {
     return (
@@ -386,6 +389,16 @@ struct CompAtom {
     yakl::Array<T const, 1, mem_space> coll_rates;
 };
 
+template <typename T=fp_t, int mem_space=memDevice>
+struct LteTerms {
+    T mass;
+    T abundance;
+    yakl::Array<T const, 1, mem_space> energy;
+    yakl::Array<T const, 1, mem_space> g;
+    yakl::Array<T const, 1, mem_space> stage;
+};
+
+
 struct TransitionIndex {
     int atom;
     u16 kr;
@@ -395,7 +408,7 @@ struct TransitionIndex {
 
 template <typename T=fp_t, int mem_space=memDevice>
 struct AtomicData {
-    yakl::Array<AtomicTreatment const, 1, mem_space> // num_atom
+    yakl::Array<AtomicTreatment const, 1, mem_space> treatment; // num_atom
     yakl::Array<T const, 1, mem_space> mass; // num_atom
     yakl::Array<T const, 1, mem_space> abundance; // num_atom
     yakl::Array<int const, 1, mem_space> Z; // num_atom

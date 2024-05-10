@@ -305,12 +305,12 @@ struct AtomicDataHostDevice {
 };
 
 template <typename T=fp_t, typename U=fp_t>
-AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
+AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
 #define DFPU(X) U(FP(X))
     using namespace ConstantsF64;
     // Sort by mass
     std::sort(
-        models.start(),
+        models.begin(),
         models.end(),
         [] (auto a, auto b) {
             return a.element.mass < b.element.mass;
@@ -322,7 +322,7 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
     yakl::Array<T, 1, yakl::memHost> mass("mass", n_atom);
     yakl::Array<T, 1, yakl::memHost> abundance("abundance", n_atom);
     yakl::Array<int, 1, yakl::memHost> Z("Z", n_atom);
-    yakl::Array<AtomicTreatment, 1, yakl::memHost> Z("treatment", n_atom);
+    yakl::Array<AtomicTreatment, 1, yakl::memHost> treatment("treatment", n_atom);
     for (int i = 0; i < n_atom; ++i) {
         mass(i) = models[i].element.mass;
         Z(i) = models[i].element.Z;
@@ -345,7 +345,7 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
     yakl::Array<int, 1, yakl::memHost> num_coll("num_coll", n_atom);
     for (int ia = 0; ia < n_atom; ++ia) {
         level_start(ia) = total_n_level;
-        num_level(ia) = models[ia].levels().size();
+        num_level(ia) = models[ia].levels.size();
         total_n_level += num_level(ia);
 
         line_start(ia) = total_n_line;
@@ -357,7 +357,7 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
         total_n_cont += num_cont(ia);
 
         coll_start(ia) = total_n_coll;
-        num_coll(ia) = models[ia].collisions.size();
+        num_coll(ia) = models[ia].coll_rates.size();
         total_n_coll += num_coll(ia);
     }
     JasPack(host_data, level_start, num_level, line_start, num_line);
@@ -421,7 +421,7 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
             new_l.broad_end = broad_idx;
         }
     }
-    host_atom.broadening = broadening;
+    host_data.broadening = broadening;
 
     for (int ia = 0; ia < n_atom; ++ia) {
         const auto& model = models[ia];
@@ -636,15 +636,17 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
     JasPack(host_data, lines, continua, sigma);
 
     int n_temperature = 0;
+    int n_collisions = 0;
     for (int ia = 0; ia < n_atom; ++ia) {
         const auto& model = models[ia];
         for (int i = 0; i < model.coll_rates.size(); ++i) {
             n_temperature += model.coll_rates[i].temperature.size();
+            n_collisions += 1;
         }
     }
     yakl::Array<T, 1, yakl::memHost> temperature("temperature grid", n_temperature);
     yakl::Array<T, 1, yakl::memHost> coll_rates("coll rates grid", n_temperature);
-    yakl::Array<CompColl<T>, 1, yakl::memHost> collisions("collisions", model.coll_rates.size());
+    yakl::Array<CompColl<T>, 1, yakl::memHost> collisions("collisions", n_collisions);
     int temp_offset = 0;
     for (int ia = 0; ia < n_atom; ++ia) {
         const auto& model = models[ia];
@@ -666,31 +668,31 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
     }
     JasPack(host_data, temperature, coll_rates, collisions);
 
-    yakl::Array<i32, 1, yakl::memHost> lines_start("active lines start idx", wavelength.extent(0));
-    yakl::Array<i32, 1, yakl::memHost> lines_end("active lines end idx", wavelength.extent(0));
-    yakl::Array<i32, 1, yakl::memHost> cont_start("active cont start idx", wavelength.extent(0));
-    yakl::Array<i32, 1, yakl::memHost> cont_end("active cont end idx", wavelength.extent(0));
+    yakl::Array<i32, 1, yakl::memHost> active_lines_start("active lines start idx", wavelength.extent(0));
+    yakl::Array<i32, 1, yakl::memHost> active_lines_end("active lines end idx", wavelength.extent(0));
+    yakl::Array<i32, 1, yakl::memHost> active_cont_start("active cont start idx", wavelength.extent(0));
+    yakl::Array<i32, 1, yakl::memHost> active_cont_end("active cont end idx", wavelength.extent(0));
     std::vector<u16> active_lines;
     active_lines.reserve(3 * wavelength.extent(0));
     std::vector<u16> active_cont;
     active_cont.reserve(3 * wavelength.extent(0));
     for (int la = 0; la < wavelength.extent(0); ++la) {
-        lines_start(la) = active_lines.size();
+        active_lines_start(la) = active_lines.size();
         for (int kr = 0; kr < lines.extent(0); ++kr) {
             const auto& line = lines(kr);
             if (line.is_active(la)) {
                 active_lines.emplace_back(kr);
             }
         }
-        lines_end(la) = active_lines.size();
-        cont_start(la) = active_cont.size();
+        active_lines_end(la) = active_lines.size();
+        active_cont_start(la) = active_cont.size();
         for (int kr = 0; kr < continua.extent(0); ++kr) {
             const auto& cont = continua(kr);
             if (cont.is_active(la)) {
                 active_cont.emplace_back(kr);
             }
         }
-        cont_end(la) = active_cont.size();
+        active_cont_end(la) = active_cont.size();
     }
     yakl::Array<u16, 1, yakl::memHost> line_active_set("active lines flat buffer", active_lines.size());
     for (int i = 0; i < active_lines.size(); ++i) {
@@ -701,11 +703,11 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
         cont_active_set(i) = active_cont[i];
     }
     host_data.active_lines = line_active_set;
-    host_data.active_lines_start = lines_start;
-    host_data.active_lines_end = lines_end;
+    host_data.active_lines_start = active_lines_start;
+    host_data.active_lines_end = active_lines_end;
     host_data.active_cont = cont_active_set;
-    host_data.active_cont_start = cont_start;
-    host_data.active_cont_end = cont_end;
+    host_data.active_cont_start = active_cont_start;
+    host_data.active_cont_end = active_cont_end;
 
     AtomicData<T, yakl::memDevice> dev_data{
         .mass = host_data.mass.createDeviceCopy(),
@@ -742,7 +744,7 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
     AtomicDataHostDevice<T> result{
         .host = host_data,
         .device = dev_data,
-        .have_h_model = (models[0].Z == 1)
+        .have_h_model = (models[0].element.Z == 1)
     };
 
     return result;
@@ -757,16 +759,12 @@ AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
 /// @param ia
 /// @return
 template <typename T=fp_t, int mem_space>
-YAKL_INLINE
+inline
 CompAtom<T, mem_space> extract_atom(const AtomicData<T, mem_space>& adata, int ia) {
     assert(ia < adata.level_start.extent(0));
-    CompAtom<T, mem_space> result;
 
+    yakl::Array<CompAtom<T, mem_space>, 1, mem_space> store("store", 1);
     auto fn = YAKL_LAMBDA (int _) {
-        result.mass = adata.mass(ia);
-        result.abundance = adata.abundance(ia);
-        result.Z = adata.Z(ia);
-        result.treatment = adate.treatment(ia);
         const int level_start = adata.level_start(ia);
         const int n_level = adata.num_level(ia);
         const int line_start = adata.line_start(ia);
@@ -775,64 +773,90 @@ CompAtom<T, mem_space> extract_atom(const AtomicData<T, mem_space>& adata, int i
         const int n_cont = adata.num_cont(ia);
         const int coll_start = adata.coll_start(ia);
         const int n_coll = adata.num_coll(ia);
+        CompAtom<T, mem_space> result{
+            .mass = adata.mass(ia),
+            .abundance = adata.abundance(ia),
+            .Z = adata.Z(ia),
+            .treatment = adata.treatment(ia),
 
-        result.energy = decltype(result.energy)("energy", &adata.energy(level_start), n_level);
-        result.g = decltype(result.g)("g", &adata.g(level_start), n_level);
-        result.stage = decltype(result.stage)("energy", &adata.stage(level_start), n_level);
+            .energy = decltype(adata.energy)("energy", &adata.energy(level_start), n_level),
+            .g = decltype(adata.g)("g", &adata.g(level_start), n_level),
+            .stage = decltype(adata.stage)("stage", &adata.stage(level_start), n_level),
 
-        result.lines = decltype(result.lines)("lines", &adata.lines(line_start), n_line);
-        // NOTE(cmo): We hand over the whole broadening array as the lines are set up to index into this
-        result.broadening = adata.broadening;
-        result.wavelength = adata.wavelength;
+            .lines = decltype(adata.lines)("lines", &adata.lines(line_start), n_line),
+            // NOTE(cmo): We hand over the whole broadening array as the lines are set up to index into this
+            .broadening = adata.broadening,
+            .wavelength = adata.wavelength,
 
-        result.continua = decltype(result.continua)("continua", &adata.continua(cont_start), n_cont);
-        // NOTE(cmo): Same for sigma
-        result.sigma = adata.sigma;
+            .continua = decltype(adata.continua)("continua", &adata.continua(cont_start), n_cont),
+            // NOTE(cmo): Same for sigma
+            .sigma = adata.sigma,
 
-        result.collisions = decltype(result.collisions)("collisions", &adata.collisions(coll_start), n_coll)
-        // NOTE(cmo): Same for collisional data
-        result.temperature = adata.temperature;
-        result.coll_rates = adata.coll_rates;
+            .collisions = decltype(adata.collisions)("collisions", &adata.collisions(coll_start), n_coll),
+            // NOTE(cmo): Same for collisional data
+            .temperature = adata.temperature,
+            .coll_rates = adata.coll_rates
+        };
+        store(0) = result;
     };
 
     if constexpr (mem_space == yakl::memHost) {
         fn();
+        return store(0);
     } else {
         parallel_for(
             SimpleBounds<1>(1),
             fn
         );
+        yakl::fence();
+        return store.createHostCopy()(0);
     }
-    yakl::fence();
+}
+
+template <typename T, int mem_space>
+YAKL_INLINE
+LteTerms<T, mem_space>
+extract_lte_terms_dev(const AtomicData<T, mem_space>& adata, int ia) {
+    const int level_start = adata.level_start(ia);
+    const int n_level = adata.num_level(ia);
+    LteTerms<T, mem_space> result = {
+        .mass = adata.mass(ia),
+        .abundance = adata.abundance(ia),
+        .energy = FpConst1d("energy", &adata.energy(level_start), n_level),
+        .g = FpConst1d("g", &adata.g(level_start), n_level),
+        .stage = FpConst1d("stage", &adata.stage(level_start), n_level)
+    };
     return result;
 }
+
 
 template <typename T, int mem_space>
 inline
 std::vector<CompAtom<T, mem_space>>
 extract_atoms(const AtomicData<T, mem_space>& adata) {
     const int n_atom = adata.num_level.extent(0);
-    std::vector<CompAtom<T, mem_space> result(n_atom);
+    std::vector<CompAtom<T, mem_space>> result(n_atom);
     for (int ia = 0; ia < n_atom; ++ia) {
-        result[i] = extract_atom(adata, ia);
+        result[ia] = extract_atom(adata, ia);
     }
     return result;
 }
 
+template <typename T=fp_t, int mem_space=yakl::memDevice>
 struct GammaAtomsAndMapping {
     std::vector<CompAtom<T, mem_space>> atoms;
     std::vector<int> mapping;
 
 };
-template <typename T, int mem_space>
+template <typename T=fp_t, int mem_space=yakl::memDevice>
 inline
-GammaAtomsAndMapping
+GammaAtomsAndMapping<T, mem_space>
 extract_atoms_with_gamma_and_mapping(
     const AtomicData<T, mem_space>& adata,
-    const AtomicData<T, yakl::memHost>& adata_h;
+    const AtomicData<T, yakl::memHost>& adata_h
 ) {
     const int n_atom = adata.num_level.extent(0);
-    GammaAtomsAndMapping result;
+    GammaAtomsAndMapping<T, mem_space> result;
     for (int ia = 0; ia < n_atom; ++ia) {
         if (has_gamma(adata_h.treatment(ia))) {
             result.mapping.emplace_back(ia);
@@ -924,7 +948,8 @@ inline void compute_lte_pops(State* state) {
             state->adata_host,
             ia
         );
-        compute_lte_pops_flat(atom, state->atmos, pops)
+        const auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+        compute_lte_pops_flat(atom, state->atmos, flat_pops);
     }
 }
 
@@ -939,244 +964,246 @@ inline void compute_lte_pops(State* state, const Fp3d shared_pops) {
             state->adata_host,
             ia
         );
-        compute_lte_pops_flat(atom, state->atmos, pops)
+        const auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+        compute_lte_pops_flat(atom, state->atmos, flat_pops);
     }
 }
 
 template <typename T=fp_t>
 inline fp_t stat_eq(State* state) {
-    auto Gamma_host = state->Gamma.createHostCopy();
-    const auto& Gamma = state->Gamma.reshape<3>(Dims(
-        state->Gamma.extent(0),
-        state->Gamma.extent(1),
-        state->Gamma.extent(2) * state->Gamma.extent(3)
-    ));
-    yakl::Array<T, 3, yakl::memDevice> GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
-    yakl::Array<T*, 1, yakl::memDevice> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0));
-    const auto& pops = state->pops.reshape<2>(Dims(
-        state->pops.extent(0),
-        state->pops.extent(1) * state->pops.extent(2)
-    ));
-    yakl::Array<T, 2, yakl::memDevice> new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));
-    yakl::Array<T, 1, yakl::memDevice> n_total("new_pops", GammaT.extent(0));
-    yakl::Array<T*, 1, yakl::memDevice> new_pops_ptrs("new_pops_ptrs", GammaT.extent(0));
-    yakl::Array<i32, 1, yakl::memDevice> i_elim("i_elim", GammaT.extent(0));
-    yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", new_pops.extent(0), new_pops.extent(1));
-    yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", new_pops.extent(0));
-    yakl::Array<i32, 1, yakl::memDevice> info("info", new_pops.extent(0));
-    parallel_for(
-        "Max Pops",
-        SimpleBounds<1>(pops.extent(1)),
-        YAKL_LAMBDA (int64_t k) {
-            fp_t n_max = pops(0, k);
-            i_elim(k) = 0;
-            n_total(k) = FP(0.0);
-            for (int i = 0; i < pops.extent(0); ++i) {
-                fp_t n = pops(i, k);
-                n_total(k) += n;
-                if (n > n_max) {
-                    i_elim(k) = i;
-                }
-            }
-        }
-    );
-    yakl::fence();
-
-    parallel_for(
-        "Transpose Gamma",
-        SimpleBounds<3>(Gamma.extent(2), Gamma.extent(1), Gamma.extent(0)),
-        YAKL_LAMBDA (int k, int i, int j) {
-            // if (i_elim(k) == i) {
-            //     GammaT(k, j, i) = FP(1.0);
-            // } else {
-                GammaT(k, j, i) = Gamma(i, j, k);
-            // }
-        }
-    );
-    yakl::fence();
-
-    parallel_for(
-        "Gamma fixup",
-        SimpleBounds<1>(GammaT.extent(0)),
-        YAKL_LAMBDA (i64 k) {
-            for (int i = 0; i < GammaT.extent(1); ++i) {
-                T diag = FP(0.0);
-                GammaT(k, i, i) = FP(0.0);
-                for (int j = 0; j < GammaT.extent(2); ++j) {
-                    diag += GammaT(k, i, j);
-                }
-                GammaT(k, i, i) = -diag;
-            }
-        }
-    );
-    parallel_for(
-        "Transpose Pops",
-        SimpleBounds<2>(pops.extent(0), pops.extent(1)),
-        YAKL_LAMBDA (int i, int64_t k) {
-            if (i_elim(k) == i) {
-                // T n_total = FP(0.0);
-                // for (int ii = 0; ii < pops.extent(0); ++ii) {
-                //     n_total += pops(ii, k);
-                // }
-                // new_pops(k, i) = n_total;
-                // new_pops(k, i) = FP(1.0);
-                new_pops(k, i) = n_total(k);
-            } else {
-                new_pops(k, i) = FP(0.0);
-            }
-        }
-    );
-    parallel_for(
-        "Setup pointers",
-        SimpleBounds<1>(GammaT_ptrs.extent(0)),
-        YAKL_LAMBDA (int64_t k) {
-            GammaT_ptrs(k) = &GammaT(k, 0, 0);
-            new_pops_ptrs(k) = &new_pops(k, 0);
-            ipiv_ptrs(k) = &ipivs(k, 0);
-        }
-    );
-    yakl::fence();
-
-    auto GammaT_host = GammaT.createHostCopy();
-    auto pops_host = pops.createHostCopy();
-    // const int print_idx = 452 * state->atmos.temperature.extent(1) + 519;
-    const int print_idx = std::min(
-        int(128 * state->atmos.temperature.extent(1) + 128),
-        int(state->atmos.temperature.extent(0) * state->atmos.temperature.extent(1) - 1)
-    );
-    for (int i = 0; i < GammaT_host.extent(2); ++i) {
-        for (int j = 0; j < GammaT_host.extent(1); ++j) {
-            fmt::print("{:e}, ", GammaT_host(print_idx, j, i));
-        }
-        fmt::print("\n");
-    }
-    fmt::print("pops pre ");
-    for (int i = 0; i < pops_host.extent(0); ++i) {
-        fmt::print("{:e}, ", pops_host(i, print_idx));
-    }
-    fmt::print("\n");
-
-
-    parallel_for(
-        "Conservation eqn",
-        SimpleBounds<3>(GammaT.extent(0), GammaT.extent(1), GammaT.extent(2)),
-        YAKL_LAMBDA (i64 k, int i, int j) {
-            if (i_elim(k) == i) {
-                GammaT(k, j, i) = FP(1.0);
-            }
-        }
-    );
-
-    yakl::fence();
-
-    static_assert(
-        std::is_same_v<T, f32> || std::is_same_v<T, f64>,
-        "What type are you asking the poor stat_eq function to use internally?"
-    );
-    if constexpr (std::is_same_v<T, f32>) {
-        magma_sgesv_batched_small(
-            GammaT.extent(1),
-            1,
-            GammaT_ptrs.get_data(),
-            GammaT.extent(1),
-            ipiv_ptrs.get_data(),
-            new_pops_ptrs.get_data(),
-            new_pops.extent(1),
-            info.get_data(),
-            GammaT.extent(0),
-            state->magma_queue
-        );
-    } else if constexpr (std::is_same_v<T, f64>) {
-        magma_dgesv_batched_small(
-            GammaT.extent(1),
-            1,
-            GammaT_ptrs.get_data(),
-            GammaT.extent(1),
-            ipiv_ptrs.get_data(),
-            new_pops_ptrs.get_data(),
-            new_pops.extent(1),
-            info.get_data(),
-            GammaT.extent(0),
-            state->magma_queue
-        );
-    }
-
-    magma_queue_sync(state->magma_queue);
-    yakl::fence();
-    parallel_for(
-        "info check",
-        SimpleBounds<1>(info.extent(0)),
-        YAKL_LAMBDA (int k) {
-            if (info(k) != 0) {
-                printf("%d: %d\n", k, info(k));
-            }
-        }
-    );
+    // auto Gamma_host = state->Gamma.createHostCopy();
+    // const auto& Gamma = state->Gamma.reshape<3>(Dims(
+    //     state->Gamma.extent(0),
+    //     state->Gamma.extent(1),
+    //     state->Gamma.extent(2) * state->Gamma.extent(3)
+    // ));
+    // yakl::Array<T, 3, yakl::memDevice> GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
+    // yakl::Array<T*, 1, yakl::memDevice> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0));
+    // const auto& pops = state->pops.reshape<2>(Dims(
+    //     state->pops.extent(0),
+    //     state->pops.extent(1) * state->pops.extent(2)
+    // ));
+    // yakl::Array<T, 2, yakl::memDevice> new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));
+    // yakl::Array<T, 1, yakl::memDevice> n_total("new_pops", GammaT.extent(0));
+    // yakl::Array<T*, 1, yakl::memDevice> new_pops_ptrs("new_pops_ptrs", GammaT.extent(0));
+    // yakl::Array<i32, 1, yakl::memDevice> i_elim("i_elim", GammaT.extent(0));
+    // yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", new_pops.extent(0), new_pops.extent(1));
+    // yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", new_pops.extent(0));
+    // yakl::Array<i32, 1, yakl::memDevice> info("info", new_pops.extent(0));
+    // parallel_for(
+    //     "Max Pops",
+    //     SimpleBounds<1>(pops.extent(1)),
+    //     YAKL_LAMBDA (int64_t k) {
+    //         fp_t n_max = pops(0, k);
+    //         i_elim(k) = 0;
+    //         n_total(k) = FP(0.0);
+    //         for (int i = 0; i < pops.extent(0); ++i) {
+    //             fp_t n = pops(i, k);
+    //             n_total(k) += n;
+    //             if (n > n_max) {
+    //                 i_elim(k) = i;
+    //             }
+    //         }
+    //     }
+    // );
+    // yakl::fence();
 
     // parallel_for(
-    //     "Normalise new pops vec",
-    //     SimpleBounds<1>(new_pops.extent(0)),
+    //     "Transpose Gamma",
+    //     SimpleBounds<3>(Gamma.extent(2), Gamma.extent(1), Gamma.extent(0)),
+    //     YAKL_LAMBDA (int k, int i, int j) {
+    //         // if (i_elim(k) == i) {
+    //         //     GammaT(k, j, i) = FP(1.0);
+    //         // } else {
+    //             GammaT(k, j, i) = Gamma(i, j, k);
+    //         // }
+    //     }
+    // );
+    // yakl::fence();
+
+    // parallel_for(
+    //     "Gamma fixup",
+    //     SimpleBounds<1>(GammaT.extent(0)),
     //     YAKL_LAMBDA (i64 k) {
-    //         T sum = FP(0.0);
-    //         for (int i = 0; i < new_pops.extent(1); ++i) {
-    //             sum += new_pops(k, i);
+    //         for (int i = 0; i < GammaT.extent(1); ++i) {
+    //             T diag = FP(0.0);
+    //             GammaT(k, i, i) = FP(0.0);
+    //             for (int j = 0; j < GammaT.extent(2); ++j) {
+    //                 diag += GammaT(k, i, j);
+    //             }
+    //             GammaT(k, i, i) = -diag;
     //         }
-    //         for (int i = 0; i < new_pops.extent(1); ++i) {
-    //             new_pops(k, i) /= sum;
+    //     }
+    // );
+    // parallel_for(
+    //     "Transpose Pops",
+    //     SimpleBounds<2>(pops.extent(0), pops.extent(1)),
+    //     YAKL_LAMBDA (int i, int64_t k) {
+    //         if (i_elim(k) == i) {
+    //             // T n_total = FP(0.0);
+    //             // for (int ii = 0; ii < pops.extent(0); ++ii) {
+    //             //     n_total += pops(ii, k);
+    //             // }
+    //             // new_pops(k, i) = n_total;
+    //             // new_pops(k, i) = FP(1.0);
+    //             new_pops(k, i) = n_total(k);
+    //         } else {
+    //             new_pops(k, i) = FP(0.0);
+    //         }
+    //     }
+    // );
+    // parallel_for(
+    //     "Setup pointers",
+    //     SimpleBounds<1>(GammaT_ptrs.extent(0)),
+    //     YAKL_LAMBDA (int64_t k) {
+    //         GammaT_ptrs(k) = &GammaT(k, 0, 0);
+    //         new_pops_ptrs(k) = &new_pops(k, 0);
+    //         ipiv_ptrs(k) = &ipivs(k, 0);
+    //     }
+    // );
+    // yakl::fence();
+
+    // auto GammaT_host = GammaT.createHostCopy();
+    // auto pops_host = pops.createHostCopy();
+    // // const int print_idx = 452 * state->atmos.temperature.extent(1) + 519;
+    // const int print_idx = std::min(
+    //     int(128 * state->atmos.temperature.extent(1) + 128),
+    //     int(state->atmos.temperature.extent(0) * state->atmos.temperature.extent(1) - 1)
+    // );
+    // for (int i = 0; i < GammaT_host.extent(2); ++i) {
+    //     for (int j = 0; j < GammaT_host.extent(1); ++j) {
+    //         fmt::print("{:e}, ", GammaT_host(print_idx, j, i));
+    //     }
+    //     fmt::print("\n");
+    // }
+    // fmt::print("pops pre ");
+    // for (int i = 0; i < pops_host.extent(0); ++i) {
+    //     fmt::print("{:e}, ", pops_host(i, print_idx));
+    // }
+    // fmt::print("\n");
+
+
+    // parallel_for(
+    //     "Conservation eqn",
+    //     SimpleBounds<3>(GammaT.extent(0), GammaT.extent(1), GammaT.extent(2)),
+    //     YAKL_LAMBDA (i64 k, int i, int j) {
+    //         if (i_elim(k) == i) {
+    //             GammaT(k, j, i) = FP(1.0);
     //         }
     //     }
     // );
 
-    yakl::fence();
+    // yakl::fence();
 
-    Fp2d max_rel_change("max rel change", new_pops.extent(0), new_pops.extent(1));
-    const auto& flat_temp = state->atmos.temperature.collapse();
-    parallel_for(
-        "Compute max change",
-        SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
-        YAKL_LAMBDA (int64_t k, int i) {
-            fp_t change = FP(0.0);
-            // if (flat_temp(k) < FP(5.0e4)) {
-                // change = std::abs(FP(1.0) - pops(i, k) / (new_pops(k, i) * n_total(k)));
-                change = std::abs(FP(1.0) - pops(i, k) / new_pops(k, i));
-            // }
-            max_rel_change(k, i) = change;
-        }
-    );
-    yakl::fence();
-    parallel_for(
-        "Copy & transpose pops",
-        SimpleBounds<2>(pops.extent(0), pops.extent(1)),
-        YAKL_LAMBDA (int i, int64_t k) {
-            // pops(i, k) = new_pops(k, i) * n_total(k);
-            pops(i, k) = new_pops(k, i);
-        }
-    );
-    pops_host = pops.createHostCopy();
-    fmt::print("pops post ");
-    for (int i = 0; i < pops_host.extent(0); ++i) {
-        fmt::print("{:e}, ", pops_host(i, print_idx));
-    }
-    fmt::print("\n");
-    fp_t max_change = yakl::intrinsics::maxval(max_rel_change);
-    int max_change_loc = yakl::intrinsics::maxloc(max_rel_change.collapse());
-    auto temp_h = state->atmos.temperature.createHostCopy();
+    // static_assert(
+    //     std::is_same_v<T, f32> || std::is_same_v<T, f64>,
+    //     "What type are you asking the poor stat_eq function to use internally?"
+    // );
+    // if constexpr (std::is_same_v<T, f32>) {
+    //     magma_sgesv_batched_small(
+    //         GammaT.extent(1),
+    //         1,
+    //         GammaT_ptrs.get_data(),
+    //         GammaT.extent(1),
+    //         ipiv_ptrs.get_data(),
+    //         new_pops_ptrs.get_data(),
+    //         new_pops.extent(1),
+    //         info.get_data(),
+    //         GammaT.extent(0),
+    //         state->magma_queue
+    //     );
+    // } else if constexpr (std::is_same_v<T, f64>) {
+    //     magma_dgesv_batched_small(
+    //         GammaT.extent(1),
+    //         1,
+    //         GammaT_ptrs.get_data(),
+    //         GammaT.extent(1),
+    //         ipiv_ptrs.get_data(),
+    //         new_pops_ptrs.get_data(),
+    //         new_pops.extent(1),
+    //         info.get_data(),
+    //         GammaT.extent(0),
+    //         state->magma_queue
+    //     );
+    // }
 
-    yakl::fence();
-    int max_change_level = max_change_loc % state->pops.extent(0);
-    max_change_loc /= state->pops.extent(0);
-    int max_change_x = max_change_loc % state->pops.extent(2);
-    max_change_loc /= state->pops.extent(2);
-    int max_change_z = max_change_loc;
-    fmt::println(
-        "Max Change: {} (@ l={}, ({}, {})) [T={}]",
-        max_change,
-        max_change_level,
-        max_change_z,
-        max_change_x,
-        temp_h(max_change_z, max_change_x)
-    );
-    return max_change;
+    // magma_queue_sync(state->magma_queue);
+    // yakl::fence();
+    // parallel_for(
+    //     "info check",
+    //     SimpleBounds<1>(info.extent(0)),
+    //     YAKL_LAMBDA (int k) {
+    //         if (info(k) != 0) {
+    //             printf("%d: %d\n", k, info(k));
+    //         }
+    //     }
+    // );
+
+    // // parallel_for(
+    // //     "Normalise new pops vec",
+    // //     SimpleBounds<1>(new_pops.extent(0)),
+    // //     YAKL_LAMBDA (i64 k) {
+    // //         T sum = FP(0.0);
+    // //         for (int i = 0; i < new_pops.extent(1); ++i) {
+    // //             sum += new_pops(k, i);
+    // //         }
+    // //         for (int i = 0; i < new_pops.extent(1); ++i) {
+    // //             new_pops(k, i) /= sum;
+    // //         }
+    // //     }
+    // // );
+
+    // yakl::fence();
+
+    // Fp2d max_rel_change("max rel change", new_pops.extent(0), new_pops.extent(1));
+    // const auto& flat_temp = state->atmos.temperature.collapse();
+    // parallel_for(
+    //     "Compute max change",
+    //     SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
+    //     YAKL_LAMBDA (int64_t k, int i) {
+    //         fp_t change = FP(0.0);
+    //         // if (flat_temp(k) < FP(5.0e4)) {
+    //             // change = std::abs(FP(1.0) - pops(i, k) / (new_pops(k, i) * n_total(k)));
+    //             change = std::abs(FP(1.0) - pops(i, k) / new_pops(k, i));
+    //         // }
+    //         max_rel_change(k, i) = change;
+    //     }
+    // );
+    // yakl::fence();
+    // parallel_for(
+    //     "Copy & transpose pops",
+    //     SimpleBounds<2>(pops.extent(0), pops.extent(1)),
+    //     YAKL_LAMBDA (int i, int64_t k) {
+    //         // pops(i, k) = new_pops(k, i) * n_total(k);
+    //         pops(i, k) = new_pops(k, i);
+    //     }
+    // );
+    // pops_host = pops.createHostCopy();
+    // fmt::print("pops post ");
+    // for (int i = 0; i < pops_host.extent(0); ++i) {
+    //     fmt::print("{:e}, ", pops_host(i, print_idx));
+    // }
+    // fmt::print("\n");
+    // fp_t max_change = yakl::intrinsics::maxval(max_rel_change);
+    // int max_change_loc = yakl::intrinsics::maxloc(max_rel_change.collapse());
+    // auto temp_h = state->atmos.temperature.createHostCopy();
+
+    // yakl::fence();
+    // int max_change_level = max_change_loc % state->pops.extent(0);
+    // max_change_loc /= state->pops.extent(0);
+    // int max_change_x = max_change_loc % state->pops.extent(2);
+    // max_change_loc /= state->pops.extent(2);
+    // int max_change_z = max_change_loc;
+    // fmt::println(
+    //     "Max Change: {} (@ l={}, ({}, {})) [T={}]",
+    //     max_change,
+    //     max_change_level,
+    //     max_change_z,
+    //     max_change_x,
+    //     temp_h(max_change_z, max_change_x)
+    // );
+    // return max_change;
+    return FP(0.0);
 }
 
 #else

@@ -87,7 +87,7 @@ DynamicState get_dyn_state(
     const RayProps& ray,
     const fp_t incl,
     const Atmosphere& atmos,
-    const CompAtom<fp_t>& atom,
+    const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp3d& n,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
@@ -102,7 +102,7 @@ Raymarch2dDynamicState get_dyn_state(
     const RayProps& ray,
     const fp_t incl,
     const Atmosphere& atmos,
-    const CompAtom<fp_t>& atom,
+    const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp3d& n,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
@@ -114,10 +114,10 @@ Raymarch2dDynamicState get_dyn_state(
     mu(2) = ray.dir(1) * sin_theta;
     return Raymarch2dDynamicState{
         .mu = mu,
-        .active_set = slice_active_set(atom, la),
+        .active_set = slice_active_set(adata, la),
         .dynamic_opac = dynamic_opac,
         .atmos = atmos,
-        .atom = atom,
+        .adata = adata,
         .profile = profile,
         .nh0 = atmos.nh0,
         .n = n.reshape<2>(Dims(n.extent(0), n.extent(1) * n.extent(2))),
@@ -132,7 +132,7 @@ void cascade_i_25d(
     int la_start = -1,
     int la_end = -1
 ) {
-    JasUnpack(state, atmos, incl_quad, atom, pops, dynamic_opac);
+    JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac);
     const auto& profile = state.phi;
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
@@ -165,6 +165,12 @@ void cascade_i_25d(
     CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
     CascadeRays ray_set = cascade_compute_size<preaverage>(state.c0_size, cascade_idx);
     int wave_batch = la_end - la_start;
+
+    DeviceBoundaries boundaries_h{
+        .boundary = state.boundary,
+        .zero_bc = state.zero_bc,
+        .pw_bc = state.pw_bc
+    };
 
     auto offset = get_offsets(atmos);
 
@@ -200,7 +206,7 @@ void cascade_i_25d(
                     ray,
                     incl_quad.muy(theta_idx),
                     atmos,
-                    atom,
+                    adata,
                     profile,
                     pops,
                     dynamic_opac
@@ -215,12 +221,12 @@ void cascade_i_25d(
                 };
 
                 RadianceInterval<AloType> ri;
-                BoundaryType boundary = state.boundary;
                 auto& casc_dims = dims;
+                const auto boundaries = boundaries_h;
                 if constexpr (RcMode && RC_SAMPLE_BC) {
-                    switch (boundary) {
+                    switch (boundaries.boundary) {
                         case BoundaryType::Zero: {
-                            auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, state);
+                            auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
                             ri = march_and_merge_average_interval<RcMode>(
                                 casc_and_bc,
                                 casc_dims,
@@ -230,7 +236,7 @@ void cascade_i_25d(
                             );
                         } break;
                         case BoundaryType::Promweaver: {
-                            auto casc_and_bc = get_bc<PwBc<>>(dev_casc_state, state);
+                            auto casc_and_bc = get_bc<PwBc<>>(dev_casc_state, boundaries);
                             ri = march_and_merge_average_interval<RcMode>(
                                 casc_and_bc,
                                 casc_dims,
@@ -244,7 +250,7 @@ void cascade_i_25d(
                         }
                     }
                 } else {
-                    auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, state);
+                    auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
                     ri = march_and_merge_average_interval<RcMode>(
                         casc_and_bc,
                         casc_dims,

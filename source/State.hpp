@@ -20,6 +20,7 @@ struct State {
     AtomicData<fp_t, yakl::memDevice> adata;
     std::vector<CompAtom<fp_t, yakl::memDevice>> atoms; // TODO(cmo): extract these from adata during setup
     std::vector<CompAtom<fp_t, yakl::memDevice>> atoms_with_gamma; // TODO(cmo): extract these from adata during setup
+    bool have_h;
     std::vector<int> atoms_with_gamma_mapping; // TODO(cmo): FIll in
     AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
