@@ -349,11 +349,25 @@ struct CompColl {
     int end_idx;
 };
 
+enum class AtomicTreatment {
+    Detailed,
+    Golding,
+    Active
+};
+
+inline bool has_gamma(AtomicTreatment t) {
+    return (
+        (t == AtomicTreatment::Golding)
+        || (t == AtomicTreatment::Active)
+    );
+}
+
 template <typename T=fp_t, int mem_space=memDevice>
 struct CompAtom {
     T mass;
     T abundance;
     int Z;
+    AtomicTreatment treatment = AtomicTreatment::Active;
 
     yakl::Array<T const, 1, mem_space> energy;
     yakl::Array<T const, 1, mem_space> g;
@@ -363,7 +377,6 @@ struct CompAtom {
     /// Shared array of broadeners
     yakl::Array<ScaledExponentsBroadening<T> const, 1, mem_space> broadening;
 
-    /// Temporary per atom wavelength grid
     yakl::Array<T const, 1, mem_space> wavelength;
     yakl::Array<CompCont<T> const, 1, mem_space> continua;
     yakl::Array<T const, 1, mem_space> sigma;
@@ -371,14 +384,6 @@ struct CompAtom {
     yakl::Array<CompColl<T> const, 1, mem_space> collisions;
     yakl::Array<T const, 1, mem_space> temperature;
     yakl::Array<T const, 1, mem_space> coll_rates;
-
-    // Active set stuff
-    yakl::Array<u16 const, 1, mem_space> active_lines;
-    yakl::Array<i32 const, 1, mem_space> active_lines_start;
-    yakl::Array<i32 const, 1, mem_space> active_lines_end;
-    yakl::Array<u16 const, 1, mem_space> active_cont;
-    yakl::Array<i32 const, 1, mem_space> active_cont_start;
-    yakl::Array<i32 const, 1, mem_space> active_cont_end;
 };
 
 struct TransitionIndex {
@@ -387,8 +392,10 @@ struct TransitionIndex {
     bool line;
 };
 
+
 template <typename T=fp_t, int mem_space=memDevice>
 struct AtomicData {
+    yakl::Array<AtomicTreatment const, 1, mem_space> // num_atom
     yakl::Array<T const, 1, mem_space> mass; // num_atom
     yakl::Array<T const, 1, mem_space> abundance; // num_atom
     yakl::Array<int const, 1, mem_space> Z; // num_atom

@@ -272,48 +272,6 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
     host_atom.coll_rates = coll_rates;
     host_atom.collisions = collisions;
 
-    yakl::Array<i32, 1, yakl::memHost> lines_start("active lines start idx", wavelength.extent(0));
-    yakl::Array<i32, 1, yakl::memHost> lines_end("active lines end idx", wavelength.extent(0));
-    yakl::Array<i32, 1, yakl::memHost> cont_start("active cont start idx", wavelength.extent(0));
-    yakl::Array<i32, 1, yakl::memHost> cont_end("active cont end idx", wavelength.extent(0));
-    std::vector<u16> active_lines;
-    active_lines.reserve(3 * wavelength.extent(0));
-    std::vector<u16> active_cont;
-    active_cont.reserve(3 * wavelength.extent(0));
-    for (int la = 0; la < wavelength.extent(0); ++la) {
-        lines_start(la) = active_lines.size();
-        for (int kr = 0; kr < lines.extent(0); ++kr) {
-            const auto& line = lines(kr);
-            if (line.is_active(la)) {
-                active_lines.emplace_back(kr);
-            }
-        }
-        lines_end(la) = active_lines.size();
-        cont_start(la) = active_cont.size();
-        for (int kr = 0; kr < continua.extent(0); ++kr) {
-            const auto& cont = continua(kr);
-            if (cont.is_active(la)) {
-                active_cont.emplace_back(kr);
-            }
-        }
-        cont_end(la) = active_cont.size();
-    }
-    yakl::Array<u16, 1, yakl::memHost> line_active_set("active lines flat buffer", active_lines.size());
-    for (int i = 0; i < active_lines.size(); ++i) {
-        line_active_set(i) = active_lines[i];
-    }
-    yakl::Array<u16, 1, yakl::memHost> cont_active_set("active lines flat buffer", active_cont.size());
-    for (int i = 0; i < active_cont.size(); ++i) {
-        cont_active_set(i) = active_cont[i];
-    }
-    host_atom.active_lines = line_active_set;
-    host_atom.active_lines_start = lines_start;
-    host_atom.active_lines_end = lines_end;
-    host_atom.active_cont = cont_active_set;
-    host_atom.active_cont_start = cont_start;
-    host_atom.active_cont_end = cont_end;
-
-
     if constexpr (mem_space == yakl::memDevice) {
         CompAtom<T, mem_space> result;
         result.mass = host_atom.mass;
@@ -332,13 +290,6 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         result.coll_rates = host_atom.coll_rates.createDeviceCopy();
         result.collisions = host_atom.collisions.createDeviceCopy();
 
-        result.active_lines = host_atom.active_lines.createDeviceCopy();
-        result.active_lines_start = host_atom.active_lines_start.createDeviceCopy();
-        result.active_lines_end = host_atom.active_lines_end.createDeviceCopy();
-        result.active_cont = host_atom.active_cont.createDeviceCopy();
-        result.active_cont_start = host_atom.active_cont_start.createDeviceCopy();
-        result.active_cont_end = host_atom.active_cont_end.createDeviceCopy();
-
         return result;
     } else {
         return host_atom;
@@ -346,22 +297,39 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
 #undef DFPU
 }
 
-template <typename T=fp_t, typename U=fp_t, int mem_space=yakl::memDevice>
-AtomicData<T, mem_space> to_atomic_data(const std::vector<ModelAtom<U>>& models) {
+template <typename T>
+struct AtomicDataHostDevice {
+    AtomicData<T, yakl::memHost> host;
+    AtomicData<T, yakl::memDevice> device;
+    bool have_h_model = false;
+};
+
+template <typename T=fp_t, typename U=fp_t>
+AtomicData<T, mem_space> to_atomic_data(std::vector<ModelAtom<U>> models) {
 #define DFPU(X) U(FP(X))
     using namespace ConstantsF64;
-    // TODO(cmo): Return both host and device from this function
+    // Sort by mass
+    std::sort(
+        models.start(),
+        models.end(),
+        [] (auto a, auto b) {
+            return a.element.mass < b.element.mass;
+        }
+    );
+    // TODO(cmo): Currently just set all atoms active
     AtomicData<T, yakl::memHost> host_data;
     const int n_atom = models.size();
     yakl::Array<T, 1, yakl::memHost> mass("mass", n_atom);
     yakl::Array<T, 1, yakl::memHost> abundance("abundance", n_atom);
     yakl::Array<int, 1, yakl::memHost> Z("Z", n_atom);
+    yakl::Array<AtomicTreatment, 1, yakl::memHost> Z("treatment", n_atom);
     for (int i = 0; i < n_atom; ++i) {
         mass(i) = models[i].element.mass;
         Z(i) = models[i].element.Z;
         abundance(i) = std::pow(DFPU(10.0), models[i].element.abundance - DFPU(12.0));
+        treatment(i) = models[i].treatment;
     }
-    JasPack(host_data, mass, abundance, Z);
+    JasPack(host_data, mass, abundance, Z, treatment);
 
     int total_n_level = 0;
     int total_n_line = 0;
@@ -667,31 +635,36 @@ AtomicData<T, mem_space> to_atomic_data(const std::vector<ModelAtom<U>>& models)
     }
     JasPack(host_data, lines, continua, sigma);
 
-    assert(false && "COntinue updating from here");
     int n_temperature = 0;
-    for (int i = 0; i < model.coll_rates.size(); ++i) {
-        n_temperature += model.coll_rates[i].temperature.size();
+    for (int ia = 0; ia < n_atom; ++ia) {
+        const auto& model = models[ia];
+        for (int i = 0; i < model.coll_rates.size(); ++i) {
+            n_temperature += model.coll_rates[i].temperature.size();
+        }
     }
     yakl::Array<T, 1, yakl::memHost> temperature("temperature grid", n_temperature);
     yakl::Array<T, 1, yakl::memHost> coll_rates("coll rates grid", n_temperature);
     yakl::Array<CompColl<T>, 1, yakl::memHost> collisions("collisions", model.coll_rates.size());
     int temp_offset = 0;
-    for (int i = 0; i < model.coll_rates.size(); ++i) {
-        const auto& coll = model.coll_rates[i];
-        collisions(i).type = coll.type;
-        collisions(i).j = coll.j;
-        collisions(i).i = coll.i;
-        collisions(i).start_idx = temp_offset;
-        for (int temp_idx = 0; temp_idx < coll.temperature.size(); ++temp_idx) {
-            temperature(temp_offset + temp_idx) = coll.temperature[temp_idx];
-            coll_rates(temp_offset + temp_idx) = coll.data[temp_idx];
+    for (int ia = 0; ia < n_atom; ++ia) {
+        const auto& model = models[ia];
+        const int i_base = coll_start(ia);
+        for (int i = 0; i < model.coll_rates.size(); ++i) {
+            const auto& coll = model.coll_rates[i];
+            collisions(i_base + i).type = coll.type;
+            collisions(i_base + i).atom = ia;
+            collisions(i_base + i).j = coll.j;
+            collisions(i_base + i).i = coll.i;
+            collisions(i_base + i).start_idx = temp_offset;
+            for (int temp_idx = 0; temp_idx < coll.temperature.size(); ++temp_idx) {
+                temperature(temp_offset + temp_idx) = coll.temperature[temp_idx];
+                coll_rates(temp_offset + temp_idx) = coll.data[temp_idx];
+            }
+            temp_offset += coll.temperature.size();
+            collisions(i_base + i).end_idx = temp_offset;
         }
-        temp_offset += coll.temperature.size();
-        collisions(i).end_idx = temp_offset;
     }
-    host_atom.temperature = temperature;
-    host_atom.coll_rates = coll_rates;
-    host_atom.collisions = collisions;
+    JasPack(host_data, temperature, coll_rates, collisions);
 
     yakl::Array<i32, 1, yakl::memHost> lines_start("active lines start idx", wavelength.extent(0));
     yakl::Array<i32, 1, yakl::memHost> lines_end("active lines end idx", wavelength.extent(0));
@@ -727,46 +700,147 @@ AtomicData<T, mem_space> to_atomic_data(const std::vector<ModelAtom<U>>& models)
     for (int i = 0; i < active_cont.size(); ++i) {
         cont_active_set(i) = active_cont[i];
     }
-    host_atom.active_lines = line_active_set;
-    host_atom.active_lines_start = lines_start;
-    host_atom.active_lines_end = lines_end;
-    host_atom.active_cont = cont_active_set;
-    host_atom.active_cont_start = cont_start;
-    host_atom.active_cont_end = cont_end;
+    host_data.active_lines = line_active_set;
+    host_data.active_lines_start = lines_start;
+    host_data.active_lines_end = lines_end;
+    host_data.active_cont = cont_active_set;
+    host_data.active_cont_start = cont_start;
+    host_data.active_cont_end = cont_end;
 
+    AtomicData<T, yakl::memDevice> dev_data{
+        .mass = host_data.mass.createDeviceCopy(),
+        .abundance = host_data.abundance.createDeviceCopy(),
+        .Z = host_data.Z.createDeviceCopy(),
+        .level_start = host_data.level_start.createDeviceCopy(),
+        .num_level = host_data.num_level.createDeviceCopy(),
+        .line_start = host_data.line_start.createDeviceCopy(),
+        .num_line = host_data.num_line.createDeviceCopy(),
+        .cont_start = host_data.cont_start.createDeviceCopy(),
+        .num_cont = host_data.num_cont.createDeviceCopy(),
+        .coll_start = host_data.coll_start.createDeviceCopy(),
+        .num_coll = host_data.num_coll.createDeviceCopy(),
+        .energy = host_data.energy.createDeviceCopy(),
+        .g = host_data.g.createDeviceCopy(),
+        .stage = host_data.stage.createDeviceCopy(),
+        .lines = host_data.lines.createDeviceCopy(),
+        .broadening = host_data.broadening.createDeviceCopy(),
+        .continua = host_data.continua.createDeviceCopy(),
+        .sigma = host_data.sigma.createDeviceCopy(),
+        .wavelength = host_data.wavelength.createDeviceCopy(),
+        .governing_trans = host_data.governing_trans.createDeviceCopy(),
+        .collisions = host_data.collisions.createDeviceCopy(),
+        .temperature = host_data.temperature.createDeviceCopy(),
+        .coll_rates = host_data.coll_rates.createDeviceCopy(),
+        .active_lines = host_data.active_lines.createDeviceCopy(),
+        .active_lines_start = host_data.active_lines_start.createDeviceCopy(),
+        .active_lines_end = host_data.active_lines_end.createDeviceCopy(),
+        .active_cont = host_data.active_cont.createDeviceCopy(),
+        .active_cont_start = host_data.active_cont_start.createDeviceCopy(),
+        .active_cont_end = host_data.active_cont_end.createDeviceCopy()
+    };
 
-    if constexpr (mem_space == yakl::memDevice) {
-        CompAtom<T, mem_space> result;
-        result.mass = host_atom.mass;
-        result.abundance = host_atom.abundance;
-        result.Z = host_atom.Z;
+    AtomicDataHostDevice<T> result{
+        .host = host_data,
+        .device = dev_data,
+        .have_h_model = (models[0].Z == 1)
+    };
 
-        result.energy = host_atom.energy.createDeviceCopy();
-        result.g = host_atom.g.createDeviceCopy();
-        result.stage = host_atom.stage.createDeviceCopy();
-        result.lines = host_atom.lines.createDeviceCopy();
-        result.broadening = host_atom.broadening.createDeviceCopy();
-        result.wavelength = host_atom.wavelength.createDeviceCopy();
-        result.continua = host_atom.continua.createDeviceCopy();
-        result.sigma = host_atom.sigma.createDeviceCopy();
-        result.temperature = host_atom.temperature.createDeviceCopy();
-        result.coll_rates = host_atom.coll_rates.createDeviceCopy();
-        result.collisions = host_atom.collisions.createDeviceCopy();
+    return result;
 
-        result.active_lines = host_atom.active_lines.createDeviceCopy();
-        result.active_lines_start = host_atom.active_lines_start.createDeviceCopy();
-        result.active_lines_end = host_atom.active_lines_end.createDeviceCopy();
-        result.active_cont = host_atom.active_cont.createDeviceCopy();
-        result.active_cont_start = host_atom.active_cont_start.createDeviceCopy();
-        result.active_cont_end = host_atom.active_cont_end.createDeviceCopy();
-
-        return result;
-    } else {
-        return host_atom;
-    }
 #undef DFPU
 }
 
+/// @brief Pulls atom ia out of the shared data. Needs a fence after for device code.
+/// @tparam T
+/// @tparam mem_space
+/// @param adata
+/// @param ia
+/// @return
+template <typename T=fp_t, int mem_space>
+YAKL_INLINE
+CompAtom<T, mem_space> extract_atom(const AtomicData<T, mem_space>& adata, int ia) {
+    assert(ia < adata.level_start.extent(0));
+    CompAtom<T, mem_space> result;
+
+    auto fn = YAKL_LAMBDA (int _) {
+        result.mass = adata.mass(ia);
+        result.abundance = adata.abundance(ia);
+        result.Z = adata.Z(ia);
+        result.treatment = adate.treatment(ia);
+        const int level_start = adata.level_start(ia);
+        const int n_level = adata.num_level(ia);
+        const int line_start = adata.line_start(ia);
+        const int n_line = adata.num_line(ia);
+        const int cont_start = adata.cont_start(ia);
+        const int n_cont = adata.num_cont(ia);
+        const int coll_start = adata.coll_start(ia);
+        const int n_coll = adata.num_coll(ia);
+
+        result.energy = decltype(result.energy)("energy", &adata.energy(level_start), n_level);
+        result.g = decltype(result.g)("g", &adata.g(level_start), n_level);
+        result.stage = decltype(result.stage)("energy", &adata.stage(level_start), n_level);
+
+        result.lines = decltype(result.lines)("lines", &adata.lines(line_start), n_line);
+        // NOTE(cmo): We hand over the whole broadening array as the lines are set up to index into this
+        result.broadening = adata.broadening;
+        result.wavelength = adata.wavelength;
+
+        result.continua = decltype(result.continua)("continua", &adata.continua(cont_start), n_cont);
+        // NOTE(cmo): Same for sigma
+        result.sigma = adata.sigma;
+
+        result.collisions = decltype(result.collisions)("collisions", &adata.collisions(coll_start), n_coll)
+        // NOTE(cmo): Same for collisional data
+        result.temperature = adata.temperature;
+        result.coll_rates = adata.coll_rates;
+    };
+
+    if constexpr (mem_space == yakl::memHost) {
+        fn();
+    } else {
+        parallel_for(
+            SimpleBounds<1>(1),
+            fn
+        );
+    }
+    yakl::fence();
+    return result;
+}
+
+template <typename T, int mem_space>
+inline
+std::vector<CompAtom<T, mem_space>>
+extract_atoms(const AtomicData<T, mem_space>& adata) {
+    const int n_atom = adata.num_level.extent(0);
+    std::vector<CompAtom<T, mem_space> result(n_atom);
+    for (int ia = 0; ia < n_atom; ++ia) {
+        result[i] = extract_atom(adata, ia);
+    }
+    return result;
+}
+
+struct GammaAtomsAndMapping {
+    std::vector<CompAtom<T, mem_space>> atoms;
+    std::vector<int> mapping;
+
+};
+template <typename T, int mem_space>
+inline
+GammaAtomsAndMapping
+extract_atoms_with_gamma_and_mapping(
+    const AtomicData<T, mem_space>& adata,
+    const AtomicData<T, yakl::memHost>& adata_h;
+) {
+    const int n_atom = adata.num_level.extent(0);
+    GammaAtomsAndMapping result;
+    for (int ia = 0; ia < n_atom; ++ia) {
+        if (has_gamma(adata_h.treatment(ia))) {
+            result.mapping.emplace_back(ia);
+            result.atoms.emplace_back(extract_atom(adata, ia));
+        }
+    }
+    return result;
+}
 
 template <typename FPT=fp_t, typename T=fp_t, int mem_space>
 YAKL_INLINE
@@ -843,9 +917,30 @@ inline void compute_lte_pops_flat(
  * Computes the LTE populations in state. Assumes state->pops is already allocated.
 */
 inline void compute_lte_pops(State* state) {
-    auto pops_dims = state->pops.get_dimensions();
-    const auto& pops = state->pops.reshape<2>(Dims(pops_dims(0), pops_dims(1) * pops_dims(2)));
-    compute_lte_pops_flat(state->atom, state->atmos, pops);
+    for (int ia = 0; ia < state->atoms.size(); ++ia) {
+        const auto& atom = state->atoms[ia];
+        const auto pops = slice_pops(
+            state->pops,
+            state->adata_host,
+            ia
+        );
+        compute_lte_pops_flat(atom, state->atmos, pops)
+    }
+}
+
+/**
+ * Computes the LTE populations in to a provided allocated array.
+*/
+inline void compute_lte_pops(State* state, const Fp3d shared_pops) {
+    for (int ia = 0; ia < state->atoms.size(); ++ia) {
+        const auto& atom = state->atoms[ia];
+        const auto pops = slice_pops(
+            shared_pops,
+            state->adata_host,
+            ia
+        );
+        compute_lte_pops_flat(atom, state->atmos, pops)
+    }
 }
 
 template <typename T=fp_t>

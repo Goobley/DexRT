@@ -48,7 +48,7 @@ struct AtmosPointParams {
 
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 struct EmisOpacState {
-    const CompAtom<T, mem_space>& atom;
+    const AtomicData<T, mem_space>& adata;
     const VoigtProfile<T, false, mem_space>& profile;
     int la;
     const yakl::Array<fp_t const, 2, mem_space>& n;
@@ -63,7 +63,7 @@ struct EmisOpacState {
 
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 struct EmisOpacSpecState {
-    const CompAtom<T, mem_space>& atom;
+    const AtomicData<T, mem_space>& adata;
     const VoigtProfile<T, false, mem_space>& profile;
     fp_t lambda;
     const yakl::Array<fp_t const, 2, mem_space>& n;

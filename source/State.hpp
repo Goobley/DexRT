@@ -17,7 +17,11 @@ struct State {
     CascadeStorage c0_size;
     Atmosphere atmos;
     InclQuadrature incl_quad;
-    CompAtom<fp_t> atom;
+    AtomicData<fp_t, yakl::memDevice> adata;
+    std::vector<CompAtom<fp_t, yakl::memDevice>> atoms; // TODO(cmo): extract these from adata during setup
+    std::vector<CompAtom<fp_t, yakl::memDevice>> atoms_with_gamma; // TODO(cmo): extract these from adata during setup
+    std::vector<int> atoms_with_gamma_mapping; // TODO(cmo): FIll in
+    AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
     FpConst1dHost wavelength_h;
@@ -25,7 +29,7 @@ struct State {
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y]
     Fp5d alo; /// [z, x, phi, wave, theta]
-    Fp4d Gamma; /// [i, j, x, y]
+    std::vector<Fp4d> Gamma; /// [i, j, x, y]
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;

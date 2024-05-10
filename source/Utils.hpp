@@ -126,7 +126,7 @@ YAKL_INLINE T interp(
 
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE
-yakl::Array<const u16, 1, mem_space> slice_active_set(const CompAtom<T>& atom, int la) {
+yakl::Array<const u16, 1, mem_space> slice_active_set(const AtomicData<T, mem_space>& atom, int la) {
     yakl::Array<const u16, 1, mem_space> result(
         "active set",
         &atom.active_lines(atom.active_lines_start(la)),
@@ -137,11 +137,24 @@ yakl::Array<const u16, 1, mem_space> slice_active_set(const CompAtom<T>& atom, i
 
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE
-yakl::Array<const u16, 1, mem_space> slice_active_cont_set(const CompAtom<T>& atom, int la) {
+yakl::Array<const u16, 1, mem_space> slice_active_cont_set(const AtomicData<T, mem_space>& atom, int la) {
     yakl::Array<const u16, 1, mem_space> result(
         "active set",
         &atom.active_cont(atom.active_cont_start(la)),
         atom.active_cont_end(la) - atom.active_cont_start(la)
+    );
+    return result;
+}
+
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE
+Fp3d slice_pops(const Fp3d& pops, const AtomicData<T, mem_space>& adata, int ia) {
+    Fp3d result(
+        "pops_slice",
+        pops.data() + adata.level_start(ia) * (pops.extent(1) * pops.extent(2),
+        adata.num_level(ia),
+        pops.extent(1),
+        pops.extent(2)
     );
     return result;
 }
