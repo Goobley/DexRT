@@ -277,6 +277,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         result.mass = host_atom.mass;
         result.abundance = host_atom.abundance;
         result.Z = host_atom.Z;
+        result.treatment = host_atom.treatment;
 
         result.energy = host_atom.energy.createDeviceCopy();
         result.g = host_atom.g.createDeviceCopy();
@@ -710,6 +711,7 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
     host_data.active_cont_end = active_cont_end;
 
     AtomicData<T, yakl::memDevice> dev_data{
+        .treatment = host_data.treatment.createDeviceCopy(),
         .mass = host_data.mass.createDeviceCopy(),
         .abundance = host_data.abundance.createDeviceCopy(),
         .Z = host_data.Z.createDeviceCopy(),
@@ -752,65 +754,49 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
 #undef DFPU
 }
 
-/// @brief Pulls atom ia out of the shared data. Needs a fence after for device code.
-/// @tparam T
-/// @tparam mem_space
-/// @param adata
-/// @param ia
-/// @return
 template <typename T=fp_t, int mem_space>
 inline
-CompAtom<T, mem_space> extract_atom(const AtomicData<T, mem_space>& adata, int ia) {
+CompAtom<T, mem_space> extract_atom(
+    const AtomicData<T, mem_space>& adata,
+    const AtomicData<T, yakl::memHost>& adata_host,
+    int ia
+) {
     assert(ia < adata.level_start.extent(0));
 
-    yakl::Array<CompAtom<T, mem_space>, 1, mem_space> store("store", 1);
-    auto fn = YAKL_LAMBDA (int _) {
-        const int level_start = adata.level_start(ia);
-        const int n_level = adata.num_level(ia);
-        const int line_start = adata.line_start(ia);
-        const int n_line = adata.num_line(ia);
-        const int cont_start = adata.cont_start(ia);
-        const int n_cont = adata.num_cont(ia);
-        const int coll_start = adata.coll_start(ia);
-        const int n_coll = adata.num_coll(ia);
-        CompAtom<T, mem_space> result{
-            .mass = adata.mass(ia),
-            .abundance = adata.abundance(ia),
-            .Z = adata.Z(ia),
-            .treatment = adata.treatment(ia),
+    const int level_start = adata_host.level_start(ia);
+    const int n_level = adata_host.num_level(ia);
+    const int line_start = adata_host.line_start(ia);
+    const int n_line = adata_host.num_line(ia);
+    const int cont_start = adata_host.cont_start(ia);
+    const int n_cont = adata_host.num_cont(ia);
+    const int coll_start = adata_host.coll_start(ia);
+    const int n_coll = adata_host.num_coll(ia);
 
-            .energy = decltype(adata.energy)("energy", &adata.energy(level_start), n_level),
-            .g = decltype(adata.g)("g", &adata.g(level_start), n_level),
-            .stage = decltype(adata.stage)("stage", &adata.stage(level_start), n_level),
+    CompAtom<T, mem_space> result{
+        .mass = adata_host.mass(ia),
+        .abundance = adata_host.abundance(ia),
+        .Z = adata_host.Z(ia),
+        .treatment = adata_host.treatment(ia),
 
-            .lines = decltype(adata.lines)("lines", &adata.lines(line_start), n_line),
-            // NOTE(cmo): We hand over the whole broadening array as the lines are set up to index into this
-            .broadening = adata.broadening,
-            .wavelength = adata.wavelength,
+        .energy = decltype(adata.energy)("energy", adata.energy.data() + level_start, n_level),
+        .g = decltype(adata.g)("g", adata.g.data() + level_start, n_level),
+        .stage = decltype(adata.stage)("stage", adata.stage.data() + level_start, n_level),
 
-            .continua = decltype(adata.continua)("continua", &adata.continua(cont_start), n_cont),
-            // NOTE(cmo): Same for sigma
-            .sigma = adata.sigma,
+        .lines = decltype(adata.lines)("lines", adata.lines.data() + line_start, n_line),
+        // NOTE(cmo): We hand over the whole broadening array as the lines are set up to index into this
+        .broadening = adata.broadening,
+        .wavelength = adata.wavelength,
 
-            .collisions = decltype(adata.collisions)("collisions", &adata.collisions(coll_start), n_coll),
-            // NOTE(cmo): Same for collisional data
-            .temperature = adata.temperature,
-            .coll_rates = adata.coll_rates
-        };
-        store(0) = result;
+        .continua = decltype(adata.continua)("continua", adata.continua.data() + cont_start, n_cont),
+        // NOTE(cmo): Same for sigma
+        .sigma = adata.sigma,
+
+        .collisions = decltype(adata.collisions)("collisions", adata.collisions.data() + coll_start, n_coll),
+        // NOTE(cmo): Same for collisional data
+        .temperature = adata.temperature,
+        .coll_rates = adata.coll_rates
     };
-
-    if constexpr (mem_space == yakl::memHost) {
-        fn();
-        return store(0);
-    } else {
-        parallel_for(
-            SimpleBounds<1>(1),
-            fn
-        );
-        yakl::fence();
-        return store.createHostCopy()(0);
-    }
+    return result;
 }
 
 template <typename T, int mem_space>
@@ -833,11 +819,14 @@ extract_lte_terms_dev(const AtomicData<T, mem_space>& adata, int ia) {
 template <typename T, int mem_space>
 inline
 std::vector<CompAtom<T, mem_space>>
-extract_atoms(const AtomicData<T, mem_space>& adata) {
+extract_atoms(
+    const AtomicData<T, mem_space>& adata,
+    const AtomicData<T, yakl::memHost> adata_host
+) {
     const int n_atom = adata.num_level.extent(0);
     std::vector<CompAtom<T, mem_space>> result(n_atom);
     for (int ia = 0; ia < n_atom; ++ia) {
-        result[ia] = extract_atom(adata, ia);
+        result[ia] = extract_atom(adata, adata_host, ia);
     }
     return result;
 }
@@ -860,7 +849,7 @@ extract_atoms_with_gamma_and_mapping(
     for (int ia = 0; ia < n_atom; ++ia) {
         if (has_gamma(adata_h.treatment(ia))) {
             result.mapping.emplace_back(ia);
-            result.atoms.emplace_back(extract_atom(adata, ia));
+            result.atoms.emplace_back(extract_atom(adata, adata_h, ia));
         }
     }
     return result;

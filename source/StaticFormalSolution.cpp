@@ -202,6 +202,7 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
             local_atmos.vturb = flat_vturb(k);
             local_atmos.nhtot = flat_nhtot(k);
             local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            static_assert(false, "See below");
             auto result = emis_opac(
                 EmisOpacState<fp_t>{
                     .adata = adata,
@@ -211,6 +212,7 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
                     .n_star_scratch = flat_n_star,
                     .k = k,
                     .atmos = local_atmos,
+                    // THIS IS SLICING host data on device somehow???? Pointers must be copied wrong when we make device version
                     .active_set = slice_active_set(adata, la_start + wave),
                     .active_set_cont = slice_active_cont_set(adata, la_start + wave)
                 }

@@ -216,6 +216,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, i
             local_atmos.ne = flatmos.ne(k);
             local_atmos.vturb = flatmos.vturb(k);
             local_atmos.nhtot = flatmos.nh_tot(k);
+            // TODO(cmo): Take real H here if we have it
             local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
             const fp_t v_norm = std::sqrt(
                     square(flatmos.vx(k))
@@ -224,6 +225,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, i
             );
             const int la = la_start + wave;
             int governing_atom = adata.governing_trans(la).atom;
+
             bool static_only = v_norm > (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
                 adata.mass(governing_atom),
                 local_atmos.temperature
@@ -235,12 +237,13 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, i
                 EmisOpacState<fp_t>{
                     .adata = adata,
                     .profile = phi,
-                    .la = la_start + wave,
+                    .la = la,
                     .n = flat_pops,
                     .n_star_scratch = flat_n_star,
                     .k = k,
                     .atmos = local_atmos,
-                    .active_set_cont = slice_active_cont_set(adata, la_start + wave),
+                    .active_set = slice_active_set(adata, la),
+                    .active_set_cont = slice_active_cont_set(adata, la),
                     .mode = mode
                 }
             );
@@ -250,6 +253,12 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, i
     );
     state.alo = FP(0.0);
     yakl::fence();
+    fmt::println("Safe");
+    auto active_set = slice_active_set(state.adata_host, la_start);
+    for (int i = 0; i < active_set.extent(0); ++i) {
+        fmt::print("{} ", active_set(i));
+    }
+    fmt::println("{}", active_set.extent(0));
     // NOTE(cmo): Compute RC FS
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = true,

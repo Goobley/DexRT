@@ -222,7 +222,7 @@ YAKL_INLINE UV compute_uv_line(
     const EmisOpacState<T, mem_space>& args,
     int line_idx
 ) {
-    JasUnpack(args, adata, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
+    JasUnpack(args, adata, profile, la, k, atmos);
     const fp_t lambda = adata.wavelength(la);
     const auto& l = adata.lines(line_idx);
 

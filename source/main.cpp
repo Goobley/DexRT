@@ -529,7 +529,7 @@ int main(int argc, char** argv) {
             state.adata = atomic_data.device;
             state.adata_host = atomic_data.host;
             state.have_h = atomic_data.have_h_model;
-            state.atoms = extract_atoms(atomic_data.device);
+            state.atoms = extract_atoms(atomic_data.device, atomic_data.host);
             GammaAtomsAndMapping gamma_atoms = extract_atoms_with_gamma_and_mapping(atomic_data.device, atomic_data.host);
             state.atoms_with_gamma = gamma_atoms.atoms;
             state.atoms_with_gamma_mapping = gamma_atoms.mapping;
@@ -562,7 +562,7 @@ int main(int argc, char** argv) {
         // } else {
             compute_lte_pops(&state);
             constexpr bool non_lte = false;
-            constexpr bool static_soln = false;
+            constexpr bool static_soln = true;
             auto& waves = state.adata_host.wavelength;
             auto fs_fn = dynamic_formal_sol_rc;
             if (static_soln) {
