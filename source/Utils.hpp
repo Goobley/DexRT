@@ -127,10 +127,15 @@ YAKL_INLINE T interp(
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE
 yakl::Array<const u16, 1, mem_space> slice_active_set(const AtomicData<T, mem_space>& atom, int la) {
+    // NOTE(cmo): I have no idea why the original slicing (taking
+    // &atom.active_lines(start)) as the pointer wasn't working... and was
+    // causing "host array being accessed in a device kernel". This seems fine on nvhpc12.1
+    const int start = atom.active_lines_start(la);
+    const int end = atom.active_lines_end(la);
     yakl::Array<const u16, 1, mem_space> result(
         "active set",
-        &atom.active_lines(atom.active_lines_start(la)),
-        atom.active_lines_end(la) - atom.active_lines_start(la)
+        atom.active_lines.data() + start,
+        end - start
     );
     return result;
 }
@@ -138,10 +143,12 @@ yakl::Array<const u16, 1, mem_space> slice_active_set(const AtomicData<T, mem_sp
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE
 yakl::Array<const u16, 1, mem_space> slice_active_cont_set(const AtomicData<T, mem_space>& atom, int la) {
+    const int start = atom.active_cont_start(la);
+    const int end = atom.active_cont_end(la);
     yakl::Array<const u16, 1, mem_space> result(
         "active set",
-        &atom.active_cont(atom.active_cont_start(la)),
-        atom.active_cont_end(la) - atom.active_cont_start(la)
+        atom.active_cont.data() + start,
+        end - start
     );
     return result;
 }

@@ -29,7 +29,7 @@ if __name__ == "__main__":
     nhtot = np.ascontiguousarray(dex_atmos["nh_tot"][:, sample_idx][::-1]).astype(np.float64)
     vturb = np.ascontiguousarray(dex_atmos["vturb"][:, sample_idx][::-1]).astype(np.float64)
 
-    bc_ctx = pw.compute_falc_bc_ctx(["Ca"])
+    bc_ctx = pw.compute_falc_bc_ctx(["H", "Ca"])
     # bc_table = pw.tabulate_bc(bc_ctx, mu_grid=np.linspace(0.1, 1.0, 10))
     bc_table = pw.tabulate_bc(bc_ctx, mu_grid=np.linspace(0.05, 1.0, 20))
     # bc_table = pw.tabulate_bc(bc_ctx)
@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
     # a_set = lw.RadiativeSet([H_6_atom(), collisionless_CaII()])
     a_set = lw.RadiativeSet([H_6_atom(), CaII_atom()])
-    a_set.set_active("Ca")
+    a_set.set_active("H", "Ca")
     eq_pops = a_set.compute_eq_pops(atmos)
     # eq_pops["Ca"][...] = dex_pops[:, 0, 0][:, None]
 
@@ -70,7 +70,7 @@ if __name__ == "__main__":
     ctx.depthData.fill = True
 
     ctx.formal_sol_gamma_matrices()
-    # lw.iterate_ctx_se(ctx, popsTol=1e-2, JTol=1.0)
+    lw.iterate_ctx_se(ctx, popsTol=1e-2, JTol=1.0, printInterval=0.0)
 
     slice_idx = 128
     J_slice = (ctx.spect.J[:, ctx.spect.J.shape[1] - slice_idx - 1] << u.Unit("W / (m2 Hz sr)")).to("kW / (m2 nm sr)", equivalencies=u.spectral_density(ctx.spect.wavelength * u.nm))

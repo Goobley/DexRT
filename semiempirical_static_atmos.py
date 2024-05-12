@@ -6,8 +6,8 @@ import numpy as np
 if __name__ == '__main__':
     atmos = ncdf.Dataset("build/atmos.nc", "w", format="NETCDF4")
 
-    # bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"])
-    bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["Ca"])
+    bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"])
+    # bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["Ca"])
     tabulated = pw.tabulate_bc(bc_ctx, mu_grid=np.linspace(0.05, 1.0, 20))
     I_with_zero = np.zeros((tabulated["I"].shape[0], tabulated["I"].shape[1] + 1))
     I_with_zero[:, 1:] = tabulated["I"][...]

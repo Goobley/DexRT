@@ -15,6 +15,7 @@
 #include "StaticFormalSolution.hpp"
 #include "DynamicFormalSolution.hpp"
 #include "GammaMatrix.hpp"
+#include "ChargeConservation.hpp"
 #include "PromweaverBoundary.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
@@ -484,7 +485,7 @@ FpConst3d final_cascade_to_J(
     return J;
 }
 
-void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst1d& casc=FpConst1d(), const FpConst5d& alo=FpConst5d()) {
+void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst1d& casc=FpConst1d(), const FpConst5d& alo=FpConst5d(), const FpConst2d& ne=FpConst2d()) {
     fmt::print("Saving output...\n");
     auto dims = J.get_dimensions();
 
@@ -506,6 +507,9 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
         if (alo.initialized()) {
             nc.write(alo, "alo", {"z", "x", "dir", "wave_batch", "incl"});
         }
+        if (ne.initialized()) {
+            nc.write(ne, "ne", {"z", "x"});
+        }
     }
     nc.close();
 }
@@ -524,8 +528,9 @@ int main(int argc, char** argv) {
 
         if constexpr (USE_ATMOSPHERE) {
             Atmosphere atmos = load_atmos(ATMOS_PATH);
-            ModelAtom<f64> model = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
-            AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({model});
+            ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
+            ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_6.yaml");
+            AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
             state.adata = atomic_data.device;
             state.adata_host = atomic_data.host;
             state.have_h = atomic_data.have_h_model;
@@ -561,8 +566,11 @@ int main(int argc, char** argv) {
         //     save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
         // } else {
             compute_lte_pops(&state);
-            constexpr bool non_lte = false;
-            constexpr bool static_soln = true;
+            constexpr bool non_lte = true;
+            constexpr bool static_soln = false;
+            constexpr bool conserve_charge = true;
+            const bool actually_conserve_charge = state.have_h && conserve_charge;
+            constexpr fp_t non_lte_tol = FP(1e-2);
             auto& waves = state.adata_host.wavelength;
             auto fs_fn = dynamic_formal_sol_rc;
             if (static_soln) {
@@ -572,7 +580,9 @@ int main(int argc, char** argv) {
             if (non_lte) {
                 constexpr int max_iters = 300;
                 int i = 0;
-                while (max_change > FP(1e-3) && i < max_iters) {
+                // TODO(cmo): Use the nr system with just collisional rates to
+                // smooth out n_e before we start full non-lte stuff.
+                while (max_change > non_lte_tol && i < max_iters) {
                     fmt::println("FS {}", i);
                     compute_collisions_to_gamma(&state);
                     state.J = FP(0.0);
@@ -599,11 +609,13 @@ int main(int argc, char** argv) {
                             la_end
                         );
                     }
-                    // NOTE(cmo): Fixup now done in stateq
-                    // fixup_gamma(flat_Gamma);
                     yakl::fence();
                     fmt::println("Stat eq");
                     max_change = stat_eq<f64>(&state);
+                    if (actually_conserve_charge) {
+                        fp_t nr_update = nr_post_update<f64>(&state);
+                        max_change = std::max(nr_update, max_change);
+                    }
                     i += 1;
                 }
             } else {
