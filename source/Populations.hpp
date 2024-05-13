@@ -1205,5 +1205,36 @@ inline fp_t stat_eq(State* state) {
     return global_max_change;
 }
 
+inline void compute_nh0(const State& state) {
+    const auto& nh0 = state.atmos.nh0;
+    const auto& nh_lte = state.nh_lte;
+
+    if (state.have_h) {
+        // NOTE(cmo): This could just be a pointer shuffle...
+        const auto& pops = state.pops;
+        parallel_for(
+            "Copy nh0",
+            SimpleBounds<2>(nh0.extent(0), nh0.extent(1)),
+            YAKL_LAMBDA (int z, int x) {
+                nh0(z, x) = pops(0, z, x);
+            }
+        );
+    } else {
+        const auto& atmos = state.atmos;
+        parallel_for(
+            "Compute nh0 in LTE",
+            SimpleBounds<2>(nh0.extent(0), nh0.extent(1)),
+            YAKL_LAMBDA (int z, int x) {
+                const fp_t temperature = atmos.temperature(z, x);
+                const fp_t ne = atmos.ne(z, x);
+                const fp_t nh_tot = atmos.nh_tot(z, x);
+                nh0(z, x) = nh_lte(temperature, ne, nh_tot);
+            }
+        );
+    }
+
+    yakl::fence();
+}
+
 #else
 #endif

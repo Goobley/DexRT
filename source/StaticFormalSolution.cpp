@@ -36,7 +36,6 @@ void static_compute_gamma(
             state.alo.extent(4)
         ));
         const auto& I = casc_state.i_cascades[0];
-        const auto& nh_lte = state.nh_lte;
         const auto& incl_quad = state.incl_quad;
         int wave_batch = la_end - la_start;
         const auto& wphi = state.wphi.reshape<2>(Dims(state.wphi.extent(0), state.wphi.extent(1) * state.wphi.extent(2)));
@@ -84,8 +83,7 @@ void static_compute_gamma(
                 local_atmos.ne = flat_atmos.ne(k);
                 local_atmos.vturb = flat_atmos.vturb(k);
                 local_atmos.nhtot = flat_atmos.nh_tot(k);
-                local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
-                // TODO(cmo): Update for dynamic case.
+                local_atmos.nh0 = flat_atmos.nh0(k);
                 local_atmos.vel = FP(0.0);
 
                 int kr_base = adata.line_start(ia);
@@ -178,7 +176,6 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
     auto& adata = state.adata;
     auto& eta = casc_state.eta;
     auto& chi = casc_state.chi;
-    const auto& nh_lte = state.nh_lte;
 
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
     // it, for now, trust the pool allocator
@@ -197,6 +194,7 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
     auto flat_ne = atmos.ne.collapse();
     auto flat_vturb = atmos.vturb.collapse();
     auto flat_nhtot = atmos.nh_tot.collapse();
+    auto flat_nh0 = atmos.nh0.collapse();
     auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
     auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
@@ -211,8 +209,7 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
             local_atmos.ne = flat_ne(k);
             local_atmos.vturb = flat_vturb(k);
             local_atmos.nhtot = flat_nhtot(k);
-            local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
-            // static_assert(false, "See below");
+            local_atmos.nh0 = flat_nh0(k);
             const int la = la_start + wave;
             auto active_set = slice_active_set(adata, la);
             auto active_cont = slice_active_cont_set(adata, la);
@@ -225,7 +222,6 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, in
                     .n_star_scratch = flat_n_star,
                     .k = k,
                     .atmos = local_atmos,
-                    // THIS IS SLICING host data on device somehow???? Pointers must be copied wrong when we make device version
                     .active_set = active_set,
                     .active_set_cont = active_cont
                 }

@@ -38,7 +38,6 @@ void dynamic_compute_gamma(
             state.alo.extent(4)
         ));
         const auto& I = casc_state.i_cascades[0];
-        const auto& nh_lte = state.nh_lte;
         const auto& incl_quad = state.incl_quad;
         int wave_batch = la_end - la_start;
 
@@ -95,7 +94,7 @@ void dynamic_compute_gamma(
                 local_atmos.ne = flat_atmos.ne(k);
                 local_atmos.vturb = flat_atmos.vturb(k);
                 local_atmos.nhtot = flat_atmos.nh_tot(k);
-                local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+                local_atmos.nh0 = flat_atmos.nh0(k);
                 local_atmos.vel = (
                         flat_atmos.vx(k) * mu(0)
                         + flat_atmos.vy(k) * mu(1)
@@ -191,7 +190,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, i
     auto& dynamic_opac = state.dynamic_opac;
     auto& eta = casc_state.eta;
     auto& chi = casc_state.chi;
-    const auto& nh_lte = state.nh_lte;
 
     // if (!atmos.moving) {
     //     return static_formal_sol_rc(state, casc_state, la_start, la_end);
@@ -227,7 +225,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, i
             local_atmos.vturb = flatmos.vturb(k);
             local_atmos.nhtot = flatmos.nh_tot(k);
             // TODO(cmo): Take real H here if we have it
-            local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            local_atmos.nh0 = flatmos.nh0(k);
             const fp_t v_norm = std::sqrt(
                     square(flatmos.vx(k))
                     + square(flatmos.vy(k))

@@ -15,7 +15,6 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
     Fp2d wphi = state.wphi.reshape<2>(Dims(state.wphi.extent(0), state.wphi.extent(1) * state.wphi.extent(2)));
     const auto& adata = state.adata;
     const auto& wavelength = adata.wavelength;
-    const auto& nh_lte = state.nh_lte;
     const auto& incl_quad = state.incl_quad;
     const auto& profile = state.phi;
     const int num_cascades = casc_state.num_cascades;
@@ -39,8 +38,7 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
             local_atmos.ne = flatmos.ne(k);
             local_atmos.vturb = flatmos.vturb(k);
             local_atmos.nhtot = flatmos.nh_tot(k);
-            // TODO(cmo): Here too!
-            local_atmos.nh0 = nh_lte(local_atmos.temperature, local_atmos.ne, local_atmos.nhtot);
+            local_atmos.nh0 = flatmos.nh0(k);
 
             const fp_t dop_width = doppler_width(line.lambda0, adata.mass(line.atom), local_atmos.temperature, local_atmos.vturb);
             const fp_t gamma = gamma_from_broadening(line, adata.broadening, local_atmos.temperature, local_atmos.ne, local_atmos.nh0);

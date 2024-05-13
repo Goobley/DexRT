@@ -609,6 +609,7 @@ int main(int argc, char** argv) {
                 fmt::println("-- Non-LTE Iterations --");
                 while (max_change > non_lte_tol && i < max_iters) {
                     fmt::println("FS {}", i);
+                    compute_nh0(state);
                     compute_collisions_to_gamma(&state);
                     state.J = FP(0.0);
                     compute_profile_normalisation(state, casc_state);
@@ -650,6 +651,7 @@ int main(int argc, char** argv) {
                 }
             } else {
                 state.J = FP(0.0);
+                compute_nh0(state);
                 yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));

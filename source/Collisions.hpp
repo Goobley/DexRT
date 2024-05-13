@@ -120,7 +120,7 @@ YAKL_INLINE void collision_ch(
     using namespace ConstantsFP;
     const fp_t rate = interp_rates(atmos, atom, coll, x, y);
     // TODO(cmo): This is only LTE!
-    const fp_t nh0 = nh_lte(atmos.temperature(x, y), atmos.ne(x, y), atmos.nh_tot(x, y));
+    const fp_t nh0 = atmos.nh0(x, y);
     const fp_t Cup = rate * nh0;
     const fp_t Cdown = Cup * n_star(coll.i, x, y) / n_star(coll.j, x, y);
     C(coll.i, coll.j, x, y) += Cdown;
@@ -140,7 +140,7 @@ YAKL_INLINE void collision_charge_exc_h(
     using namespace ConstantsFP;
     const fp_t rate = interp_rates(atmos, atom, coll, x, y);
     // TODO(cmo): This is only LTE!
-    const fp_t nh0 = nh_lte(atmos.temperature(x, y), atmos.ne(x, y), atmos.nh_tot(x, y));
+    const fp_t nh0 = atmos.nh0(x, y);
     const fp_t Cdown = rate * nh0;
     C(coll.i, coll.j, x, y) += Cdown;
 }

@@ -85,7 +85,6 @@ struct HPartFn {
         }
         return result;
     }
-
 };
 #else
 #endif
