@@ -34,7 +34,7 @@ struct RaySet {
 
 struct DexRayState {
     Atmosphere atmos;
-    CompAtom<fp_t> atom;
+    AtomicData<fp_t> adata;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
     Fp3d pops;
@@ -348,7 +348,7 @@ YAKL_INLINE fp_t sample_bc(const Bc& bc, int la, vec2 pos, vec2 mu) {
 
 template <typename Bc>
 void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
-    JasUnpack(state.state, atmos, pops, ray_set, ray_I, ray_tau, eta, chi, atom, phi, nh_lte);
+    JasUnpack(state.state, atmos, pops, ray_set, ray_I, ray_tau, eta, chi, adata, phi, nh_lte);
     auto& bc(state.bc);
 
     FlatAtmosphere<fp_t> flatmos = flatten(atmos);
@@ -381,7 +381,7 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
 
                 auto eta_chi = emis_opac(
                     EmisOpacSpecState<>{
-                        .atom = atom,
+                        .adata = adata,
                         .profile = phi,
                         .lambda = lambda,
                         .n = flat_pops,
@@ -531,13 +531,14 @@ int main(int argc, const char* argv[]) {
     {
         auto config = parse_config(program.get<std::string>("--config"));
         Atmosphere atmos = load_atmos(config.atmos_path);
-        ModelAtom<fp_t> model_atom = parse_crtaf_model(config.atom_path);
-        CompAtom<fp_t> comp_atom = to_comp_atom(model_atom);
+        ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
+        ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_6.yaml");
+        AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
         DexOutput model_output = load_dex_output(config.dex_output_path);
 
         DexRayState state{
             .atmos = atmos,
-            .atom = comp_atom,
+            .adata = atomic_data.device,
             .phi = VoigtProfile<fp_t>(
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.15), 1024},
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(1.5e3), 64 * 1024}
