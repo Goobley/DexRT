@@ -224,7 +224,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, i
             local_atmos.ne = flatmos.ne(k);
             local_atmos.vturb = flatmos.vturb(k);
             local_atmos.nhtot = flatmos.nh_tot(k);
-            // TODO(cmo): Take real H here if we have it
             local_atmos.nh0 = flatmos.nh0(k);
             const fp_t v_norm = std::sqrt(
                     square(flatmos.vx(k))

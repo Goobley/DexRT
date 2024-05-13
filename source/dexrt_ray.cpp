@@ -370,13 +370,21 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
                     + flatmos.vy(k) * -ray_set.mu(1)
                     + flatmos.vz(k) * -ray_set.mu(2)
                 );
+                // TODO(cmo): Tidy this up.
+                const bool have_h = (adata.Z(0) == 1);
+                fp_t nh0;
+                if (have_h) {
+                    nh0 = flat_pops(0, k);
+                } else {
+                    nh0 = nh_lte(flatmos.temperature(k), flatmos.ne(k), flatmos.nh_tot(k));
+                }
                 AtmosPointParams local_atmos {
                     .temperature = flatmos.temperature(k),
                     .ne = flatmos.ne(k),
                     .vturb = flatmos.vturb(k),
                     .nhtot = flatmos.nh_tot(k),
                     .vel = v_proj,
-                    .nh0 = nh_lte(flatmos.temperature(k), flatmos.ne(k), flatmos.nh_tot(k))
+                    .nh0 = nh0
                 };
 
                 auto eta_chi = emis_opac(

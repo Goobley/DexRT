@@ -18,10 +18,10 @@ struct State {
     Atmosphere atmos;
     InclQuadrature incl_quad;
     AtomicData<fp_t, yakl::memDevice> adata;
-    std::vector<CompAtom<fp_t, yakl::memDevice>> atoms; // TODO(cmo): extract these from adata during setup
-    std::vector<CompAtom<fp_t, yakl::memDevice>> atoms_with_gamma; // TODO(cmo): extract these from adata during setup
+    std::vector<CompAtom<fp_t, yakl::memDevice>> atoms;
+    std::vector<CompAtom<fp_t, yakl::memDevice>> atoms_with_gamma;
     bool have_h;
-    std::vector<int> atoms_with_gamma_mapping; // TODO(cmo): FIll in
+    std::vector<int> atoms_with_gamma_mapping;
     AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;

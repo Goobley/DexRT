@@ -579,7 +579,7 @@ int main(int argc, char** argv) {
             constexpr bool conserve_pressure = true;
             const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
 
-            constexpr fp_t non_lte_tol = FP(1e-2);
+            constexpr fp_t non_lte_tol = FP(1e-3);
             auto& waves = state.adata_host.wavelength;
             auto fs_fn = dynamic_formal_sol_rc;
             if (static_soln) {
@@ -593,7 +593,7 @@ int main(int argc, char** argv) {
                     fmt::println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
-                    while (lte_max_change > FP(1e-4) && lte_i < max_iters) {
+                    while (lte_max_change > FP(1e-5) && lte_i < max_iters) {
                         compute_collisions_to_gamma(&state);
                         lte_max_change = stat_eq<f64>(&state);
                         fp_t nr_update = nr_post_update<f64>(&state);
