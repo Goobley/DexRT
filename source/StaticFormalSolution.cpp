@@ -39,6 +39,7 @@ void static_compute_gamma(
         const auto& nh_lte = state.nh_lte;
         const auto& incl_quad = state.incl_quad;
         int wave_batch = la_end - la_start;
+        const auto& wphi = state.wphi.reshape<2>(Dims(state.wphi.extent(0), state.wphi.extent(1) * state.wphi.extent(2)));
 
         CascadeStorage dims = state.c0_size;
 
@@ -119,7 +120,7 @@ void static_compute_gamma(
                         .uv = uv,
                         .I = intensity,
                         .alo = alo(k, phi_idx, wave, theta_idx),
-                        .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx),
+                        .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx) * wphi(kr, k),
                         .Gamma = flat_Gamma,
                         .i = l.i,
                         .j = l.j,

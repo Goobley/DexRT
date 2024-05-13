@@ -16,6 +16,8 @@
 #include "DynamicFormalSolution.hpp"
 #include "GammaMatrix.hpp"
 #include "ChargeConservation.hpp"
+#include "PressureConservation.hpp"
+#include "ProfileNormalisation.hpp"
 #include "PromweaverBoundary.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
@@ -396,6 +398,7 @@ void init_state (State* state) {
                 Fp4d("Gamma", n_level, n_level, space_x, space_y)
             );
         }
+        state->wphi = Fp3d("wphi", state->adata.lines.extent(0), space_x, space_y);
 
         state->pw_bc = load_bc(ATMOS_PATH, state->adata.wavelength);
         if constexpr (USE_BC) {
@@ -485,7 +488,7 @@ FpConst3d final_cascade_to_J(
     return J;
 }
 
-void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst1d& casc=FpConst1d(), const FpConst5d& alo=FpConst5d(), const FpConst2d& ne=FpConst2d()) {
+void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst1d& casc=FpConst1d(), const FpConst5d& alo=FpConst5d(), const FpConst2d& ne=FpConst2d(), const FpConst2d& nh_tot=FpConst2d()) {
     fmt::print("Saving output...\n");
     auto dims = J.get_dimensions();
 
@@ -509,6 +512,9 @@ void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi
         }
         if (ne.initialized()) {
             nc.write(ne, "ne", {"z", "x"});
+        }
+        if (nh_tot.initialized()) {
+            nc.write(nh_tot, "nh_tot", {"z", "x"});
         }
     }
     nc.close();
@@ -570,6 +576,9 @@ int main(int argc, char** argv) {
             constexpr bool static_soln = false;
             constexpr bool conserve_charge = true;
             const bool actually_conserve_charge = state.have_h && conserve_charge;
+            constexpr bool conserve_pressure = true;
+            const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
+
             constexpr fp_t non_lte_tol = FP(1e-2);
             auto& waves = state.adata_host.wavelength;
             auto fs_fn = dynamic_formal_sol_rc;
@@ -580,12 +589,29 @@ int main(int argc, char** argv) {
             if (non_lte) {
                 constexpr int max_iters = 300;
                 int i = 0;
-                // TODO(cmo): Use the nr system with just collisional rates to
-                // smooth out n_e before we start full non-lte stuff.
+                if (actually_conserve_charge) {
+                    fmt::println("-- Iterating LTE n_e/pressure --");
+                    fp_t lte_max_change = FP(1.0);
+                    int lte_i = 0;
+                    while (lte_max_change > FP(1e-4) && lte_i < max_iters) {
+                        compute_collisions_to_gamma(&state);
+                        lte_max_change = stat_eq<f64>(&state);
+                        fp_t nr_update = nr_post_update<f64>(&state);
+                        lte_max_change = std::max(nr_update, lte_max_change);
+                        if (actually_conserve_pressure) {
+                            fp_t nh_tot_update = simple_conserve_pressure(&state);
+                            lte_max_change = std::max(nh_tot_update, lte_max_change);
+                        }
+                        lte_i += 1;
+                    }
+                    fmt::println("Ran for {} iterations", lte_i);
+                }
+                fmt::println("-- Non-LTE Iterations --");
                 while (max_change > non_lte_tol && i < max_iters) {
                     fmt::println("FS {}", i);
                     compute_collisions_to_gamma(&state);
                     state.J = FP(0.0);
+                    compute_profile_normalisation(state, casc_state);
                     yakl::fence();
                     for (
                         int la_start = 0;
@@ -615,6 +641,10 @@ int main(int argc, char** argv) {
                     if (actually_conserve_charge) {
                         fp_t nr_update = nr_post_update<f64>(&state);
                         max_change = std::max(nr_update, max_change);
+                        if (actually_conserve_pressure) {
+                            fp_t nh_tot_update = simple_conserve_pressure(&state);
+                            max_change = std::max(nh_tot_update, max_change);
+                        }
                     }
                     i += 1;
                 }
@@ -649,7 +679,9 @@ int main(int argc, char** argv) {
                 state.adata.wavelength,
                 state.pops,
                 casc_state.i_cascades[casc_state.i_cascades.size() - 1],
-                state.alo
+                state.alo,
+                state.atmos.ne,
+                state.atmos.nh_tot
             );
         // }
         magma_queue_destroy(state.magma_queue);

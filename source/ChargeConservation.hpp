@@ -8,7 +8,7 @@
 
 template <typename T=fp_t>
 inline fp_t nr_post_update(State* state) {
-    constexpr bool print_debug = true;
+    constexpr bool print_debug = false;
     // NOTE(cmo): Here be big angry dragons. The implementation is disgusting and hard to follow. This needs to be redone.
     // TODO(cmo): There's too many fences in here!
     // TODO(cmo): Add background n_e term like in Lw.

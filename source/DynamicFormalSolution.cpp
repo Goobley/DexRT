@@ -22,6 +22,7 @@ void dynamic_compute_gamma(
     const auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     const auto flat_lte_pops = lte_scratch.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     const auto& adata = state.adata;
+    const auto& wphi = state.wphi.reshape<2>(Dims(state.wphi.extent(0), state.wphi.extent(1) * state.wphi.extent(2)));
 
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
@@ -131,7 +132,7 @@ void dynamic_compute_gamma(
                         .uv = uv,
                         .I = intensity,
                         .alo = alo(k, phi_idx, wave, theta_idx),
-                        .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx),
+                        .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx) * wphi(kr, k),
                         .Gamma = flat_Gamma,
                         .i = l.i,
                         .j = l.j,

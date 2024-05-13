@@ -25,8 +25,8 @@ struct State {
     AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
-    FpConst1dHost wavelength_h;
     yakl::Array<bool, 3, yakl::memDevice> dynamic_opac; // [z, x, wave]
+    Fp3d wphi; /// [kr, z, x]
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y]
     Fp5d alo; /// [z, x, phi, wave, theta]
