@@ -35,6 +35,7 @@ Features/ToDo
     types so use a switch to template dispatch). Needs some tidying to wrap up exploding cases as BCs are added
 - [x] Multiple atoms - basically splat everything SOA a la MULTI and like is done for the one atom here. -- Messy, but done
 - [x] Charge conservation
+    - [ ] Finite difference charge conservation blows up if we're off the end of the grid -- makes sense; dC will also explode
 - [x] Pressure conservation
 - [ ] PRD
 - [ ] Sparse VDB-like grid

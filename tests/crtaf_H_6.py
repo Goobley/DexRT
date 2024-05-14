@@ -1,5 +1,6 @@
 import crtaf
 from crtaf.from_lightweaver import LightweaverAtomConverter
+from crtaf.core_types import TemperatureInterpolationRateImpl
 from lightweaver.rh_atoms import H_6_atom, CaII_atom
 import numpy as np
 import astropy.units as u
@@ -7,6 +8,10 @@ import astropy.units as u
 def make_atom():
     conv = LightweaverAtomConverter()
     model = conv.convert(H_6_atom())
+    for l in model.lines:
+        l.wavelength_grid.q_core *= 3
+        l.wavelength_grid.q_wing *= 2
+        l.wavelength_grid.n_lambda //= 2
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     return model_simplified
@@ -14,12 +19,24 @@ def make_atom():
 def make_CaII():
     conv = LightweaverAtomConverter()
     model = conv.convert(CaII_atom())
+    for l in model.lines:
+        l.wavelength_grid.q_core *= 3
+        l.wavelength_grid.q_wing *= 2
+        l.wavelength_grid.n_lambda //= 2
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
 
     current_grid = model_simplified.lines[-1].wavelength_grid.wavelengths
     new_grid = np.sort(np.concatenate((current_grid, [-1.0 * u.nm])))
     model_simplified.lines[-1].wavelength_grid.wavelengths = new_grid
+
+    # NOTE(cmo): To prevent explosion due to rates in the Snow KHI model
+    # TODO(cmo): Grab the rates from source/RADYN
+    for trans in model_simplified.collisions:
+        for coll in trans.data:
+            if isinstance(coll, TemperatureInterpolationRateImpl) and coll.temperature[0] > (1000.0 * u.K):
+                coll.temperature = np.concatenate(([500.0 * u.K], coll.temperature))
+                coll.data = np.concatenate(([0.0 * coll.data.unit], coll.data))
     return model_simplified
 
 

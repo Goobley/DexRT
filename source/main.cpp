@@ -536,7 +536,8 @@ int main(int argc, char** argv) {
             Atmosphere atmos = load_atmos(ATMOS_PATH);
             ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
             ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_6.yaml");
-            AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
+            // AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
+            AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H});
             state.adata = atomic_data.device;
             state.adata_host = atomic_data.host;
             state.have_h = atomic_data.have_h_model;
@@ -578,6 +579,7 @@ int main(int argc, char** argv) {
             const bool actually_conserve_charge = state.have_h && conserve_charge;
             constexpr bool conserve_pressure = true;
             const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
+            constexpr int initial_lambda_iterations = 0;
 
             constexpr fp_t non_lte_tol = FP(1e-3);
             auto& waves = state.adata_host.wavelength;
@@ -589,30 +591,37 @@ int main(int argc, char** argv) {
             if (non_lte) {
                 constexpr int max_iters = 300;
                 int i = 0;
-                if (actually_conserve_charge) {
+                if (true && actually_conserve_charge) {
                     fmt::println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
-                    while (lte_max_change > FP(1e-5) && lte_i < max_iters) {
+                    while ((lte_max_change > FP(1e-3) || lte_i < 5) && lte_i < max_iters) {
+                        lte_i += 1;
+                        compute_nh0(state);
                         compute_collisions_to_gamma(&state);
                         lte_max_change = stat_eq<f64>(&state);
+                        if (lte_i < 2) {
+                            continue;
+                        }
                         fp_t nr_update = nr_post_update<f64>(&state);
                         lte_max_change = std::max(nr_update, lte_max_change);
                         if (actually_conserve_pressure) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
                             lte_max_change = std::max(nh_tot_update, lte_max_change);
                         }
-                        lte_i += 1;
                     }
                     fmt::println("Ran for {} iterations", lte_i);
                 }
                 fmt::println("-- Non-LTE Iterations --");
-                while (max_change > non_lte_tol && i < max_iters) {
+                while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
                     fmt::println("FS {}", i);
                     compute_nh0(state);
+                    // fmt::println("nh0 done");
                     compute_collisions_to_gamma(&state);
+                    // fmt::println("coll done");
                     state.J = FP(0.0);
                     compute_profile_normalisation(state, casc_state);
+                    // fmt::println("profiles done");
                     yakl::fence();
                     for (
                         int la_start = 0;
@@ -621,12 +630,15 @@ int main(int argc, char** argv) {
                     ) {
                         int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
 
+                        bool lambda_iterate = i < initial_lambda_iterations;
                         fs_fn(
                             state,
                             casc_state,
+                            lambda_iterate,
                             la_start,
                             la_end
                         );
+                        // fmt::println("FS batch done");
                         final_cascade_to_J(
                             casc_state.i_cascades[0],
                             state.c0_size,
@@ -635,11 +647,12 @@ int main(int argc, char** argv) {
                             la_start,
                             la_end
                         );
+                        // fmt::println("J done");
                     }
                     yakl::fence();
                     fmt::println("Stat eq");
                     max_change = stat_eq<f64>(&state);
-                    if (actually_conserve_charge) {
+                    if (i > 2 && actually_conserve_charge) {
                         fp_t nr_update = nr_post_update<f64>(&state);
                         max_change = std::max(nr_update, max_change);
                         if (actually_conserve_pressure) {
@@ -663,7 +676,8 @@ int main(int argc, char** argv) {
                         waves(la_end-1),
                         static_soln
                     );
-                    fs_fn(state, casc_state, la_start, la_end);
+                    bool lambda_iterate = false;
+                    fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
                     final_cascade_to_J(
                         casc_state.i_cascades[0],
                         state.c0_size,

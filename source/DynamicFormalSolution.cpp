@@ -55,9 +55,12 @@ void dynamic_compute_gamma(
                 dims.num_incl
             ),
             YAKL_LAMBDA (i64 k, int phi_idx, int wave, int theta_idx) {
+                // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
+                // fast-running), but index as [u, v], i.e. dims.num_probes(0) =
+                // dim(u)
                 ivec2 probe_coord;
-                probe_coord(0) = k % dims.num_probes(1);
-                probe_coord(1) = k / dims.num_probes(1);
+                probe_coord(0) = k % dims.num_probes(0);
+                probe_coord(1) = k / dims.num_probes(0);
                 const ProbeIndex probe_idx{
                     .coord=probe_coord,
                     .dir=phi_idx,
@@ -101,7 +104,7 @@ void dynamic_compute_gamma(
                         + flat_atmos.vz(k) * mu(2)
                 );
 
-                int kr_base = adata.line_start(ia);
+                const int kr_base = adata.line_start(ia);
                 for (int kr_atom = 0; kr_atom < adata.num_line(ia); ++kr_atom) {
                     const int kr = kr_base + kr_atom;
                     const auto& l = adata.lines(kr);
@@ -138,9 +141,9 @@ void dynamic_compute_gamma(
                         .k = k
                     });
                 }
-                kr_base = adata.cont_start(ia);
+                const int kr_base_c = adata.cont_start(ia);
                 for (int kr_atom = 0; kr_atom < adata.num_cont(ia); ++kr_atom) {
-                    const int kr = kr_base + kr_atom;
+                    const int kr = kr_base_c + kr_atom;
                     const auto& cont = adata.continua(kr);
                     if (!cont.is_active(la)) {
                         continue;
@@ -182,7 +185,7 @@ void dynamic_compute_gamma(
     yakl::fence();
 }
 
-void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, int la_start, int la_end) {
+void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
     auto& atmos = state.atmos;
     auto& phi = state.phi;
     auto& pops = state.pops;
@@ -307,13 +310,18 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, i
     yakl::fence();
     if (state.alo.initialized()) {
         // NOTE(cmo): Add terms to Gamma
-        dynamic_compute_gamma(
-            state,
-            casc_state,
-            la_start,
-            la_end,
-            lte_scratch
-        );
+        if (lambda_iterate) {
+            state.alo = FP(1.0);
+            yakl::fence();
+        } else {
+            dynamic_compute_gamma(
+                state,
+                casc_state,
+                la_start,
+                la_end,
+                lte_scratch
+            );
+        }
     }
     // NOTE(cmo): J is not computed in this function, but done in main for now
 }

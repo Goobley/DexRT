@@ -239,8 +239,8 @@ inline void compute_collisions_to_gamma(State* state) {
                 );
             }
         );
+        yakl::fence();
     }
-    yakl::fence();
 }
 
 #else
