@@ -13,6 +13,7 @@ struct RaymarchParams {
     fp_t incl_weight;
     int la;
     vec3 offset;
+    yakl::Array<bool, 2, yakl::memDevice> active;
     DynamicState dyn_state;
 };
 
@@ -39,6 +40,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
             .wave = this_probe.wave,
             .la = params.la,
             .offset = params.offset,
+            .active = params.active,
             .dyn_state = params.dyn_state
         }
     );
@@ -132,7 +134,7 @@ void cascade_i_25d(
     int la_start = -1,
     int la_end = -1
 ) {
-    JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac);
+    JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac, active);
     const auto& profile = state.phi;
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
@@ -217,6 +219,7 @@ void cascade_i_25d(
                     .incl_weight = incl_quad.wmuy(theta_idx),
                     .la = la,
                     .offset = offset,
+                    .active = active,
                     .dyn_state = dyn_state
                 };
 

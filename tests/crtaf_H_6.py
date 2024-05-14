@@ -14,6 +14,11 @@ def make_atom():
         l.wavelength_grid.n_lambda //= 2
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
+    new_lines = []
+    for l in model_simplified.lines:
+        if l.lambda0 < 1000.0 * u.nm:
+            new_lines.append(l)
+    model_simplified.lines = new_lines
     return model_simplified
 
 def make_CaII():

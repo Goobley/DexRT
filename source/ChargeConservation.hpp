@@ -16,6 +16,7 @@ inline fp_t nr_post_update(State* state) {
     // TODO(cmo): He contribution?
     assert(state->have_h && "Need to have H active for non-lte EOS");
     const auto& pops = state->pops.reshape<2>(Dims(state->pops.extent(0), state->pops.extent(1) * state->pops.extent(2)));
+    const auto& active = state->active.collapse();
     const auto& GammaH = state->Gamma[0];
     const int num_level = GammaH.extent(0);
     const int num_eqn = GammaH.extent(0) + 1;
@@ -375,33 +376,35 @@ inline fp_t nr_post_update(State* state) {
         "Update & transpose pops",
         SimpleBounds<1>(F.extent(0)),
         YAKL_LAMBDA (int64_t k) {
-            fp_t step_size = FP(1.0);
-            constexpr bool clamp_step_size = true;
-            if (clamp_step_size) {
-                for (int i = 0; i < num_level; ++i) {
-                    fp_t update = F(k, i);
-                    fp_t updated = pops(i, k) + update;
-                    if (updated < FP(0.0)) {
-                        fp_t local_step_size = FP(0.99) * pops(i, k) / std::abs(update);
+            if (active(k)) {
+                fp_t step_size = FP(1.0);
+                constexpr bool clamp_step_size = true;
+                if (clamp_step_size) {
+                    for (int i = 0; i < num_level; ++i) {
+                        fp_t update = F(k, i);
+                        fp_t updated = pops(i, k) + update;
+                        if (updated < FP(0.0)) {
+                            fp_t local_step_size = FP(0.99) * pops(i, k) / std::abs(update);
+                            step_size = std::max(std::min(step_size, local_step_size), FP(1e-4));
+                        }
+                    }
+                    fp_t ne_update = F(k, num_eqn-1);
+                    fp_t ne_updated = ne_flat(k) + ne_update;
+                    if (ne_updated < FP(0.0)) {
+                        fp_t local_step_size = FP(0.95) * ne_flat(k) / std::abs(ne_update);
                         step_size = std::max(std::min(step_size, local_step_size), FP(1e-4));
                     }
                 }
-                fp_t ne_update = F(k, num_eqn-1);
-                fp_t ne_updated = ne_flat(k) + ne_update;
-                if (ne_updated < FP(0.0)) {
-                    fp_t local_step_size = FP(0.99) * ne_flat(k) / std::abs(ne_update);
-                    step_size = std::max(std::min(step_size, local_step_size), FP(1e-4));
+                for (int i = 0; i < num_level; ++i) {
+                    fp_t update = step_size * F(k, i);
+                    max_rel_change(k, i) = std::abs(update / (pops(i, k)));
+                    pops(i, k) += update;
                 }
+                fp_t ne_update = step_size * F(k, num_eqn-1);
+                max_rel_change(k, num_eqn-1) = std::abs(ne_update / (ne_flat(k)));
+                ne_flat(k) += ne_update;
+                nr_step_size(k) = step_size;
             }
-            for (int i = 0; i < num_level; ++i) {
-                fp_t update = step_size * F(k, i);
-                max_rel_change(k, i) = std::abs(update / (pops(i, k)));
-                pops(i, k) += update;
-            }
-            fp_t ne_update = step_size * F(k, num_eqn-1);
-            max_rel_change(k, num_eqn-1) = std::abs(ne_update / (ne_flat(k)));
-            ne_flat(k) += ne_update;
-            nr_step_size(k) = step_size;
         }
     );
     yakl::fence();

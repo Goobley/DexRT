@@ -283,7 +283,7 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bo
     if (state.alo.initialized()) {
         // NOTE(cmo): Add terms to Gamma
         if (lambda_iterate) {
-            state.alo = FP(1.0);
+            state.alo = FP(0.0);
             yakl::fence();
         } else {
             static_compute_gamma(

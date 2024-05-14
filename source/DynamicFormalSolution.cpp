@@ -126,7 +126,8 @@ void dynamic_compute_gamma(
 
                     const int offset = adata.level_start(ia);
                     const fp_t eta = flat_pops(offset + l.j, k) * uv.Uji;
-                    const fp_t chi = flat_pops(offset + l.i, k) * uv.Vij - flat_pops(offset + l.j, k) * uv.Vji;
+                    const fp_t chi = flat_pops(offset + l.i, k) * uv.Vij - flat_pops(offset + l.j, k) * uv.Vji + FP(1e-20);
+
 
                     add_to_gamma<true>(GammaAccumState{
                         .eta = eta,
@@ -164,7 +165,7 @@ void dynamic_compute_gamma(
 
                     const int offset = adata.level_start(ia);
                     const fp_t eta = flat_pops(offset + cont.j, k) * uv.Uji;
-                    const fp_t chi = flat_pops(offset + cont.i, k) * uv.Vij - flat_pops(offset + cont.j, k) * uv.Vji;
+                    const fp_t chi = flat_pops(offset + cont.i, k) * uv.Vij - flat_pops(offset + cont.j, k) * uv.Vji + FP(1e-20);
 
                     add_to_gamma<true>(GammaAccumState{
                         .eta = eta,
@@ -311,7 +312,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     if (state.alo.initialized()) {
         // NOTE(cmo): Add terms to Gamma
         if (lambda_iterate) {
-            state.alo = FP(1.0);
+            state.alo = FP(0.0);
             yakl::fence();
         } else {
             dynamic_compute_gamma(

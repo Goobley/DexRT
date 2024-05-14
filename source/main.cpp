@@ -399,6 +399,32 @@ void init_state (State* state) {
             );
         }
         state->wphi = Fp3d("wphi", state->adata.lines.extent(0), space_x, space_y);
+        state->active = decltype(state->active)("active", space_x, space_y);
+        const auto& temperature = state->atmos.temperature;
+        const auto& active = state->active;
+        parallel_for(
+            "Active bits",
+            SimpleBounds<2>(temperature.extent(0), temperature.extent(1)),
+            YAKL_LAMBDA (int z, int x) {
+                const fp_t thresh = THRESHOLD_TEMPERATURE;
+                if (thresh == FP(0.0)) {
+                    active(z, x) = true;
+                } else {
+                    active(z, x) = temperature(z, x) <= thresh;
+                }
+            }
+        );
+        yakl::fence();
+        const auto& cpu_active = active.createHostCopy();
+        yakl::fence();
+        i64 active_count = 0;
+        for (int z = 0; z < cpu_active.extent(0); ++z) {
+            for (int x = 0; x < cpu_active.extent(1); ++x) {
+                active_count += cpu_active(z, x);
+            }
+        }
+        fmt::println("Active cells: {}/{}", active_count, active.extent(0) * active.extent(1));
+
 
         state->pw_bc = load_bc(ATMOS_PATH, state->adata.wavelength);
         if constexpr (USE_BC) {
@@ -536,8 +562,8 @@ int main(int argc, char** argv) {
             Atmosphere atmos = load_atmos(ATMOS_PATH);
             ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
             ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_6.yaml");
-            // AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
-            AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H});
+            AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
+            // AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H});
             state.adata = atomic_data.device;
             state.adata_host = atomic_data.host;
             state.have_h = atomic_data.have_h_model;
@@ -547,8 +573,8 @@ int main(int argc, char** argv) {
             state.atoms_with_gamma_mapping = gamma_atoms.mapping;
             state.atmos = atmos;
             state.phi = VoigtProfile<fp_t>(
-                VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.15), 1024},
-                VoigtProfile<fp_t>::Linspace{FP(0.0), FP(1.5e3), 64 * 1024}
+                VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
+                VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
             );
             state.nh_lte = HPartFn();
             fmt::println("Scale: {} m", state.atmos.voxel_scale);
@@ -579,7 +605,7 @@ int main(int argc, char** argv) {
             const bool actually_conserve_charge = state.have_h && conserve_charge;
             constexpr bool conserve_pressure = true;
             const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
-            constexpr int initial_lambda_iterations = 0;
+            constexpr int initial_lambda_iterations = 3;
 
             constexpr fp_t non_lte_tol = FP(1e-3);
             auto& waves = state.adata_host.wavelength;
@@ -694,7 +720,7 @@ int main(int argc, char** argv) {
                 casc_state.chi,
                 state.adata.wavelength,
                 state.pops,
-                casc_state.i_cascades[casc_state.i_cascades.size() - 1],
+                casc_state.i_cascades[0],
                 state.alo,
                 state.atmos.ne,
                 state.atmos.nh_tot

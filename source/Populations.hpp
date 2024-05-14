@@ -961,6 +961,7 @@ inline void compute_lte_pops(State* state, const Fp3d shared_pops) {
 template <typename T=fp_t>
 inline fp_t stat_eq(State* state) {
     fp_t global_max_change = FP(0.0);
+    const auto& active = state->active.collapse();
     for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state->Gamma[ia].reshape<3>(Dims(
             state->Gamma[ia].extent(0),
@@ -1158,7 +1159,9 @@ inline fp_t stat_eq(State* state) {
             SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
             YAKL_LAMBDA (int64_t k, int i) {
                 fp_t change = FP(0.0);
-                change = std::abs(FP(1.0) - pops(pops_start + i, k) / new_pops(k, i));
+                if (active(k)) {
+                    change = std::abs(FP(1.0) - pops(pops_start + i, k) / new_pops(k, i));
+                }
                 max_rel_change(k, i) = change;
             }
         );
@@ -1168,7 +1171,9 @@ inline fp_t stat_eq(State* state) {
             SimpleBounds<2>(new_pops.extent(1), new_pops.extent(0)),
             YAKL_LAMBDA (int i, int64_t k) {
                 // pops(i, k) = new_pops(k, i) * n_total(k);
-                pops(pops_start + i, k) = new_pops(k, i);
+                if (active(k)) {
+                    pops(pops_start + i, k) = new_pops(k, i);
+                }
             }
         );
         if (false) {

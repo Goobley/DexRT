@@ -38,6 +38,7 @@ struct Raymarch2dArgs {
     int wave;
     int la;
     vec3 offset;
+    yakl::Array<bool, 2, yakl::memDevice> active;
     DynamicState dyn_state;
 };
 
@@ -88,7 +89,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     RayMarchState2d s = *marcher;
 
     // NOTE(cmo): one_m_edt is also the ALO
-    fp_t eta_s, chi_s, one_m_edt;
+    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
     do {
         const auto& sample_coord(s.curr_coord);
         const int u = sample_coord(0);
@@ -100,9 +101,12 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
         if (v < 0 || v >= domain_size(1)) {
             break;
         }
+        if (!args.active(v, u)) {
+            continue;
+        }
 
         eta_s = state.eta(v, u, wave);
-        chi_s = state.chi(v, u, wave) + FP(1e-20);
+        chi_s = state.chi(v, u, wave) + FP(1e-15);
         if constexpr (dynamic) {
             const Atmosphere& atmos = dyn_state.atmos;
             const i64 k = v * atmos.temperature.extent(1) + u;
@@ -159,7 +163,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     } while (next_intersection(&s));
 
     if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
-        result.alo = one_m_edt;
+        result.alo = std::max(one_m_edt, FP(0.0));
     }
 
     return result;

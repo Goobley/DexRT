@@ -26,7 +26,7 @@ struct State {
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
     yakl::Array<bool, 3, yakl::memDevice> dynamic_opac; // [z, x, wave]
-    // yakl::Array<bool, 2, yakl::memDevice> active; // [z, x, wave]  -- whether this cell should be considered
+    yakl::Array<bool, 2, yakl::memDevice> active; // [z, x, wave]  -- whether this cell should be considered
     Fp3d wphi; /// [kr, z, x]
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y]
