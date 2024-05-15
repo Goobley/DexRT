@@ -14,12 +14,19 @@ delta_lambda = 0.082
 outdir = Path("SnowKHIRay")
 outdir.mkdir(parents=True, exist_ok=True)
 
-# atom_name = "Ca II"
-# lambda0 = 854.4437912696352
-# delta_lambda = 0.017
-# delta_lambda = 0.11
+atom_name = "Ca II"
+lambda0 = 854.4437912696352
+delta_lambda = 0.017
+delta_lambda = 0.11
 
-line_name = f"Ca II {lambda0:.2f} nm"
+
+# atom_name = "H I"
+# # lambda0 = 121.56841096386113
+# # delta_lambda = 0.07
+# lambda0 = 656.4691622298104
+# delta_lambda = 0.17
+
+line_name = f"{atom_name} {lambda0:.2f} nm"
 line_name_save = line_name.replace(" ", "_")
 
 def centres_to_edges(x):

@@ -147,6 +147,18 @@ DexOutput load_dex_output(const std::string& path) {
     return result;
 }
 
+void update_atmosphere(const std::string& output_path, Atmosphere* atmos) {
+    yakl::SimpleNetCDF nc;
+    nc.open(output_path, yakl::NETCDF_MODE_READ);
+    if (nc.varExists("ne")) {
+        nc.read(atmos->ne, "ne");
+    }
+    if (nc.varExists("nh_tot")) {
+        nc.read(atmos->nh_tot, "nh_tot");
+    }
+    nc.close();
+}
+
 template <int mem_space=yakl::memDevice>
 RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos, int mu_idx) {
     RaySet<mem_space> result;
@@ -539,8 +551,9 @@ int main(int argc, const char* argv[]) {
     {
         auto config = parse_config(program.get<std::string>("--config"));
         Atmosphere atmos = load_atmos(config.atmos_path);
+        update_atmosphere(config.dex_output_path, &atmos);
         ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
-        ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_6.yaml");
+        ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_4.yaml");
         AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
         DexOutput model_output = load_dex_output(config.dex_output_path);
 

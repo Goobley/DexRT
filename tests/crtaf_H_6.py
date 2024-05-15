@@ -1,7 +1,7 @@
 import crtaf
 from crtaf.from_lightweaver import LightweaverAtomConverter
 from crtaf.core_types import TemperatureInterpolationRateImpl
-from lightweaver.rh_atoms import H_6_atom, CaII_atom
+from lightweaver.rh_atoms import H_6_atom, CaII_atom, H_4_atom
 import numpy as np
 import astropy.units as u
 
@@ -19,6 +19,16 @@ def make_atom():
         if l.lambda0 < 1000.0 * u.nm:
             new_lines.append(l)
     model_simplified.lines = new_lines
+    return model_simplified
+
+def make_H_4():
+    conv = LightweaverAtomConverter()
+    model = conv.convert(H_4_atom())
+    for l in model.lines:
+        l.wavelength_grid.q_core *= 3
+        l.wavelength_grid.q_wing *= 2
+    visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
+    model_simplified = model.simplify_visit(visitor)
     return model_simplified
 
 def make_CaII():
@@ -52,4 +62,8 @@ if __name__ == "__main__":
 
     atom = make_CaII()
     with open("test_CaII.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_H_4()
+    with open("H_4.yaml", "w") as f:
         f.write(atom.yaml_dumps())

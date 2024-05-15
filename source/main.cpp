@@ -561,7 +561,7 @@ int main(int argc, char** argv) {
         if constexpr (USE_ATMOSPHERE) {
             Atmosphere atmos = load_atmos(ATMOS_PATH);
             ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
-            ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_6.yaml");
+            ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_4.yaml");
             AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
             // AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H});
             state.adata = atomic_data.device;
