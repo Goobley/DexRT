@@ -37,7 +37,7 @@ def make_CaII():
     for l in model.lines:
         l.wavelength_grid.q_core *= 3
         l.wavelength_grid.q_wing *= 2
-        l.wavelength_grid.n_lambda //= 2
+        # l.wavelength_grid.n_lambda //= 2
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
 

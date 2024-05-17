@@ -79,7 +79,7 @@ constexpr fp_t const* INCL_WEIGHTS = (NUM_INCL == 4) ?
 #endif
 
 /// Whether to load an atmosphere or use the LIGHT_MODEL to determine eta/chi.
-constexpr const char* ATMOS_PATH = "snow_atmos_10Mm.nc";
+constexpr const char* ATMOS_PATH = "snow_atmos_steeper_10Mm.nc";
 constexpr bool USE_ATMOSPHERE = true;
 constexpr fp_t THRESHOLD_TEMPERATURE = FP(100000.0);
 constexpr int MODEL_X = 1024;
