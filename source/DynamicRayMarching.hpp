@@ -129,6 +129,7 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
 ) {
     JasUnpack(args, eta, chi, ray_start, ray_end, mux, muy, muz, muy_weight, wl_ray_weight, Gamma);
     JasUnpack(args, distance_scale, atom, phi, atmos, n, n_star_scratch, la, nh0, active_set);
+    namespace Const = ConstantsFP;
 
     DynamicRadianceInterval ri{
         .I = FP(0.0),
@@ -161,7 +162,7 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
 
             fp_t start_I = sample_boundary(args.bc, la, pos, mu);
             if constexpr (PWBC_SAMPLE_CONE) {
-                constexpr fp_t cone_half_angle = FP(2.0) * FP(M_PI) / FP(2048.0);
+                constexpr fp_t cone_half_angle = FP(2.0) * Const::pi / FP(2048.0);
                 constexpr fp_t edge_weight = FP(2.5) / FP(9.0);
                 constexpr fp_t centre_weight = FP(4.0)/ FP(9.0);
                 constexpr fp_t gl_sample =  FP(0.7745966692414834);
@@ -189,7 +190,7 @@ YAKL_INLINE DynamicRadianceInterval dynamic_dda_raymarch_2d(
                 start_I
                 * std::abs(mu(0))
                 * FP(0.5)
-                * FP(M_PI)
+                * Const::pi
             );
         }
     }

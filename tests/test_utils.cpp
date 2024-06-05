@@ -6,7 +6,8 @@ using Catch::Matchers::WithinAbs;
 
 TEST_CASE("Interp", "[interp]") {
     constexpr int n = 10;
-    constexpr fp_t two_pi = FP(2.0) * FP(M_PI);
+    namespace Const = ConstantsFP;
+    constexpr fp_t two_pi = FP(2.0) * Const::pi;
     yakl::init();
     {
         yakl::Array<fp_t, 1, yakl::memHost> x("x", n);
@@ -25,7 +26,7 @@ TEST_CASE("Interp", "[interp]") {
         REQUIRE(sample == y(0));
 
         constexpr fp_t samples[n] = {
-            FP(-400.0), FP(0.0), FP(1.12), FP(2.0), FP(5.7), 
+            FP(-400.0), FP(0.0), FP(1.12), FP(2.0), FP(5.7),
             FP(6.0), FP(4.678), two_pi, FP(11.1), FP(1e10)
         };
         auto xd = x.createDeviceCopy();

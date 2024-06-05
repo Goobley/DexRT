@@ -13,7 +13,7 @@ atom_name = "Ca II"
 lambda0 = 393.47771342231175
 delta_lambda = 0.017
 delta_lambda = 0.082
-outdir = Path("SnowKHIRay")
+outdir = Path("Valeriia_a0500")
 outdir.mkdir(parents=True, exist_ok=True)
 
 # atom_name = "Ca II"
@@ -37,21 +37,21 @@ DO_SPECTRAL_CONVOLVE = False
 # NOTE(cmo): Sumer
 # spectral_sigma = 0.0043
 # NOTE(cmo): SPICE ?
-# spectral_sigma = 0.009
+spectral_sigma = 0.009
 # NOTE(cmo): ViSP PSF?
-spectral_sigma = 1.75e-3
+# spectral_sigma = 1.75e-3
 DO_SPECTRAL_DOWNSAMPLE = False
 # NOTE(cmo): Sumer
 # spectral_bin = 0.0043
 # NOTE(cmo): SPICE
-# spectral_bin = 0.009
+spectral_bin = 0.009
 # NOTE(cmo): ViSP
-spectral_bin = 1.75e-3
+# spectral_bin = 1.75e-3
 DO_SPATIAL_BINNING = False
 # NOTE(cmo): Assuming EUI pixel size
-# spatial_bin = 120e3
+spatial_bin = 120e3
 # NOTE(cmo): ViSP - 51 km...
-spatial_bin = np.sin(np.deg2rad(0.07 / 3600)) * const.au.value
+# spatial_bin = np.sin(np.deg2rad(0.07 / 3600)) * const.au.value
 
 def centres_to_edges(x):
     centres = 0.5 * (x[1:] + x[:-1])
@@ -110,7 +110,7 @@ if __name__ == "__main__":
         intensity = I.T
         if DO_SPECTRAL_CONVOLVE:
             waves = wavelength - lambda0
-            kernel = 1.0 / (spectral_sigma * np.sqrt(2.0 * np.pi)) * np.exp(-0.5 * waves**2 / spectral_sigma**2)
+            kernel = 1.0 / (spectral_sigma * np.sqrt(2.0 * np.pi)) * np.exp(-0.5 * waves**2 / spectral_sigma**2) * (waves[1] - waves[0])
             intensity = convolve1d(intensity, kernel, axis=1, mode="constant")
         if DO_SPECTRAL_DOWNSAMPLE:
             wave_interp_start = ((wavelength[start_la] + spectral_bin) // spectral_bin) * spectral_bin

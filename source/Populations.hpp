@@ -869,7 +869,7 @@ void lte_pops(
 ) {
     using namespace ConstantsF64;
     // NOTE(cmo): Rearranged for fp_t stability
-    constexpr FPT debroglie_const = FPT(h / (FP(2.0) * FP(M_PI) * k_B) * (h / m_e));
+    constexpr FPT debroglie_const = FPT(h / (FP(2.0) * pi * k_B) * (h / m_e));
 
     const int n_level = energy.extent(0);
 

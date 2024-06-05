@@ -16,6 +16,7 @@ void compute_cascade_i_2d (
     int la = -1,
     bool compute_alo = false
 ) {
+    namespace Const = ConstantsFP;
     const auto march_state = state->raymarch_state;
     int cascade_lookup_idx = cascade_idx;
     int cascade_lookup_idx_p = cascade_idx + 1;
@@ -128,7 +129,7 @@ void compute_cascade_i_2d (
                 v_uc = 0;
             }
 
-            fp_t angle = FP(2.0) * FP(M_PI) / num_rays * (ray_idx + FP(0.5));
+            fp_t angle = FP(2.0) * Const::pi / num_rays * (ray_idx + FP(0.5));
             vec2 direction;
             direction(0) = yakl::cos(angle);
             direction(1) = yakl::sin(angle);
@@ -145,7 +146,7 @@ void compute_cascade_i_2d (
                 if (cascade_idx != 0) {
                     prev_num_rays = num_rays / (1 << CASCADE_BRANCHING_FACTOR);
                 }
-                fp_t prev_angle = FP(2.0) * FP(M_PI) / prev_num_rays * (prev_idx + FP(0.5));
+                fp_t prev_angle = FP(2.0) * Const::pi / prev_num_rays * (prev_idx + FP(0.5));
                 vec2 prev_direction;
                 prev_direction(0) = yakl::cos(prev_angle);
                 prev_direction(1) = yakl::sin(prev_angle);
@@ -231,6 +232,7 @@ void compute_cascade_i_bilinear_fix_2d (
         return compute_cascade_i_2d(state, cascade_idx);
     }
 
+    namespace Const = ConstantsFP;
     const auto march_state = state->raymarch_state;
     int cascade_lookup_idx = cascade_idx;
     int cascade_lookup_idx_p = cascade_idx + 1;
@@ -344,7 +346,7 @@ void compute_cascade_i_bilinear_fix_2d (
             }
 
 
-            fp_t angle = FP(2.0) * FP(M_PI) / num_rays * (ray_idx + FP(0.5));
+            fp_t angle = FP(2.0) * Const::pi / num_rays * (ray_idx + FP(0.5));
             vec2 direction;
             direction(0) = yakl::cos(angle);
             direction(1) = yakl::sin(angle);
@@ -360,7 +362,7 @@ void compute_cascade_i_bilinear_fix_2d (
                 if (cascade_idx != 0) {
                     prev_num_rays = num_rays / (1 << CASCADE_BRANCHING_FACTOR);
                 }
-                fp_t prev_angle = FP(2.0) * FP(M_PI) / prev_num_rays * (prev_idx + FP(0.5));
+                fp_t prev_angle = FP(2.0) * Const::pi / prev_num_rays * (prev_idx + FP(0.5));
                 vec2 prev_direction;
                 prev_direction(0) = yakl::cos(prev_angle);
                 prev_direction(1) = yakl::sin(prev_angle);
@@ -441,7 +443,7 @@ void compute_cascade_i_bilinear_fix_2d (
                     if (BRANCH_RAYS) {
                         upper_direction = direction;
                     } else {
-                        fp_t upper_angle = FP(2.0) * FP(M_PI) / upper_num_rays * (upper_ray_idx + FP(0.5));
+                        fp_t upper_angle = FP(2.0) * Const::pi / upper_num_rays * (upper_ray_idx + FP(0.5));
                         upper_direction(0) = std::cos(upper_angle);
                         upper_direction(1) = std::sin(upper_angle);
                     }

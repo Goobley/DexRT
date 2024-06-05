@@ -20,6 +20,7 @@ void compute_dynamic_cascade_i_2d (
 ) {
     static_assert(USE_ATMOSPHERE);
     static_assert(NumComponents == 2);
+    namespace Const = ConstantsFP;
 
     const auto march_state = state->raymarch_state;
     int cascade_lookup_idx = cascade_idx;
@@ -143,7 +144,7 @@ void compute_dynamic_cascade_i_2d (
                 v_uc = 0;
             }
 
-            fp_t angle = FP(2.0) * FP(M_PI) / num_rays * (ray_idx + FP(0.5));
+            fp_t angle = FP(2.0) * Const::pi / num_rays * (ray_idx + FP(0.5));
             // NOTE(cmo): The multiplicative term for mux and muz in full 3D
             const fp_t cos_phi = az_rays(r);
             const fp_t sin_phi = std::sqrt(FP(1.0) - square(cos_phi));
@@ -164,7 +165,7 @@ void compute_dynamic_cascade_i_2d (
                 if (cascade_idx != 0) {
                     prev_num_rays = num_rays / (1 << CASCADE_BRANCHING_FACTOR);
                 }
-                fp_t prev_angle = FP(2.0) * FP(M_PI) / prev_num_rays * (prev_idx + FP(0.5));
+                fp_t prev_angle = FP(2.0) * Const::pi / prev_num_rays * (prev_idx + FP(0.5));
                 vec2 prev_direction;
                 prev_direction(0) = yakl::cos(prev_angle);
                 prev_direction(1) = yakl::sin(prev_angle);

@@ -269,7 +269,8 @@ YAKL_INLINE RayProps ray_props(const CascadeRays& dims, int num_cascades, int n,
     RayProps ray;
     ray.centre = probe_pos(probe.coord, n);
 
-    fp_t phi = FP(2.0) * FP(M_PI) / fp_t(dims.num_flat_dirs) * (probe.dir + FP(0.5));
+    namespace Const = ConstantsFP;
+    fp_t phi = FP(2.0) * Const::pi / fp_t(dims.num_flat_dirs) * (probe.dir + FP(0.5));
     ray.dir(0) = std::cos(phi);
     ray.dir(1) = std::sin(phi);
 

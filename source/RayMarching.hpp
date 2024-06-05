@@ -293,6 +293,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
 ) {
     JasUnpack(args, eta, chi, ray_start, ray_end, az_rays, az_weights);
     JasUnpack(args, alo, distance_scale, la, direction, bc);
+    namespace Const = ConstantsFP;
 
     auto domain_dims = eta.get_dimensions();
     ivec2 domain_size;
@@ -320,7 +321,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
 
             fp_t I_sample = sample_boundary(bc, la, pos, mu);
             if constexpr (PWBC_SAMPLE_CONE) {
-                constexpr fp_t cone_half_angle = FP(2.0) * FP(M_PI) / FP(2048.0);
+                constexpr fp_t cone_half_angle = FP(2.0) * Const::pi / FP(2048.0);
                 constexpr fp_t edge_weight = FP(2.5) / FP(9.0);
                 constexpr fp_t centre_weight = FP(4.0)/ FP(9.0);
                 constexpr fp_t gl_sample =  FP(0.7745966692414834);
@@ -345,7 +346,7 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
             }
             // NOTE(cmo): The extra terms are correcting for solid angle so J is correct
             // const fp_t start_I = I_sample * std::abs(mu(0)) * FP(0.5) * FP(M_PI);
-            const fp_t start_I = I_sample * FP(0.5) * FP(M_PI);
+            const fp_t start_I = I_sample * FP(0.5) * Const::pi;
             for (int r = 0; r < NumAz; ++r) {
                 result(0, r) = start_I * std::sqrt(FP(1.0) - square(az_rays(r)));
             }
