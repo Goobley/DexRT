@@ -19,6 +19,7 @@
 #include "PressureConservation.hpp"
 #include "ProfileNormalisation.hpp"
 #include "PromweaverBoundary.hpp"
+#include "DexrtConfig.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else
@@ -373,7 +374,7 @@ YAKL_INLINE void model_F_absorption(const Fp3d& chi, int x, int y) {
     }
 }
 
-void init_state (State* state) {
+void init_state (State* state, const DexrtConfig& config) {
     const Atmosphere& atmos = state->atmos;
     int cascade_0_x_probes, cascade_0_z_probes;
     int space_x, space_y;
@@ -550,8 +551,18 @@ int main(int argc, char** argv) {
 #ifdef HAVE_MPI
     MPI_Init(&argc, &argv);
 #endif
-    yakl::init(yakl::InitConfig().set_pool_initial_mb(8 * 1024).set_pool_grow_mb(7.5 * 1024));
+    std::string config_path("dexrt_config.yaml");
+    const DexrtConfig config = parse_config(config_path);
+
+    yakl::init(
+        yakl::InitConfig()
+            .set_pool_initial_mb(config.mem_pool_initial_gb * 1024)
+            .set_pool_grow_mb(config.mem_pool_grow_gb * 1024)
+    );
+
+#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
     magma_init();
+#endif
     {
         State state;
         magma_queue_create(0, &state.magma_queue);
@@ -581,7 +592,7 @@ int main(int argc, char** argv) {
         }
 
         // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if not using an atmosphere
-        init_state(&state);
+        init_state(&state, config);
         CascadeState casc_state = CascadeState_new(state.c0_size, MAX_CASCADE);
 
         // if constexpr (!USE_ATMOSPHERE) {
@@ -728,7 +739,9 @@ int main(int argc, char** argv) {
         // }
         magma_queue_destroy(state.magma_queue);
     }
+#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
     magma_finalize();
+#endif
     yakl::finalize();
 #ifdef HAVE_MPI
     MPI_Finalize();

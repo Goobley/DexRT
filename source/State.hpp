@@ -6,12 +6,8 @@
 #include "LteHPops.hpp"
 #include "PromweaverBoundary.hpp"
 #include "ZeroBoundary.hpp"
+#include "BoundaryType.hpp"
 #include <magma_v2.h>
-
-enum class BoundaryType {
-    Zero,
-    Promweaver,
-};
 
 struct State {
     CascadeStorage c0_size;
