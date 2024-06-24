@@ -18,6 +18,8 @@ build/*
 !build/cmake_docker.sh
 !build/cmake_docker_nompi.sh
 !build/cmake_docker_nompi_cpu.sh
+!build/cmake_wild-duck_nompi.sh
+!build/setup_wild-duck_env.sh
 
 tests/build/*
 !tests/build/cmake_clean.sh

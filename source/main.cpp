@@ -550,7 +550,7 @@ int main(int argc, char** argv) {
 #ifdef HAVE_MPI
     MPI_Init(&argc, &argv);
 #endif
-    yakl::init(yakl::InitConfig().set_pool_initial_mb(1.55 * 1024).set_pool_grow_mb(1.55 * 1024));
+    yakl::init(yakl::InitConfig().set_pool_initial_mb(8 * 1024).set_pool_grow_mb(7.5 * 1024));
     magma_init();
     {
         State state;

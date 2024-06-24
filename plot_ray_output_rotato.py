@@ -13,7 +13,9 @@ atom_name = "Ca II"
 lambda0 = 393.47771342231175
 delta_lambda = 0.017
 delta_lambda = 0.082
-outdir = Path("Valeriia_a0500")
+# outdir = Path("SnowKHIRay")
+# outdir = Path("Valeriia_a0500")
+outdir = Path("Valeriia_a0994")
 outdir.mkdir(parents=True, exist_ok=True)
 
 # atom_name = "Ca II"
@@ -23,8 +25,8 @@ outdir.mkdir(parents=True, exist_ok=True)
 
 
 # atom_name = "H I"
-# lambda0 = 121.56841096386113
-# delta_lambda = 0.07
+# # lambda0 = 121.56841096386113
+# # delta_lambda = 0.07
 # lambda0 = 102.57334047695103
 # delta_lambda = 0.07
 # lambda0 = 656.4691622298104

@@ -9,6 +9,7 @@ if ("${YAKL_ARCH}" STREQUAL "CUDA")
 endif()
 
 SET(CMAKE_CXX_FLAGS "${CXX_FLAGS}")
+SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 add_subdirectory(YAKL)
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 84)
@@ -54,7 +55,7 @@ target_include_directories(dexrt SYSTEM PUBLIC
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
 )
-target_link_libraries(dexrt "${LDFLAGS}")
+target_link_libraries(dexrt "${LDLIBS}")
 target_link_libraries(dexrt fmt::fmt)
 target_link_libraries(dexrt yaml-cpp::yaml-cpp)
 target_link_libraries(dexrt argparse)
@@ -62,6 +63,7 @@ set_target_properties(dexrt PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS YES
+    LINK_FLAGS "${LDFLAGS}"
 )
 yakl_process_target(dexrt)
 if (DEFINED DEXRT_CUDA_ARCHITECTURES)
@@ -78,7 +80,7 @@ target_include_directories(dexrt_ray SYSTEM PUBLIC
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
 )
-target_link_libraries(dexrt_ray "${LDFLAGS}")
+target_link_libraries(dexrt_ray "${LDLIBS}")
 target_link_libraries(dexrt_ray fmt::fmt)
 target_link_libraries(dexrt_ray yaml-cpp::yaml-cpp)
 target_link_libraries(dexrt_ray argparse)
@@ -86,6 +88,7 @@ set_target_properties(dexrt_ray PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS YES
+    LINK_FLAGS "${LDFLAGS}"
 )
 yakl_process_target(dexrt_ray)
 if (DEFINED DEXRT_CUDA_ARCHITECTURES)
