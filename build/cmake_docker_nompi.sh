@@ -24,5 +24,5 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DMPI_INCLUDE_PATH="${MPI_INCLUDE_PATH}" \
       -DMAGMA_INCLUDE_PATH="${MAGMA_INCLUDE_PATH}" \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \
-      -DLDFLAGS="$(nc-config --libs) -L${MAGMA_LIB_PATH} ${MAGMA_LIB}" \
+      -DLDLIBS="$(nc-config --libs) -L${MAGMA_LIB_PATH} ${MAGMA_LIB}" \
       ..

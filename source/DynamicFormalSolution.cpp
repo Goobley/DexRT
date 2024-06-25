@@ -1,6 +1,6 @@
 #include "DynamicFormalSolution.hpp"
 #include "StaticFormalSolution.hpp"
-#include "RadianceCascades2.hpp"
+#include "RadianceCascades.hpp"
 #include "Populations.hpp"
 #include "EmisOpac.hpp"
 #include "LteHPops.hpp"
@@ -268,7 +268,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = true,
         .preaverage = PREAVERAGE,
-        .sample_bc = USE_BC,
+        .sample_bc = true,
         .compute_alo = false
     });
     constexpr int RcModeNoBc = RC_flags_pack(RcFlags{

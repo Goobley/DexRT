@@ -1,12 +1,12 @@
-#if !defined(DEXRT_RAYMARCHING_HPP)
-#define DEXRT_RAYMARCHING_HPP
+#if !defined(DEXRT_RAY_MARCHING_2_HPP)
+#define DEXRT_RAY_MARCHING_2_HPP
 #include "Types.hpp"
 #include "Utils.hpp"
 #include "JasPP.hpp"
-#include "PromweaverBoundary.hpp"
+#include "State.hpp"
+#include "CascadeState.hpp"
+#include "EmisOpac.hpp"
 #include <optional>
-
-using yakl::intrinsics::minloc;
 
 struct RayMarchState2d {
     /// Start pos
@@ -280,76 +280,80 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(
     return r;
 }
 
-template <int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
-YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> empty_hit() {
-    yakl::SArray<fp_t, 2, NumComponents, NumAz> result;
-    result = FP(0.0);
-    return result;
+template <typename Alo>
+YAKL_INLINE RadianceInterval<Alo> merge_intervals(
+    RadianceInterval<Alo> closer,
+    RadianceInterval<Alo> further
+) {
+    fp_t transmission = std::exp(-closer.tau);
+    closer.I += transmission * further.I;
+    closer.tau += further.tau;
+    return closer;
 }
 
-template <bool SampleBoundary=false, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
-YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
-    const Raymarch2dStaticArgs<NumAz>& args
-) {
-    JasUnpack(args, eta, chi, ray_start, ray_end, az_rays, az_weights);
-    JasUnpack(args, alo, distance_scale, la, direction, bc);
-    namespace Const = ConstantsFP;
+struct Raymarch2dDynamicState {
+    vec3 mu;
+    const yakl::Array<const u16, 1, yakl::memDevice> active_set;
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
+    const Atmosphere& atmos;
+    const AtomicData<fp_t>& adata;
+    const VoigtProfile<fp_t, false>& profile;
+    const Fp2d& nh0;
+    const Fp2d& n; // flattened
+};
 
-    auto domain_dims = eta.get_dimensions();
+template <typename Bc, class DynamicState=DexEmpty>
+struct Raymarch2dArgs {
+    const CascadeStateAndBc<Bc>& casc_state_bc;
+    RayProps ray;
+    fp_t distance_scale = FP(1.0);
+    fp_t incl;
+    fp_t incl_weight;
+    int wave;
+    int la;
+    vec3 offset;
+    yakl::Array<bool, 2, yakl::memDevice> active;
+    DynamicState dyn_state;
+};
+
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>
+>
+YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
+    const Raymarch2dArgs<Bc, DynamicState>& args
+) {
+    JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
+    JasUnpack(casc_state_bc, state, bc);
+    constexpr bool dynamic = RcMode & RC_DYNAMIC;
+    static_assert(!dynamic || (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicState>), "If dynamic must provide dynamic state");
+
+    auto domain_dims = state.eta.get_dimensions();
     ivec2 domain_size;
     // NOTE(cmo): This is swapped as the coord is still x,y,z, but the array is indexed (z,y,x)
     domain_size(0) = domain_dims(1);
     domain_size(1) = domain_dims(0);
     bool start_clipped;
-    auto marcher = RayMarch2d_new(ray_start, ray_end, domain_size, &start_clipped);
-    yakl::SArray<fp_t, 2, NumComponents, NumAz> result(FP(0.0));
-    if (SampleBoundary && USE_BC && (!marcher || start_clipped)) {
-        // NOTE(cmo): Sample BC
-        static_assert(!(USE_BC && USE_MIPMAPS), "BCs not currently supported with mipmaps");
-        static_assert(!(USE_BC && !USE_ATMOSPHERE), "BCs not supported outside of atmosphere mode");
-
+    auto marcher = RayMarch2d_new(ray.start, ray.end, domain_size, &start_clipped);
+    RadianceInterval<Alo> result{};
+    if ((RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped)) {
         // NOTE(cmo): Check the ray is going up along z.
-        if ((direction(1) > FP(0.0)) && la != -1) {
+        if ((ray.dir(1) > FP(0.0)) && la != -1) {
+            const fp_t cos_theta = incl;
+            const fp_t sin_theta = std::sqrt(1.0 - square(cos_theta));
             vec3 mu;
-            mu(0) = -direction(0);
-            mu(1) = FP(0.0);
-            mu(2) = -direction(1);
+            mu(0) = -ray.dir(0) * sin_theta;
+            mu(1) = cos_theta;
+            mu(2) = -ray.dir(1) * sin_theta;
             vec3 pos;
-            pos(0) = args.centre(0) * distance_scale + args.offset(0);
-            pos(1) = args.offset(1);
-            pos(2) = args.centre(1) * distance_scale + args.offset(2);
+            pos(0) = ray.centre(0) * distance_scale + offset(0);
+            pos(1) = offset(1);
+            pos(2) = ray.centre(1) * distance_scale + offset(2);
 
             fp_t I_sample = sample_boundary(bc, la, pos, mu);
-            if constexpr (PWBC_SAMPLE_CONE) {
-                constexpr fp_t cone_half_angle = FP(2.0) * Const::pi / FP(2048.0);
-                constexpr fp_t edge_weight = FP(2.5) / FP(9.0);
-                constexpr fp_t centre_weight = FP(4.0)/ FP(9.0);
-                constexpr fp_t gl_sample =  FP(0.7745966692414834);
-                const fp_t cos_cone = std::cos(cone_half_angle * gl_sample);
-                const fp_t sin_cone = std::sin(cone_half_angle * gl_sample);
-                I_sample *= centre_weight;
-
-                // cos(x+y) = cosx cosy - sinx siny
-                // cos(x-y) = cosx cosy + sinx siny
-                // sin(x+y) = sinx cosy + cosx siny
-                // sin(x-y) = sinx cosy - cosx siny
-                vec3 mu_cone;
-                mu_cone(0) = mu(0) * cos_cone - mu(2) * sin_cone;
-                mu_cone(1) = FP(0.0);
-                mu_cone(2) = mu(2) * cos_cone + mu(0) * sin_cone;
-                I_sample += edge_weight * sample_boundary(bc, la, pos, mu_cone);
-
-                mu_cone(0) = mu(0) * cos_cone + mu(2) * sin_cone;
-                mu_cone(1) = FP(0.0);
-                mu_cone(2) = mu(2) * cos_cone - mu(0) * sin_cone;
-                I_sample += edge_weight * sample_boundary(bc, la, pos, mu_cone);
-            }
-            // NOTE(cmo): The extra terms are correcting for solid angle so J is correct
-            // const fp_t start_I = I_sample * std::abs(mu(0)) * FP(0.5) * FP(M_PI);
-            const fp_t start_I = I_sample * FP(0.5) * Const::pi;
-            for (int r = 0; r < NumAz; ++r) {
-                result(0, r) = start_I * std::sqrt(FP(1.0) - square(az_rays(r)));
-            }
+            result.I = I_sample;
         }
     }
     if (!marcher) {
@@ -358,118 +362,87 @@ YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> dda_raymarch_2d(
 
     RayMarchState2d s = *marcher;
 
-    yakl::SArray<fp_t, 1, NumWavelengths> sample;
-    yakl::SArray<fp_t, 1, NumWavelengths> chi_sample;
-
+    // NOTE(cmo): one_m_edt is also the ALO
+    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
     do {
         const auto& sample_coord(s.curr_coord);
+        const int u = sample_coord(0);
+        const int v = sample_coord(1);
 
-        if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
-            auto hit = s.p0 + s.t * s.direction;
-            if (false) {
-                printf("out x <%d, %d>, (%f, %f), [%f,%f] -> [%f,%f]\n",
-                sample_coord(0), sample_coord(1), hit(0), hit(1),
-                s.p0(0), s.p0(1), s.p1(0), s.p1(1)
-                );
-            }
+        if (u < 0 || u >= domain_size(0)) {
             break;
         }
-        if (sample_coord(1) < 0 || sample_coord(1) >= domain_size(1)) {
-            auto hit = s.p0 + s.t * s.direction;
-            if (false) {
-                printf("out y <%d, %d>, (%f, %g), [%f,%f] -> [%f,%f]\n",
-                sample_coord(0), sample_coord(1), hit(0), hit(1),
-                s.p0(0), s.p0(1), s.p1(0), s.p1(1)
-                );
-            }
+        if (v < 0 || v >= domain_size(1)) {
             break;
         }
-
-        for (int i = 0; i < NumWavelengths; ++i) {
-            sample(i) = eta(sample_coord(1), sample_coord(0), i);
-        }
-        for (int i = 0; i < NumWavelengths; ++i) {
-            chi_sample(i) = chi(sample_coord(1), sample_coord(0), i) + FP(1e-20);
+        if (!args.active(v, u)) {
+            continue;
         }
 
-        const bool final_step = (s.t == s.max_t);
-        const bool accumulate_alo = (final_step && alo.initialized());
-
-        for (int i = 0; i < NumWavelengths; ++i) {
-            fp_t tau = chi_sample(i) * s.dt * distance_scale;
-            fp_t source_fn = sample(i) / chi_sample(i);
-
-            for (int r = 0; r < NumAz; ++r) {
-                const fp_t weight = FP(1.0) / PROBE0_NUM_RAYS;
-                if (az_rays(r) == FP(0.0)) {
-                    result(2*i, r) = source_fn;
-                    if (accumulate_alo) {
-                        // NOTE(cmo): We add the local weight since tau is infinite, i.e. one_m_edt == 1.0
-                        yakl::atomicAdd(alo(sample_coord(1), sample_coord(0), r), weight);
-                    }
-                } else {
-                    fp_t mu = std::sqrt(FP(1.0) - square(az_rays(r)));
-                    fp_t tau_mu = tau / mu;
-                    fp_t edt, one_m_edt;
-                    if (tau_mu < FP(1e-2)) {
-                        edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
-                        one_m_edt = -std::expm1(-tau_mu);
-                    } else {
-                        edt = std::exp(-tau_mu);
-                        one_m_edt = -std::expm1(-tau_mu);
-                    }
-                    result(2*i+1, r) += tau_mu;
-                    result(2*i, r) = result(2*i, r) * edt + source_fn * one_m_edt;
-                    if (accumulate_alo) {
-                        yakl::atomicAdd(alo(sample_coord(1), sample_coord(0), r), weight * one_m_edt);
-                    }
-                }
+        eta_s = state.eta(v, u, wave);
+        chi_s = state.chi(v, u, wave) + FP(1e-15);
+        if constexpr (dynamic) {
+            const Atmosphere& atmos = dyn_state.atmos;
+            const i64 k = v * atmos.temperature.extent(1) + u;
+            if (
+                dyn_state.dynamic_opac(v, u, wave)
+                && dyn_state.active_set.extent(0) > 0
+            ) {
+                const auto& mu = dyn_state.mu;
+                fp_t vel = (
+                    atmos.vx.get_data()[k] * mu(0)
+                    + atmos.vy.get_data()[k] * mu(1)
+                    + atmos.vz.get_data()[k] * mu(2)
+                );
+                AtmosPointParams local_atmos{
+                    .temperature = atmos.temperature.get_data()[k],
+                    .ne = atmos.ne.get_data()[k],
+                    .vturb = atmos.vturb.get_data()[k],
+                    .nhtot = atmos.nh_tot.get_data()[k],
+                    .vel = vel,
+                    .nh0 = dyn_state.nh0.get_data()[k]
+                };
+                EmisOpacState<fp_t> emis_opac_state{
+                    .adata = dyn_state.adata,
+                    .profile = dyn_state.profile,
+                    .la = la,
+                    .n = dyn_state.n,
+                    .k = k,
+                    .atmos = local_atmos,
+                    .active_set = dyn_state.active_set,
+                    .mode = EmisOpacMode::DynamicOnly
+                };
+                auto lines = emis_opac(emis_opac_state);
+                eta_s += lines.eta;
+                chi_s += lines.chi;
             }
         }
+
+        fp_t tau = chi_s * s.dt * distance_scale;
+        fp_t source_fn = eta_s / chi_s;
+
+        // NOTE(cmo): implicit assumption muy != 1.0
+        fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
+        fp_t tau_mu = tau / sin_theta;
+        fp_t edt;
+        if (tau_mu < FP(1e-2)) {
+            edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
+            one_m_edt = -std::expm1(-tau_mu);
+        } else {
+            edt = std::exp(-tau_mu);
+            one_m_edt = -std::expm1(-tau_mu);
+        }
+        result.tau += tau_mu;
+        result.I = result.I * edt + source_fn * one_m_edt;
     } while (next_intersection(&s));
+
+    if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
+        result.alo = std::max(one_m_edt, FP(0.0));
+    }
 
     return result;
 }
 
-template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
-YAKL_INLINE yakl::SArray<fp_t, 2, NumComponents, NumAz> raymarch_2d(
-    const CascadeRTState& state,
-    const Raymarch2dStaticArgs<NumAz>& args
-) {
-    // NOTE(cmo): Swap start/end to facilitate solution to RTE. Could reframe
-    // and go the other way, dropping out of the march early if we have
-    // traversed sufficient optical depth.
-    fp_t factor = args.distance_scale;
-    if constexpr (UseMipmaps) {
-        fp_t mip_factor = (1 << state.mipmap_factor);
-        JasUnpack(args, ray_start, ray_end);
-        ray_start(0) = ray_start(0) / mip_factor;
-        ray_start(1) = ray_start(1) / mip_factor;
-        ray_end(0) = ray_end(0) / mip_factor;
-        ray_end(1) = ray_end(1) / mip_factor;
-        factor *= mip_factor;
-    }
-    const FpConst3d& eta = state.eta;
-    const FpConst3d& chi = state.chi;
-
-    return dda_raymarch_2d<SampleBoundary, NumWavelengths, NumAz, NumComponents>(
-        Raymarch2dStaticArgs<NumAz>{
-            .eta = eta,
-            .chi = chi,
-            .ray_start = args.ray_end,
-            .ray_end = args.ray_start,
-            .centre = args.centre,
-            .az_rays = args.az_rays,
-            .az_weights = args.az_weights,
-            .direction = args.direction,
-            .la = args.la,
-            .bc = args.bc,
-            .alo = args.alo,
-            .distance_scale = factor,
-            .offset = args.offset,
-        }
-    );
-}
 
 #else
 #endif

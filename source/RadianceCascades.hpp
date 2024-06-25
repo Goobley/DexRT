@@ -1,482 +1,289 @@
-#if !defined(DEXRT_RADIANCE_CASCADES_HPP)
-#define DEXRT_RADIANCE_CASCADES_HPP
-#include "Config.hpp"
-#include "Types.hpp"
-#include "State.hpp"
-#include "Utils.hpp"
+#if !defined(DEXRT_RADIANCE_CASCADES_2_HPP)
+#define DEXRT_RADIANCE_CASCADES_2_HPP
+
+#include "RcUtilsModes.hpp"
+#include "BoundaryDispatch.hpp"
 #include "RayMarching.hpp"
-#include "RadianceIntervals.hpp"
 #include "Atmosphere.hpp"
-#include <fmt/core.h>
 
-template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
-void compute_cascade_i_2d (
-    State* state,
-    int cascade_idx,
-    int la = -1,
-    bool compute_alo = false
+template <typename DynamicState>
+struct RaymarchParams {
+    fp_t distance_scale;
+    fp_t incl;
+    fp_t incl_weight;
+    int la;
+    vec3 offset;
+    yakl::Array<bool, 2, yakl::memDevice> active;
+    DynamicState dyn_state;
+};
+
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
+    const CascadeStateAndBc<Bc>& casc_state,
+    const CascadeStorage& dims,
+    const ProbeIndex& this_probe,
+    RayProps ray,
+    const RaymarchParams<DynamicState>& params
 ) {
-    namespace Const = ConstantsFP;
-    const auto march_state = state->raymarch_state;
-    int cascade_lookup_idx = cascade_idx;
-    int cascade_lookup_idx_p = cascade_idx + 1;
-    if constexpr (PINGPONG_BUFFERS) {
-        if (cascade_idx & 1) {
-            cascade_lookup_idx = 1;
-            cascade_lookup_idx_p = 0;
-        } else {
-            cascade_lookup_idx = 0;
-            cascade_lookup_idx_p = 1;
-        }
-    }
-    int x_dim = march_state.emission.extent(0) / (1 << cascade_idx);
-    int z_dim = march_state.emission.extent(1) / (1 << cascade_idx);
-    int ray_dim = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
-    const auto& cascade_i = state->cascades[cascade_lookup_idx].reshape<5>(Dims(
-        x_dim,
-        z_dim,
-        ray_dim,
-        NumComponents,
-        NumAz
-    ));
-    FpConst5d cascade_ip = cascade_i;
-    if (cascade_idx != MAX_LEVEL) {
-        cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>(Dims(
-            x_dim / 2,
-            z_dim / 2,
-            ray_dim * (1 << CASCADE_BRANCHING_FACTOR),
-            NumComponents,
-            NumAz
-        ));
-    }
-    auto dims = cascade_i.get_dimensions();
-    auto upper_dims = cascade_ip.get_dimensions();
-    auto& atmos = state->atmos;
-    const auto offsets = get_offsets(atmos);
-    const auto& pw_bc = state->pw_bc;
-
-    CascadeRTState rt_state;
-    if constexpr (UseMipmaps) {
-        rt_state.eta = state->raymarch_state.emission_mipmaps[cascade_idx];
-        rt_state.chi = state->raymarch_state.absorption_mipmaps[cascade_idx];
-        rt_state.mipmap_factor = state->raymarch_state.cumulative_mipmap_factor(cascade_idx);
-    } else {
-        rt_state.eta = march_state.emission;
-        rt_state.chi = march_state.absorption;
-        rt_state.mipmap_factor = 0;
-    }
-
-    auto az_rays = get_az_rays();
-    auto az_weights = get_az_weights();
-
-    Fp3d alo;
-    if (compute_alo) {
-        alo = state->alo;
-    }
-
-    std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
-    yakl::timer_start(cascade_name.c_str());
-    parallel_for(
-        SimpleBounds<3>(dims(0), dims(1), dims(2)),
-        YAKL_LAMBDA (int v, int u, int ray_idx) {
-            // NOTE(cmo): u, v probe indices
-            // NOTE(cmo): x, y world coords
-            for (int i = 0; i < NumComponents; ++i) {
-                for (int j = 0; j < NumAz; ++j) {
-                    cascade_i(v, u, ray_idx, i, j) = FP(0.0);
-                }
-            }
-
-            int upper_cascade_idx = cascade_idx + 1;
-            fp_t spacing = PROBE0_SPACING * (1 << cascade_idx);
-            fp_t upper_spacing = PROBE0_SPACING * (1 << upper_cascade_idx);
-            int num_rays = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
-            int upper_num_rays = PROBE0_NUM_RAYS * (1 << (upper_cascade_idx * CASCADE_BRANCHING_FACTOR));
-            fp_t radius = PROBE0_LENGTH * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
-            if (LAST_CASCADE_TO_INFTY && cascade_idx == MAX_LEVEL) {
-                radius = LAST_CASCADE_MAX_DIST;
-            }
-            fp_t prev_radius = FP(0.0);
-            if (cascade_idx != 0) {
-                prev_radius = PROBE0_LENGTH * (1 << ((cascade_idx-1) * CASCADE_BRANCHING_FACTOR));
-            }
-
-            fp_t cx = (u + FP(0.5)) * spacing;
-            fp_t cz = (v + FP(0.5)) * spacing;
-            fp_t distance = radius - prev_radius;
-
-            // NOTE(cmo): bc: bottom corner of 2x2 used for bilinear interp on next cascade
-            // uc: upper corner
-            int upper_u_bc = int((u - 1) / 2);
-            int upper_v_bc = int((v - 1) / 2);
-            fp_t u_bc_weight = FP(0.25) + FP(0.5) * (u % 2);
-            fp_t v_bc_weight = FP(0.25) + FP(0.5) * (v % 2);
-            fp_t u_uc_weight = FP(1.0) - u_bc_weight;
-            fp_t v_uc_weight = FP(1.0) - v_bc_weight;
-            int u_bc = yakl::max(upper_u_bc, 0);
-            int v_bc = yakl::max(upper_v_bc, 0);
-            int u_uc = yakl::min(u_bc+1, (int)upper_dims(1)-1);
-            int v_uc = yakl::min(v_bc+1, (int)upper_dims(0)-1);
-            // NOTE(cmo): Edge-most probes should only interpolate the edge-most
-            // probes of the cascade above them, otherwise 3 probes per dimension
-            // (e.g. u = 0, 1, 2) have u_bc = 0, vs 2 for every other u_bc
-            // value. Additionally, this sample in the upper probe "texture"
-            // isn't in the support of u_bc + 1
-            if (u == 0) {
-                u_uc = 0;
-            }
-            if (v == 0) {
-                v_uc = 0;
-            }
-
-            fp_t angle = FP(2.0) * Const::pi / num_rays * (ray_idx + FP(0.5));
-            vec2 direction;
-            direction(0) = yakl::cos(angle);
-            direction(1) = yakl::sin(angle);
-            vec2 start;
-            vec2 end;
-
-            int upper_ray_start_idx = ray_idx * (1 << CASCADE_BRANCHING_FACTOR);
-            int num_rays_per_ray = 1 << CASCADE_BRANCHING_FACTOR;
-            fp_t ray_weight = FP(1.0) / num_rays_per_ray;
-
-            if (BRANCH_RAYS) {
-                int prev_idx = ray_idx / (1 << CASCADE_BRANCHING_FACTOR);
-                int prev_num_rays = 1;
-                if (cascade_idx != 0) {
-                    prev_num_rays = num_rays / (1 << CASCADE_BRANCHING_FACTOR);
-                }
-                fp_t prev_angle = FP(2.0) * Const::pi / prev_num_rays * (prev_idx + FP(0.5));
-                vec2 prev_direction;
-                prev_direction(0) = yakl::cos(prev_angle);
-                prev_direction(1) = yakl::sin(prev_angle);
-                start(0) = cx + prev_radius * prev_direction(0);
-                start(1) = cz + prev_radius * prev_direction(1);
-                end(0) = cx + radius * direction(0);
-                end(1) = cz + radius * direction(1);
-            } else {
-                start(0) = cx + prev_radius * direction(0);
-                start(1) = cz + prev_radius * direction(1);
-                end = start + direction * distance;
-            }
-
-            fp_t length_scale = FP(1.0);
-            if (USE_ATMOSPHERE) {
-                length_scale = atmos.voxel_scale;
-            }
-            vec2 centre;
-            centre(0) = cx;
-            centre(1) = cz;
-            auto sample = raymarch_2d<SampleBoundary, UseMipmaps, NumWavelengths, NumAz, NumComponents>(
-                rt_state,
-                Raymarch2dStaticArgs<NumAz>{
-                    .ray_start = start,
-                    .ray_end = end,
-                    .centre = centre,
-                    .az_rays = az_rays,
-                    .az_weights = az_weights,
-                    .direction = direction * FP(-1.0),
-                    .la = la,
-                    .bc = pw_bc,
-                    .alo = alo,
-                    .distance_scale = length_scale,
-                    .offset = offsets,
-                }
-            );
-            decltype(sample) upper_sample(FP(0.0));
-            // NOTE(cmo): Sample upper cascade.
-            if (cascade_idx != MAX_LEVEL) {
-                for (
-                    int upper_ray_idx = upper_ray_start_idx;
-                    upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
-                    ++upper_ray_idx
-                ) {
-                    for (int i = 0; i < NumComponents; ++i) {
-                        for (int r = 0; r < NumAz; ++r) {
-                            if (az_rays(r) == FP(0.0)) {
-                                // NOTE(cmo): Can't merge the in-out of page ray.
-                                continue;
-                            }
-                            fp_t u_11 = cascade_ip(v_bc, u_bc, upper_ray_idx, i, r);
-                            fp_t u_12 = cascade_ip(v_uc, u_bc, upper_ray_idx, i, r);
-                            fp_t u_21 = cascade_ip(v_bc, u_uc, upper_ray_idx, i, r);
-                            fp_t u_22 = cascade_ip(v_uc, u_uc, upper_ray_idx, i, r);
-                            fp_t term = (
-                                v_bc_weight * (u_bc_weight * u_11 + u_uc_weight * u_21) +
-                                v_uc_weight * (u_bc_weight * u_12 + u_uc_weight * u_22)
-                            );
-                            upper_sample(i, r) += ray_weight * term;
-                        }
-                    }
-                }
-            }
-            auto merged = merge_intervals(sample, upper_sample, az_rays);
-            for (int i = 0; i < NumComponents; ++i) {
-                for (int r = 0; r < NumAz; ++r) {
-                    cascade_i(v, u, ray_idx, i, r) = merged(i, r);
-                }
-            }
+    ray = invert_direction(ray);
+    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
+        Raymarch2dArgs<Bc, DynamicState>{
+            .casc_state_bc = casc_state,
+            .ray = ray,
+            .distance_scale = params.distance_scale,
+            .incl = params.incl,
+            .incl_weight = params.incl_weight,
+            .wave = this_probe.wave,
+            .la = params.la,
+            .offset = params.offset,
+            .active = params.active,
+            .dyn_state = params.dyn_state
         }
     );
-    yakl::timer_stop(cascade_name.c_str());
+    constexpr bool preaverage = RcMode & RC_PREAVERAGE;
+
+    int num_rays_per_ray = 1 << CASCADE_BRANCHING_FACTOR;
+    if constexpr (preaverage) {
+        num_rays_per_ray = 1;
+    }
+
+    const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
+    const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
+
+    RadianceInterval<Alo> interp{};
+    if (casc_state.state.upper_I.initialized()) {
+        BilinearCorner base = bilinear_corner(this_probe.coord);
+        vec4 weights = bilinear_weights(base);
+        JasUnpack(casc_state.state, upper_I, upper_tau);
+        // NOTE(cmo): The cascade_size function works with any cascade and a relative level offset for n.
+        CascadeStorage upper_dims = cascade_size(dims, 1);
+        for (int bilin = 0; bilin < 4; ++bilin) {
+            ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, bilin);
+            for (
+                int upper_ray_idx = upper_ray_start_idx;
+                upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
+                ++upper_ray_idx
+            ) {
+                ProbeIndex upper_probe{
+                    .coord = base.corner + bilin_offset,
+                    .dir = upper_ray_idx,
+                    .incl = this_probe.incl,
+                    .wave = this_probe.wave
+                };
+                interp.I += ray_weight * weights(bilin) * probe_fetch(upper_I, upper_dims, upper_probe);
+                interp.tau += ray_weight * weights(bilin) * probe_fetch(upper_tau, upper_dims, upper_probe);
+            }
+        }
+    }
+    return merge_intervals(ri, interp);
 }
 
-template <bool SampleBoundary=false, bool UseMipmaps=USE_MIPMAPS, int NumWavelengths=NUM_WAVELENGTHS, int NumAz=NUM_INCL, int NumComponents=NUM_COMPONENTS>
-void compute_cascade_i_bilinear_fix_2d (
-    State* state,
-    int cascade_idx,
-    int la = -1,
-    bool compute_alo = false
+template <typename DynamicState>
+YAKL_INLINE
+DynamicState get_dyn_state(
+    int la,
+    const RayProps& ray,
+    const fp_t incl,
+    const Atmosphere& atmos,
+    const AtomicData<fp_t>& adata,
+    const VoigtProfile<fp_t>& profile,
+    const Fp3d& n,
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
 ) {
-    if (cascade_idx == MAX_LEVEL) {
-        return compute_cascade_i_2d(state, cascade_idx);
-    }
+    return DynamicState{};
+}
 
-    namespace Const = ConstantsFP;
-    const auto march_state = state->raymarch_state;
-    int cascade_lookup_idx = cascade_idx;
-    int cascade_lookup_idx_p = cascade_idx + 1;
-    if constexpr (PINGPONG_BUFFERS) {
-        if (cascade_idx & 1) {
-            cascade_lookup_idx = 1;
-            cascade_lookup_idx_p = 0;
-        } else {
-            cascade_lookup_idx = 0;
-            cascade_lookup_idx_p = 1;
-        }
-    }
-    int x_dim = march_state.emission.extent(0) / (1 << cascade_idx);
-    int z_dim = march_state.emission.extent(1) / (1 << cascade_idx);
-    int ray_dim = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
-    const auto& cascade_i = state->cascades[cascade_lookup_idx].reshape<5>(Dims(
-        x_dim,
-        z_dim,
-        ray_dim,
-        NumComponents,
-        NumAz
-    ));
-    FpConst5d cascade_ip = cascade_i;
-    if (cascade_idx != MAX_LEVEL) {
-        cascade_ip = state->cascades[cascade_lookup_idx_p].reshape<5>(Dims(
-            x_dim / 2,
-            z_dim / 2,
-            ray_dim * CASCADE_BRANCHING_FACTOR,
-            NumComponents,
-            NumAz
-        ));
-    }
-    auto dims = cascade_i.get_dimensions();
-    auto upper_dims = cascade_ip.get_dimensions();
+template <>
+YAKL_INLINE
+Raymarch2dDynamicState get_dyn_state(
+    int la,
+    const RayProps& ray,
+    const fp_t incl,
+    const Atmosphere& atmos,
+    const AtomicData<fp_t>& adata,
+    const VoigtProfile<fp_t>& profile,
+    const Fp3d& n,
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+) {
+    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
+    vec3 mu;
+    mu(0) = ray.dir(0) * sin_theta;
+    mu(1) = incl;
+    mu(2) = ray.dir(1) * sin_theta;
+    return Raymarch2dDynamicState{
+        .mu = mu,
+        .active_set = slice_active_set(adata, la),
+        .dynamic_opac = dynamic_opac,
+        .atmos = atmos,
+        .adata = adata,
+        .profile = profile,
+        .nh0 = atmos.nh0,
+        .n = n.reshape<2>(Dims(n.extent(0), n.extent(1) * n.extent(2))),
+    };
+}
 
-    CascadeRTState rt_state;
-    if constexpr (UseMipmaps) {
-        rt_state.eta = state->raymarch_state.emission_mipmaps[cascade_idx];
-        rt_state.chi = state->raymarch_state.absorption_mipmaps[cascade_idx];
-        rt_state.mipmap_factor = state->raymarch_state.cumulative_mipmap_factor(cascade_idx);
-    } else {
-        rt_state.eta = march_state.emission;
-        rt_state.chi = march_state.absorption;
-        rt_state.mipmap_factor = 0;
+template <int RcMode=0>
+void cascade_i_25d(
+    const State& state,
+    const CascadeState& casc_state,
+    int cascade_idx,
+    int la_start = -1,
+    int la_end = -1
+) {
+    JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac, active);
+    const auto& profile = state.phi;
+    constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
+    using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
+    constexpr bool dynamic = RcMode & RC_DYNAMIC;
+    using DynamicState = std::conditional_t<dynamic, Raymarch2dDynamicState, DexEmpty>;
+
+    CascadeIdxs lookup = cascade_indices(casc_state, cascade_idx);
+    Fp1d i_cascade_i = casc_state.i_cascades[lookup.i];
+    Fp1d tau_cascade_i = casc_state.tau_cascades[lookup.i];
+    FpConst1d i_cascade_ip, tau_cascade_ip;
+    if (lookup.ip != -1) {
+        i_cascade_ip = casc_state.i_cascades[lookup.ip];
+        tau_cascade_ip = casc_state.tau_cascades[lookup.ip];
     }
-
-    auto& atmos = state->atmos;
-    const auto offsets = get_offsets(atmos);
-    const auto& pw_bc = state->pw_bc;
-    auto az_rays = get_az_rays();
-    auto az_weights = get_az_weights();
-
-    Fp3d alo;
-    if (compute_alo) {
-        alo = state->alo;
+    DeviceCascadeState dev_casc_state {
+        .num_cascades = casc_state.num_cascades,
+        .n = cascade_idx,
+        .cascade_I = i_cascade_i,
+        .cascade_tau = tau_cascade_i,
+        .upper_I = i_cascade_ip,
+        .upper_tau = tau_cascade_ip,
+        .eta = casc_state.eta,
+        .chi = casc_state.chi,
+    };
+    if constexpr (compute_alo) {
+        dev_casc_state.alo = state.alo;
     }
+    constexpr bool preaverage = RcMode & RC_PREAVERAGE;
 
-    std::string cascade_name = fmt::format("Cascade {}", cascade_idx);
-    yakl::timer_start(cascade_name.c_str());
+    CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
+    CascadeRays ray_set = cascade_compute_size<preaverage>(state.c0_size, cascade_idx);
+    int wave_batch = la_end - la_start;
+
+    DeviceBoundaries boundaries_h{
+        .boundary = state.boundary,
+        .zero_bc = state.zero_bc,
+        .pw_bc = state.pw_bc
+    };
+
+    auto offset = get_offsets(atmos);
+
     parallel_for(
-        SimpleBounds<3>(dims(0), dims(1), dims(2)),
-        YAKL_LAMBDA (int v, int u, int ray_idx) {
-            // NOTE(cmo): u, v probe indices
-            // NOTE(cmo): x, y world coords
-            for (int i = 0; i < NumComponents; ++i) {
-                for (int j = 0; j < NumAz; ++j) {
-                    cascade_i(v, u, ray_idx, i, j) = FP(0.0);
-                }
-            }
+        "RC Loop",
+        SimpleBounds<5>(
+            dims.num_probes(1),
+            dims.num_probes(0),
+            dims.num_flat_dirs,
+            wave_batch,
+            dims.num_incl
+        ),
+        YAKL_LAMBDA (int v, int u, int phi_idx, int wave, int theta_idx) {
+            constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
+            ivec2 probe_coord;
+            probe_coord(0) = u;
+            probe_coord(1) = v;
+            int la = la_start + wave;
 
-            int upper_cascade_idx = cascade_idx + 1;
-            fp_t spacing = PROBE0_SPACING * (1 << cascade_idx);
-            fp_t upper_spacing = PROBE0_SPACING * (1 << upper_cascade_idx);
-            int num_rays = PROBE0_NUM_RAYS * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
-            int upper_num_rays = PROBE0_NUM_RAYS * (1 << (upper_cascade_idx * CASCADE_BRANCHING_FACTOR));
-            fp_t radius = PROBE0_LENGTH * (1 << (cascade_idx * CASCADE_BRANCHING_FACTOR));
-            if (LAST_CASCADE_TO_INFTY && cascade_idx == MAX_LEVEL) {
-                radius = LAST_CASCADE_MAX_DIST;
-            }
-            fp_t prev_radius = FP(0.0);
-            if (cascade_idx != 0) {
-                prev_radius = PROBE0_LENGTH * (1 << ((cascade_idx-1) * CASCADE_BRANCHING_FACTOR));
-            }
-
-            fp_t cx = (u + FP(0.5)) * spacing;
-            fp_t cz = (v + FP(0.5)) * spacing;
-            fp_t distance = radius - prev_radius;
-
-            // NOTE(cmo): bc: bottom corner of 2x2 used for bilinear interp on next cascade
-            // uc: upper corner
-            int upper_u_bc = int((u - 1) / 2);
-            int upper_v_bc = int((v - 1) / 2);
-            fp_t u_bc_weight = FP(0.25) + FP(0.5) * (u % 2);
-            fp_t v_bc_weight = FP(0.25) + FP(0.5) * (v % 2);
-            fp_t u_uc_weight = FP(1.0) - u_bc_weight;
-            fp_t v_uc_weight = FP(1.0) - v_bc_weight;
-            int u_bc = yakl::max(upper_u_bc, 0);
-            int v_bc = yakl::max(upper_v_bc, 0);
-            int u_uc = yakl::min(u_bc+1, (int)upper_dims(1)-1);
-            int v_uc = yakl::min(v_bc+1, (int)upper_dims(0)-1);
-            // NOTE(cmo): Edge-most probes should only interpolate the edge-most
-            // probes of the cascade above them, otherwise 3 probes per dimension
-            // (e.g. u = 0, 1, 2) have u_bc = 0, vs 2 for every other u_bc
-            // value. Additionally, this sample in the upper probe "texture"
-            // isn't in the support of u_bc + 1
-            if (u == 0) {
-                u_uc = 0;
-            }
-            if (v == 0) {
-                v_uc = 0;
-            }
-
-
-            fp_t angle = FP(2.0) * Const::pi / num_rays * (ray_idx + FP(0.5));
-            vec2 direction;
-            direction(0) = yakl::cos(angle);
-            direction(1) = yakl::sin(angle);
-            vec2 start;
-
-            int upper_ray_start_idx = ray_idx * (1 << CASCADE_BRANCHING_FACTOR);
-            int num_rays_per_ray = 1 << CASCADE_BRANCHING_FACTOR;
-            fp_t ray_weight = FP(1.0) / num_rays_per_ray;
-
-            if (BRANCH_RAYS) {
-                int prev_idx = ray_idx / (1 << CASCADE_BRANCHING_FACTOR);
-                int prev_num_rays = 1;
-                if (cascade_idx != 0) {
-                    prev_num_rays = num_rays / (1 << CASCADE_BRANCHING_FACTOR);
-                }
-                fp_t prev_angle = FP(2.0) * Const::pi / prev_num_rays * (prev_idx + FP(0.5));
-                vec2 prev_direction;
-                prev_direction(0) = yakl::cos(prev_angle);
-                prev_direction(1) = yakl::sin(prev_angle);
-                start(0) = cx + prev_radius * prev_direction(0);
-                start(1) = cz + prev_radius * prev_direction(1);
-            } else {
-                start(0) = cx + prev_radius * direction(0);
-                start(1) = cz + prev_radius * direction(1);
-            }
-            // NOTE(cmo): Centre of upper cascade probes
-            vec2 c11, c21, c12, c22;
-            c11(0) = (u_bc + FP(0.5)) * upper_spacing;
-            c11(1) = (v_bc + FP(0.5)) * upper_spacing;
-
-            c21(0) = (u_uc + FP(0.5)) * upper_spacing;
-            c21(1) = (v_bc + FP(0.5)) * upper_spacing;
-
-            c12(0) = (u_bc + FP(0.5)) * upper_spacing;
-            c12(1) = (v_uc + FP(0.5)) * upper_spacing;
-
-            c22(0) = (u_uc + FP(0.5)) * upper_spacing;
-            c22(1) = (v_uc + FP(0.5)) * upper_spacing;
-            // NOTE(cmo): Start of interval in upper cascade (end of this ray)
-            vec2 u11_start, u21_start, u12_start, u22_start;
-            yakl::SArray<fp_t, 2, NumComponents, NumAz> u11_contrib, u21_contrib, u12_contrib, u22_contrib, upper_sample;
-
-            vec2 centre;
-            centre(0) = cx;
-            centre(1) = cz;
-
-            fp_t length_scale = FP(1.0);
-            if (USE_ATMOSPHERE) {
-                length_scale = atmos.voxel_scale;
-            }
-            auto trace_and_merge_with_upper = [&](
-                vec2 start,
-                vec2 end,
-                int u,
-                int v,
-                int upper_ray_idx,
-                decltype(upper_sample)& storage
-            ) {
-                storage = raymarch_2d<SampleBoundary, UseMipmaps, NumWavelengths, NumAz, NumComponents>(
-                    rt_state,
-                    Raymarch2dStaticArgs<NumAz>{
-                        .ray_start = start,
-                        .ray_end = end,
-                        .centre = centre,
-                        .az_rays = az_rays,
-                        .az_weights = az_weights,
-                        .direction = direction * FP(-1.0),
-                        .la = la,
-                        .bc = pw_bc,
-                        .alo = alo,
-                        .distance_scale = length_scale,
-                        .offset = offsets,
-                    }
+            RadianceInterval<AloType> average_ri{};
+            const int num_rays_per_texel = ray_set.num_flat_dirs / dims.num_flat_dirs;
+            const fp_t sample_weight = FP(1.0) / fp_t(num_rays_per_texel);
+            for (int i = 0; i < num_rays_per_texel; ++i) {
+                ProbeIndex probe_idx{
+                    .coord=probe_coord,
+                    // NOTE(cmo): Handles pre-averaging case
+                    .dir=phi_idx * num_rays_per_texel + i,
+                    .incl=theta_idx,
+                    .wave=wave
+                };
+                RayProps ray = ray_props(ray_set, dev_casc_state.num_cascades, cascade_idx, probe_idx);
+                DynamicState dyn_state = get_dyn_state<DynamicState>(
+                    la,
+                    ray,
+                    incl_quad.muy(theta_idx),
+                    atmos,
+                    adata,
+                    profile,
+                    pops,
+                    dynamic_opac
                 );
-                for (int i = 0; i < NumComponents; ++i) {
-                    for (int r = 0; r < NumAz; ++r) {
-                        upper_sample(i, r) = cascade_ip(v, u, upper_ray_idx, i, r);
-                    }
-                }
-                storage = merge_intervals(storage, upper_sample, az_rays);
-                return storage;
-            };
+                RaymarchParams<DynamicState> params {
+                    .distance_scale = atmos.voxel_scale,
+                    .incl = incl_quad.muy(theta_idx),
+                    .incl_weight = incl_quad.wmuy(theta_idx),
+                    .la = la,
+                    .offset = offset,
+                    .active = active,
+                    .dyn_state = dyn_state
+                };
 
-            decltype(upper_sample) merged(FP(0.0));
-            // NOTE(cmo): Sample upper cascade.
-            if (cascade_idx != MAX_LEVEL) {
-                for (
-                    int upper_ray_idx = upper_ray_start_idx;
-                    upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
-                    ++upper_ray_idx
-                ) {
-
-                    vec2 upper_direction;
-                    if (BRANCH_RAYS) {
-                        upper_direction = direction;
-                    } else {
-                        fp_t upper_angle = FP(2.0) * Const::pi / upper_num_rays * (upper_ray_idx + FP(0.5));
-                        upper_direction(0) = std::cos(upper_angle);
-                        upper_direction(1) = std::sin(upper_angle);
-                    }
-                    u11_start = c11 + radius * upper_direction;
-                    u21_start = c21 + radius * upper_direction;
-                    u12_start = c12 + radius * upper_direction;
-                    u22_start = c22 + radius * upper_direction;
-
-
-                    u11_contrib = trace_and_merge_with_upper(start, u11_start, u_bc, v_bc, upper_ray_idx, u11_contrib);
-                    u21_contrib = trace_and_merge_with_upper(start, u21_start, u_uc, v_bc, upper_ray_idx, u21_contrib);
-                    u12_contrib = trace_and_merge_with_upper(start, u12_start, u_bc, v_uc, upper_ray_idx, u12_contrib);
-                    u22_contrib = trace_and_merge_with_upper(start, u22_start, u_uc, v_uc, upper_ray_idx, u22_contrib);
-
-                    for (int i = 0; i < NumComponents; ++i) {
-                        for (int r = 0; r < NumAz; ++r) {
-                            fp_t term = (
-                                v_bc_weight * (u_bc_weight * u11_contrib(i, r) + u_uc_weight * u21_contrib(i, r)) +
-                                v_uc_weight * (u_bc_weight * u12_contrib(i, r) + u_uc_weight * u22_contrib(i, r))
+                RadianceInterval<AloType> ri;
+                auto& casc_dims = dims;
+                const auto boundaries = boundaries_h;
+                if constexpr (RcMode && RC_SAMPLE_BC) {
+                    switch (boundaries.boundary) {
+                        case BoundaryType::Zero: {
+                            auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
+                            ri = march_and_merge_average_interval<RcMode>(
+                                casc_and_bc,
+                                casc_dims,
+                                probe_idx,
+                                ray,
+                                params
                             );
-                            merged(i, r) += ray_weight * term;
+                        } break;
+                        case BoundaryType::Promweaver: {
+                            auto casc_and_bc = get_bc<PwBc<>>(dev_casc_state, boundaries);
+                            ri = march_and_merge_average_interval<RcMode>(
+                                casc_and_bc,
+                                casc_dims,
+                                probe_idx,
+                                ray,
+                                params
+                            );
+                        } break;
+                        default: {
+                            assert(false && "Unknown BC type");
                         }
                     }
+                } else {
+                    auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
+                    ri = march_and_merge_average_interval<RcMode>(
+                        casc_and_bc,
+                        casc_dims,
+                        probe_idx,
+                        ray,
+                        params
+                    );
+                }
+                average_ri.I += sample_weight * ri.I;
+                average_ri.tau += sample_weight * ri.tau;
+                if constexpr (dev_compute_alo) {
+                    average_ri.alo += sample_weight * ri.alo;
                 }
             }
-            for (int i = 0; i < NumComponents; ++i) {
-                for (int r = 0; r < NumAz; ++r) {
-                    cascade_i(u, v, ray_idx, i, r) = merged(i, r);
-                }
+
+            ProbeIndex probe_storage_idx{
+                .coord=probe_coord,
+                .dir=phi_idx,
+                .incl=theta_idx,
+                .wave=wave
+            };
+            i64 lin_idx = probe_linear_index(dims, probe_storage_idx);
+            dev_casc_state.cascade_I(lin_idx) = average_ri.I;
+            dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
+            if constexpr (dev_compute_alo) {
+                dev_casc_state.alo(v, u, phi_idx, wave, theta_idx) = average_ri.alo;
             }
         }
     );
-    yakl::timer_stop(cascade_name.c_str());
 }
 
 #else

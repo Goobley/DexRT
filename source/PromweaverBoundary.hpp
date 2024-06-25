@@ -2,6 +2,7 @@
 #define DEXRT_PROMWEAVER_BOUNDARY
 
 #include "Types.hpp"
+#include "BoundaryType.hpp"
 #include "Utils.hpp"
 #include "YAKL_netcdf.h"
 
@@ -12,7 +13,7 @@ struct PwBc {
     fp_t mu_step;
     yakl::Array<fp_t, 2, mem_space> I; // [wl, mu]
 };
-PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength);
+PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryType type);
 
 /** Computes the outgoing mu (relative to the surface normal at the location of
  * the ray hit). Assumes the Sun is a sphere with radius 695,700 km. Looks both

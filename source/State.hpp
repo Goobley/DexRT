@@ -7,10 +7,15 @@
 #include "PromweaverBoundary.hpp"
 #include "ZeroBoundary.hpp"
 #include "BoundaryType.hpp"
-#include <magma_v2.h>
+
+#ifdef DEXRT_USE_MAGMA
+    #include <magma_v2.h>
+#endif
 
 struct State {
+    DexrtMode mode;
     CascadeStorage c0_size;
+    GivenEmisOpac given_state;
     Atmosphere atmos;
     InclQuadrature incl_quad;
     AtomicData<fp_t, yakl::memDevice> adata;
@@ -21,8 +26,8 @@ struct State {
     AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
-    yakl::Array<bool, 3, yakl::memDevice> dynamic_opac; // [z, x, wave]
-    yakl::Array<bool, 2, yakl::memDevice> active; // [z, x, wave]  -- whether this cell should be considered
+    yakl::Array<bool, 3, yakl::memDevice> dynamic_opac; // [z, x, wave] -- whether this cell needs its lines to be computed separately
+    yakl::Array<bool, 2, yakl::memDevice> active; // [z, x]  -- whether this cell should be considered
     Fp3d wphi; /// [kr, z, x]
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y]
@@ -31,7 +36,9 @@ struct State {
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;
+#ifdef DEXRT_USE_MAGMA
     magma_queue_t magma_queue;
+#endif
 };
 
 #else

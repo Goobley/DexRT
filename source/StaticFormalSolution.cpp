@@ -1,5 +1,5 @@
 #include "StaticFormalSolution.hpp"
-#include "RadianceCascades2.hpp"
+#include "RadianceCascades.hpp"
 #include "Populations.hpp"
 #include "EmisOpac.hpp"
 #include "LteHPops.hpp"
@@ -173,6 +173,7 @@ void static_compute_gamma(
 }
 
 void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
+    assert(state.mode == DexrtMode::Lte || state.mode == DexrtMode::NonLte);
     auto& atmos = state.atmos;
     auto& phi = state.phi;
     auto& pops = state.pops;
@@ -233,13 +234,15 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bo
             flat_chi(k, wave) = result.chi;
         }
     );
-    state.alo = FP(0.0);
+    if (state.alo.initialized()) {
+        state.alo = FP(0.0);
+    }
     yakl::fence();
     // NOTE(cmo): Compute RC FS
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
-        .sample_bc = USE_BC,
+        .sample_bc = true,
         .compute_alo = false
     });
     constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
@@ -294,6 +297,64 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bo
                 lte_scratch
             );
         }
+    }
+    // NOTE(cmo): J is not computed in this function, but done in main for now
+}
+
+void static_formal_sol_given_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
+    assert(state.mode == DexrtMode::GivenFs);
+
+    if (la_end == -1) {
+        la_end = la_start + 1;
+    }
+    if ((la_end - la_start) > WAVE_BATCH) {
+        assert(false && "Wavelength batch too big.");
+    }
+    int wave_batch = la_end - la_start;
+
+    auto& eta = casc_state.eta;
+    auto& chi = casc_state.chi;
+    auto& eta_store = state.given_state.emis;
+    auto& chi_store = state.given_state.opac;
+    parallel_for(
+        "Copy eta, chi",
+        SimpleBounds<3>(eta.extent(0), eta.extent(1), wave_batch),
+        YAKL_LAMBDA (int z, int x, int wave) {
+            eta(z, x, wave) = eta_store(z, x, la_start + wave);
+            chi(z, x, wave) = chi_store(z, x, la_start + wave);
+        }
+    );
+    yakl::fence();
+    // NOTE(cmo): Compute RC FS
+    constexpr int RcModeBc = RC_flags_pack(RcFlags{
+        .dynamic = false,
+        .preaverage = PREAVERAGE,
+        .sample_bc = true,
+        .compute_alo = false
+    });
+    constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
+        .dynamic = false,
+        .preaverage = PREAVERAGE,
+        .sample_bc = false,
+        .compute_alo = false
+    });
+    cascade_i_25d<RcModeBc>(
+        state,
+        casc_state,
+        casc_state.num_cascades,
+        la_start,
+        la_end
+    );
+    yakl::fence();
+    for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 0; --casc_idx) {
+        cascade_i_25d<RcModeNoBc>(
+            state,
+            casc_state,
+            casc_idx,
+            la_start,
+            la_end
+        );
+        yakl::fence();
     }
     // NOTE(cmo): J is not computed in this function, but done in main for now
 }

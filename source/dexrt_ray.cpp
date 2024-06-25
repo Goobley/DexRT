@@ -12,12 +12,14 @@
 #include "PromweaverBoundary.hpp"
 #include "EmisOpac.hpp"
 #include "RayMarching.hpp"
+#include "DexrtConfig.hpp"
 #include "JasPP.hpp"
 
 struct RayConfig {
     std::string atmos_path;
     std::string atom_path;
-    std::string dex_output_path;
+    std::string dexrt_config_path;
+    std::string dexrt_output_path;
     std::string ray_output_path;
     std::vector<fp_t> muz;
     std::vector<fp_t> mux;
@@ -68,11 +70,12 @@ struct LineSeg {
     vec2 end;
 };
 
-RayConfig parse_config(const std::string& path) {
+RayConfig parse_ray_config(const std::string& path) {
     RayConfig config;
     config.atmos_path = "atmos.nc";
     config.atom_path = "../tests/test_CaII.yaml";
-    config.dex_output_path = "output.nc";
+    config.dexrt_config_path = "dexrt.yaml";
+    config.dexrt_output_path = "output.nc";
     config.ray_output_path = "ray_output.nc";
 
     YAML::Node file = YAML::LoadFile(path);
@@ -82,8 +85,11 @@ RayConfig parse_config(const std::string& path) {
     if (file["atom_path"]) {
         config.atom_path = file["atom_path"].as<std::string>();
     }
-    if (file["dex_output_path"]) {
-        config.dex_output_path = file["dex_output_path"].as<std::string>();
+    if (file["dexrt_config_path"]) {
+        config.dexrt_config_path = file["dexrt_config_path"].as<std::string>();
+    }
+    if (file["dexrt_output_path"]) {
+        config.dexrt_output_path = file["dexrt_output_path"].as<std::string>();
     }
     if (file["ray_output_path"]) {
         config.ray_output_path = file["ray_output_path"].as<std::string>();
@@ -127,7 +133,7 @@ RayConfig parse_config(const std::string& path) {
     if (config.wavelength.size() == 0) {
         yakl::Array<f32, 1, yakl::memHost> wavelengths;
         yakl::SimpleNetCDF nc;
-        nc.open(config.dex_output_path, yakl::NETCDF_MODE_READ);
+        nc.open(config.dexrt_output_path, yakl::NETCDF_MODE_READ);
         nc.read(wavelengths, "wavelength");
         config.wavelength.reserve(wavelengths.extent(0));
         for (int i = 0; i < wavelengths.extent(0); ++i) {
@@ -549,13 +555,21 @@ int main(int argc, const char* argv[]) {
 
     yakl::init();
     {
-        auto config = parse_config(program.get<std::string>("--config"));
+        RayConfig config = parse_ray_config(program.get<std::string>("--config"));
+        DexrtConfig dexrt_config = parse_dexrt_config(config.dexrt_config_path);
+        if (dexrt_config.mode == DexrtMode::GivenFs) {
+            throw std::runtime_error(fmt::format("Models run in GivenFs mode not supported by {}", argv[0]));
+        }
+        if (dexrt_config.boundary != BoundaryType::Promweaver) {
+            throw std::runtime_error(fmt::format("Only promweaver boundaries are supported by {}", argv[0]));
+        }
         Atmosphere atmos = load_atmos(config.atmos_path);
-        update_atmosphere(config.dex_output_path, &atmos);
+        update_atmosphere(config.dexrt_output_path, &atmos);
+        // TODO(cmo): Load from the dexrt_config
         ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
         ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_4.yaml");
         AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
-        DexOutput model_output = load_dex_output(config.dex_output_path);
+        DexOutput model_output = load_dex_output(config.dexrt_output_path);
 
         DexRayState state{
             .atmos = atmos,
@@ -584,7 +598,8 @@ int main(int argc, const char* argv[]) {
 
         for (int mu = 0; mu < config.muz.size(); ++mu) {
             state.ray_set = compute_ray_set<yakl::memDevice>(config, atmos, mu);
-            PwBc<> pw_bc = load_bc(config.atmos_path, state.ray_set.wavelength);
+            // TODO(cmo): Hoist this if possible
+            PwBc<> pw_bc = load_bc(config.atmos_path, state.ray_set.wavelength, dexrt_config.boundary);
             if (
                 !state.ray_I.initialized()
                 || (state.ray_I.extent(0) != state.ray_set.wavelength.extent(0))

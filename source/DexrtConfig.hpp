@@ -7,16 +7,10 @@
 #include "BoundaryType.hpp"
 #include <yaml-cpp/yaml.h>
 
-enum class DexrtMode {
-    Lte,
-    NonLte,
-    GivenFs,
-};
-
 struct DexrtConfig {
+    DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_initial_gb = FP(2.0);
     fp_t mem_pool_grow_gb = FP(1.0);
-    DexrtMode mode = DexrtMode::NonLte;
     std::string atmos_path;
     std::string output_path;
     std::vector<std::string> atom_paths;
@@ -29,6 +23,7 @@ struct DexrtConfig {
     bool conserve_charge = false;
     bool conserve_pressure = false;
     int snapshot_frequency = 0;
+    int initial_lambda_iterations = 2;
 };
 
 void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
@@ -112,9 +107,12 @@ void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     if (file["snapshot_frequency"]) {
         config.snapshot_frequency = file["snapshot_frequency"].as<int>();
     }
+    if (file["initial_lambda_iterations"]) {
+        config.initial_lambda_iterations = file["initial_lambda_iterations"].as<int>();
+    }
 }
 
-DexrtConfig parse_config(const std::string& path) {
+DexrtConfig parse_dexrt_config(const std::string& path) {
     DexrtConfig config;
     config.atmos_path = "dexrt_atmos.nc";
     config.output_path = "dexrt.nc";

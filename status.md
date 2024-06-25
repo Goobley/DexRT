@@ -37,6 +37,12 @@ Features/ToDo
 - [x] Charge conservation
     - [ ] Finite difference charge conservation blows up if we're off the end of the grid -- makes sense; dC will also explode
 - [x] Pressure conservation
+- [ ] Config file/input flags
+- [ ] Pydantic objects for input files
+- [x] Active atmosphere cells (temperature criterion)
+- [ ] Active probes (from C0 active cells)
+- [ ] Restart from snapshot
+- [ ] Embed git hash in build (https://jonathanhamberg.com/post/cmake-embedding-git-hash/)
 - [ ] PRD
 - [ ] Sparse VDB-like grid
 
@@ -54,6 +60,7 @@ Ideas
 - [x] Bring back wavelength batches -- consider a warp (32 threads) of inclination rays (e.g. 4) with e.g. 8 wavelengths. The raymarching will be entirely coherent for these. Emissivity/Opacity gather will be almost perfectly coherent too. In 3D, if we have memory do full warps of wavelengths to get this coherence back.
 - [x] Refactor to only have one raymarch/RC impl
 - [ ] Handle case of solving one direction of c0 at a time (with all necessary components of upper cascades) - same memory as preaveraging, but useful for e.g. dynamic models in 3D
+- [ ] Is it possible to create a basis of emissivity and opacity that can be interpolated as a function of mux/muy/muz to allow emissivity/opacity to be computed for fewer directions, mipmapped, and then linearly combined in-situ? Needs tests
 
 
 Notes

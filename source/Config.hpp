@@ -30,20 +30,19 @@ constexpr int MAX_CASCADE = 4;
 constexpr bool LAST_CASCADE_TO_INFTY = true;
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
 
-constexpr bool BRANCH_RAYS = false;
-constexpr bool BILINEAR_FIX = false;
 constexpr bool PREAVERAGE = false;
 
-constexpr bool USE_MIPMAPS = false;
-constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
+// constexpr bool BRANCH_RAYS = false;
+// constexpr bool BILINEAR_FIX = false;
+// constexpr bool USE_MIPMAPS = false;
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
 
 constexpr bool PINGPONG_BUFFERS = false;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
-constexpr bool USE_BC = true;
+// constexpr bool USE_BC = true;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
-constexpr bool PWBC_SAMPLE_CONE = false;
 
 // #define FLATLAND
 #ifdef FLATLAND
@@ -78,19 +77,9 @@ constexpr fp_t const* INCL_WEIGHTS = (NUM_INCL == 4) ?
 
 #endif
 
-/// Whether to load an atmosphere or use the LIGHT_MODEL to determine eta/chi.
-// constexpr const char* ATMOS_PATH = "snow_atmos_steeper_10Mm.nc";
-constexpr const char* ATMOS_PATH = "valeriia_a0994_fullres.nc";
-constexpr bool USE_ATMOSPHERE = true;
-constexpr fp_t THRESHOLD_TEMPERATURE = FP(250.0e3);
 constexpr int MODEL_X = 1024;
 constexpr int MODEL_Y = 1024;
-#define LIGHT_MODEL model_F_emission
-#define ABSORPTION_MODEL model_F_absorption
 
-/// Number of wavelengths in an RGB batch
-constexpr int NUM_WAVELENGTHS = USE_ATMOSPHERE ? 1 : 3;
-constexpr int NUM_COMPONENTS = 2 * NUM_WAVELENGTHS;
 constexpr int NUM_DIM = 2;
 
 constexpr int WAVE_BATCH = DEXRT_WARP_SIZE / NUM_INCL;
@@ -113,6 +102,10 @@ yakl::SArray<fp_t, 1, NumIncl> get_incl_weights() {
     return incl_weights;
 }
 
+
+#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
+#define DEXRT_USE_MAGMA
+#endif
 
 #else
 #endif

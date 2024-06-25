@@ -40,6 +40,12 @@ using yakl::c::parallel_for;
 using yakl::c::SimpleBounds;
 using yakl::Dims;
 
+enum class DexrtMode {
+    Lte,
+    NonLte,
+    GivenFs,
+};
+
 // NOTE(cmo): The texel setup for a cascade
 struct CascadeStorage {
     ivec2 num_probes;
@@ -138,18 +144,12 @@ struct FlatAtmosphere {
     yakl::Array<T, 1, yakl::memDevice> vz;
 };
 
-struct MipmapState {
-    Fp3d emission;
-    Fp3d absorption;
-    std::vector<Fp3d> emission_mipmaps;
-    std::vector<Fp3d> absorption_mipmaps;
-    yakl::SArray<int, 1, MAX_CASCADE+1> cumulative_mipmap_factor;
-};
-
-struct CascadeRTState {
-    int mipmap_factor;
-    FpConst3d eta;
-    FpConst3d chi;
+/// Storage for emissivity/opacity when we load a model from file. Planes from
+/// this get copied into the normal buffer before solution via RC.
+struct GivenEmisOpac {
+    fp_t voxel_scale;
+    Fp3d emis;
+    Fp3d opac;
 };
 
 template <typename T=fp_t>

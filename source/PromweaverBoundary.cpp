@@ -2,12 +2,12 @@
 #include "State.hpp"
 
 
-PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength) {
+PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryType type) {
     yakl::SimpleNetCDF nc;
     nc.open(path, yakl::NETCDF_MODE_READ);
 
     if (!nc.varExists("prom_bc_I")) {
-        if (USE_BC) {
+        if (type == BoundaryType::Promweaver) {
             throw std::runtime_error("No BC data present.");
         }
         return PwBc<>{};

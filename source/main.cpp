@@ -8,7 +8,7 @@
 #include "Utils.hpp"
 #include "Atmosphere.hpp"
 #include "Populations.hpp"
-#include "RadianceCascades2.hpp"
+#include "RadianceCascades.hpp"
 #include "CrtafParser.hpp"
 #include "Collisions.hpp"
 #include "Voigt.hpp"
@@ -29,417 +29,89 @@
 #include <string>
 #include <optional>
 #include <fmt/core.h>
+#include <argparse/argparse.hpp>
 
-YAKL_INLINE void model_original(Fp3d emission, int x, int y) {
-    constexpr fp_t intensity_scale = FP(3.0);
-    if (x >= 25 && x < 35) {
-        if (y >= 235 && y < 275) {
-            emission(x, y, 0) = intensity_scale;
-        }
+CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
+    if (config.mode != DexrtMode::Lte || config.mode != DexrtMode::NonLte) {
+        return CascadeRays{};
     }
 
-    if (x >= 295 && x < 311) {
-        if (y >= 145 && y < 365) {
-            emission(x, y, 0) = FP(1e-6);
-            emission(x, y, 1) = FP(1e-6);
-            emission(x, y, 2) = FP(1e-6);
-        }
+    State& state = *st;
+
+    Atmosphere atmos = load_atmos(config.atmos_path);
+    std::vector<ModelAtom<f64>> crtaf_models;
+    crtaf_models.reserve(config.atom_paths.size());
+    for (auto p : config.atom_paths) {
+        crtaf_models.emplace_back(parse_crtaf_model<f64>(p));
     }
+    AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
+    state.adata = atomic_data.device;
+    state.adata_host = atomic_data.host;
+    state.have_h = atomic_data.have_h_model;
+    state.atoms = extract_atoms(atomic_data.device, atomic_data.host);
+    GammaAtomsAndMapping gamma_atoms = extract_atoms_with_gamma_and_mapping(atomic_data.device, atomic_data.host);
+    state.atoms_with_gamma = gamma_atoms.atoms;
+    state.atoms_with_gamma_mapping = gamma_atoms.mapping;
+    state.atmos = atmos;
+    state.phi = VoigtProfile<fp_t>(
+        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
+        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
+    );
+    // TODO(cmo): Check range of Voigt terms against model
+    state.nh_lte = HPartFn();
+    fmt::println("Scale: {} m", state.atmos.voxel_scale);
 
-    if (x >= 253 && x < 260) {
-        if (y >= 253 && y < 260) {
-            emission(x, y, 1) = FP(4.0) * intensity_scale;
-        }
-    }
+    const auto space_dims = atmos.temperature.get_dimensions();
+    int space_x = space_dims(0);
+    int space_y = space_dims(1);
+    int cascade_0_x_probes = space_dims(1) / PROBE0_SPACING;
+    int cascade_0_z_probes = space_dims(0) / PROBE0_SPACING;
+    // TODO(cmo): Need to decide whether to allow non-probe 1 spacing... it
+    // probably doesn't make sense for us to have any interest in the level
+    // populations not on a probe - we don't have any way to compute this outside LTE.
+    const int n_level_total = state.adata.energy.extent(0);
+    state.pops = Fp3d("pops", n_level_total, space_x, space_y);
+    state.J = Fp3d("J", state.adata.wavelength.extent(0), space_x, space_y);
+    state.J = FP(0.0);
 
-    if (x >= 220 && x < 222) {
-        if (y >= 220 && y < 222) {
-            emission(x, y, 0) = FP(1.414) * intensity_scale;
-            emission(x, y, 2) = FP(1.414) * intensity_scale;
-        }
-    }
-
-    if (x >= 405 && x < 410) {
-        if (y >= 252 && y < 262) {
-            emission(x, y, 2) = intensity_scale;
-        }
-    }
-}
-
-YAKL_INLINE void draw_disk(
-    Fp3d emission,
-    vec2 centre,
-    fp_t radius,
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color,
-    int x,
-    int y
-) {
-    fp_t dx = fp_t(x) - centre(0);
-    fp_t dy = fp_t(y) - centre(1);
-
-    if ((dx * dx + dy * dy) <= (radius * radius)) {
-        for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-            emission(x, y, i) = color(i);
-        }
-    }
-}
-
-YAKL_INLINE void model_A(Fp3d emission, int x, int y) {
-    vec2 centre;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
-
-    auto dims = emission.get_dimensions();
-
-    centre(0) = 30;
-    centre(1) = 30;
-    color(0) = FP(10.0);
-    color(1) = FP(10.0);
-    color(2) = FP(10.0);
-    draw_disk(emission, centre, 30, color, x, y);
-
-    centre(0) = 50;
-    centre(1) = 180;
-    color(0) = FP(1e-6);
-    color(1) = FP(1e-6);
-    color(2) = FP(1e-6);
-    draw_disk(emission, centre, 6, color, x, y);
-
-    centre(0) = dims(0) / 2;
-    centre(1) = dims(1) / 2;
-    color(0) = FP(1.0);
-    color(1) = FP(1.0);
-    color(2) = FP(1.0);
-    draw_disk(emission, centre, 2, color, x, y);
-}
-
-YAKL_INLINE void model_B(Fp3d emission, int x, int y) {
-    auto dims = emission.get_dimensions();
-    int centre = int(dims(0) / 2);
-    vec2 c;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
-    color(0) = FP(0.0);
-    color(1) = FP(1.0);
-    color(2) = FP(0.0);
-    for (int cx = centre - 256; cx < centre + 256; ++cx) {
-        c(0) = centre;
-        c(1) = cx;
-
-        draw_disk(emission, c, 6, color, x, y);
-    }
-
-    color(0) = FP(1e-6);
-    color(1) = FP(1e-6);
-    color(2) = FP(1e-6);
-    for (int cx = centre - 50; cx < centre + 50; ++cx) {
-        c(0) = centre + 100;
-        c(1) = cx;
-
-        draw_disk(emission, c, 6, color, x, y);
-    }
-
-    color(0) = FP(10.0);
-    color(1) = FP(0.0);
-    color(2) = FP(0.0);
-    for (int cx = centre - 50; cx < centre + 50; ++cx) {
-        c(0) = 100;
-        c(1) = cx;
-
-        draw_disk(emission, c, 6, color, x, y);
-    }
-
-    c(0) = centre + 400;
-    c(1) = centre;
-    color(0) = FP(0.0);
-    color(1) = FP(0.0);
-    color(2) = FP(0.5);
-    draw_disk(emission, c, 40, color, x, y);
-}
-
-YAKL_INLINE void model_D_emission(Fp3d emission, int x, int y) {
-    auto dims = emission.get_dimensions();
-    int centre = int(dims(0) / 2);
-    vec2 c;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
-    c(0) = centre + 400;
-    c(1) = centre;
-    color(0) = FP(0.0);
-    color(1) = FP(0.0);
-    color(2) = FP(2.0);
-    draw_disk(emission, c, 40, color, x, y);
-
-    c(0) = centre - 400;
-    c(1) = centre;
-    color(0) = FP(2.0);
-    color(1) = FP(0.0);
-    color(2) = FP(0.0);
-    draw_disk(emission, c, 40, color, x, y);
-
-    c(0) = centre;
-    c(1) = centre - 400;
-    color(0) = FP(0.0);
-    color(1) = FP(0.0);
-    color(2) = FP(0.5);
-    draw_disk(emission, c, 40, color, x, y);
-
-    c(0) = centre;
-    c(1) = centre + 400;
-    color(0) = FP(0.5);
-    color(1) = FP(0.0);
-    color(2) = FP(0.0);
-    draw_disk(emission, c, 40, color, x, y);
-
-    c(0) = 200;
-    c(1) = 200;
-    color(0) = FP(0.0);
-    color(1) = FP(3.0);
-    color(2) = FP(0.0);
-    draw_disk(emission, c, 40, color, x, y);
-
-    c(0) = dims(0) - 200;
-    c(1) = 200;
-    color(0) = FP(0.0);
-    color(1) = FP(0.0);
-    color(2) = FP(3.0);
-    draw_disk(emission, c, 40, color, x, y);
-
-    c(0) = 400;
-    c(1) = 700;
-    color(0) = FP(3.0);
-    color(1) = FP(0.0);
-    color(2) = FP(3.0);
-    draw_disk(emission, c, 40, color, x, y);
-}
-
-YAKL_INLINE void model_D_absorption(Fp3d chi, int x, int y) {
-    auto dims = chi.get_dimensions();
-    int centre = int(dims(0) / 2);
-    vec2 c;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
-    fp_t bg = FP(1e-10);
-    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-        chi(x, y, i) = bg;
-    }
-    c(0) = centre + 400;
-    c(1) = centre;
-    color(0) = bg;
-    color(1) = bg;
-    color(2) = FP(0.5);
-    draw_disk(chi, c, 40, color, x, y);
-
-    c(0) = centre - 400;
-    c(1) = centre;
-    color(0) = FP(0.5);
-    color(1) = bg;
-    color(2) = bg;
-    draw_disk(chi, c, 40, color, x, y);
-
-    c(0) = centre;
-    c(1) = centre - 400;
-    color(0) = bg;
-    color(1) = bg;
-    color(2) = FP(0.5);
-    draw_disk(chi, c, 40, color, x, y);
-
-    c(0) = centre;
-    c(1) = centre + 400;
-    color(0) = FP(0.5);
-    color(1) = bg;
-    color(2) = bg;
-    draw_disk(chi, c, 40, color, x, y);
-
-    c(0) = centre + 340;
-    c(1) = centre;
-    color(0) = FP(0.2);
-    color(1) = FP(0.2);
-    color(2) = FP(0.2);
-    draw_disk(chi, c, 6, color, x, y);
-    c(0) = centre - 340;
-    c(1) = centre;
-    draw_disk(chi, c, 6, color, x, y);
-
-    int box_size = 250;
-    if (x >= centre - box_size && x < centre + box_size && y >= centre - box_size && y < centre + box_size) {
-        fp_t chi_r = FP(1e-4);
-        chi(x, y, 0) = chi_r;
-        chi(x, y, 1) = FP(1e2) * chi_r;
-        chi(x, y, 2) = FP(1e2) * chi_r;
-    }
-
-    c(0) = 200;
-    c(1) = 200;
-    color(0) = bg;
-    color(1) = FP(1.0);
-    color(2) = bg;
-    draw_disk(chi, c, 40, color, x, y);
-
-    c(0) = dims(0) - 200;
-    c(1) = 200;
-    color(0) = bg;
-    color(1) = bg;
-    color(2) = FP(1.0);
-    draw_disk(chi, c, 40, color, x, y);
-
-    c(0) = 400;
-    c(1) = 700;
-    color(0) = FP(1.0);
-    color(1) = bg;
-    color(2) = FP(1.0);
-    draw_disk(chi, c, 40, color, x, y);
-}
-
-YAKL_INLINE void model_E_emission(const Fp3d& emission, int x, int y) {
-    auto dims = emission.get_dimensions();
-    int centre = int(dims(0) / 2);
-    vec2 c;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
-    c(0) = centre;
-    c(1) = centre;
-    fp_t emission_scale = FP(10.0) / FP(80.0);
-    // fp_t emission_scale = FP(40.0);
-    color(0) = emission_scale;
-    color(1) = FP(0.0);
-    color(2) = emission_scale;
-    draw_disk(emission, c, 40, color, x, y);
-}
-
-YAKL_INLINE void model_E_absorption(const Fp3d& chi, int x, int y) {
-    auto dims = chi.get_dimensions();
-    int centre = int(dims(0) / 2);
-    vec2 c;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
-    // fp_t bg = FP(1e-10);
-    fp_t bg = FP(1e-20);
-    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-        chi(x, y, i) = bg;
-    }
-
-    c(0) = centre;
-    c(1) = centre;
-    fp_t chi_scale = FP(1.0) / FP(80.0);
-    // fp_t chi_scale = FP(4.0);
-    color(0) = chi_scale;
-    color(1) = bg;
-    color(2) = chi_scale;
-    draw_disk(chi, c, 40, color, x, y);
-}
-
-YAKL_INLINE void model_F_emission(const Fp3d& eta, int x, int y) {
-    auto dims = eta.get_dimensions();
-    vec2 c;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
-    int centre = int(dims(0) / 2);
-    c(0) = centre;
-    c(1) = centre;
-    fp_t eta_scale = FP(20.0) / FP(60.0);
-    color(0) = eta_scale;
-    color(1) = FP(0.0);
-    color(2) = eta_scale;
-    draw_disk(eta, c, FP(30.0), color, x, y);
-}
-
-YAKL_INLINE void model_F_absorption(const Fp3d& chi, int x, int y) {
-    auto dims = chi.get_dimensions();
-    vec2 c;
-    yakl::SArray<fp_t, 1, NUM_WAVELENGTHS> color;
-    int centre = int(dims(0) / 2);
-    fp_t bg = FP(1e-20);
-    for (int i = 0; i < NUM_WAVELENGTHS; ++i) {
-        chi(x, y, i) = bg;
-    }
-
-    c(0) = centre;
-    c(1) = centre;
-    fp_t chi_scale = FP(1.0) / FP(60.0);
-    color(0) = chi_scale;
-    color(1) = bg;
-    color(2) = chi_scale;
-    draw_disk(chi, c, FP(30.0), color, x, y);
-
-    fp_t blocker = FP(1.0);
-    color(0) = blocker;
-    color(1) = blocker;
-    color(2) = blocker;
-
-    int x_step = dims(0) / 12;
-    int y_step = dims(1) / 12;
-    for (int xx = 0; xx < 10; ++xx) {
-        for (int yy = 0; yy < 10; ++yy) {
-            if (xx >= 4 && xx <= 6 && yy >= 4 && yy <= 6) {
-                continue;
-            }
-            c(0) = (xx + 1) * x_step;
-            c(1) = (yy + 1) * y_step;
-            draw_disk(chi, c, FP(5.0), color, x, y);
-        }
-    }
-}
-
-void init_state (State* state, const DexrtConfig& config) {
-    const Atmosphere& atmos = state->atmos;
-    int cascade_0_x_probes, cascade_0_z_probes;
-    int space_x, space_y;
-    if constexpr (USE_ATMOSPHERE) {
-        const auto space_dims = atmos.temperature.get_dimensions();
-        space_x = space_dims(0);
-        space_y = space_dims(1);
-        cascade_0_x_probes = space_dims(1) / PROBE0_SPACING;
-        cascade_0_z_probes = space_dims(0) / PROBE0_SPACING;
-        // TODO(cmo): Need to decide whether to allow non-probe 1 spacing... it
-        // probably doesn't make sense for us to have any interest in the level
-        // populations not on a probe - we don't have any way to compute this outside LTE.
-        const int n_level_total = state->adata.energy.extent(0);
-        state->pops = Fp3d("pops", n_level_total, space_x, space_y);
-        state->J = Fp3d("J", state->adata.wavelength.extent(0), space_x, space_y);
-        state->J = FP(0.0);
-
-        // state->Gamma = Fp4d("Gamma", n_level, n_level, space_x, space_y);
-        for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
-            const int n_level = state->adata_host.num_level(ia);
-            state->Gamma.emplace_back(
+    if (config.mode == DexrtMode::NonLte) {
+        for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
+            const int n_level = state.adata_host.num_level(ia);
+            state.Gamma.emplace_back(
                 Fp4d("Gamma", n_level, n_level, space_x, space_y)
             );
         }
-        state->wphi = Fp3d("wphi", state->adata.lines.extent(0), space_x, space_y);
-        state->active = decltype(state->active)("active", space_x, space_y);
-        const auto& temperature = state->atmos.temperature;
-        const auto& active = state->active;
-        parallel_for(
-            "Active bits",
-            SimpleBounds<2>(temperature.extent(0), temperature.extent(1)),
-            YAKL_LAMBDA (int z, int x) {
-                const fp_t thresh = THRESHOLD_TEMPERATURE;
-                if (thresh == FP(0.0)) {
-                    active(z, x) = true;
-                } else {
-                    active(z, x) = temperature(z, x) <= thresh;
-                }
-            }
-        );
-        yakl::fence();
-        const auto& cpu_active = active.createHostCopy();
-        yakl::fence();
-        i64 active_count = 0;
-        for (int z = 0; z < cpu_active.extent(0); ++z) {
-            for (int x = 0; x < cpu_active.extent(1); ++x) {
-                active_count += cpu_active(z, x);
-            }
-        }
-        fmt::println("Active cells: {}/{}", active_count, active.extent(0) * active.extent(1));
-
-
-        state->pw_bc = load_bc(ATMOS_PATH, state->adata.wavelength);
-        if constexpr (USE_BC) {
-            state->boundary = BoundaryType::Promweaver;
-        } else {
-            state->boundary = BoundaryType::Zero;
-        }
-    } else {
-        space_x = MODEL_X;
-        space_y = MODEL_Y;
-        cascade_0_x_probes = MODEL_X / PROBE0_SPACING;
-        cascade_0_z_probes = MODEL_Y / PROBE0_SPACING;
-        state->boundary = BoundaryType::Zero;
+        state.wphi = Fp3d("wphi", state.adata.lines.extent(0), space_x, space_y);
     }
+    state.active = decltype(state.active)("active", space_x, space_y);
+    const auto& temperature = state.atmos.temperature;
+    const auto& active = state.active;
+    const fp_t threshold = config.threshold_temperature;
+    parallel_for(
+        "Active bits",
+        SimpleBounds<2>(temperature.extent(0), temperature.extent(1)),
+        YAKL_LAMBDA (int z, int x) {
+            if (threshold == FP(0.0)) {
+                active(z, x) = true;
+            } else {
+                active(z, x) = (temperature(z, x) <= threshold);
+            }
+        }
+    );
+    yakl::fence();
+    const auto& cpu_active = active.createHostCopy();
+    yakl::fence();
+    i64 active_count = 0;
+    for (int z = 0; z < cpu_active.extent(0); ++z) {
+        for (int x = 0; x < cpu_active.extent(1); ++x) {
+            active_count += cpu_active(z, x);
+        }
+    }
+    fmt::println("Active cells: {}/{}", active_count, active.extent(0) * active.extent(1));
+
+    // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
+    state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary);
+    state.boundary = config.boundary;
 
     CascadeRays c0_rays;
     c0_rays.num_probes(0) = cascade_0_x_probes;
@@ -447,17 +119,81 @@ void init_state (State* state, const DexrtConfig& config) {
     c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
     c0_rays.num_incl = NUM_INCL;
     c0_rays.wave_batch = WAVE_BATCH;
+    return c0_rays;
+}
 
-    state->c0_size = cascade_rays_to_storage<PREAVERAGE>(c0_rays);
-    if constexpr (USE_ATMOSPHERE) {
-        state->alo = Fp5d(
-            "ALO",
-            state->c0_size.num_probes(1),
-            state->c0_size.num_probes(0),
-            state->c0_size.num_flat_dirs,
-            state->c0_size.wave_batch,
-            state->c0_size.num_incl
-        );
+CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
+    if (config.mode != DexrtMode::GivenFs) {
+        return CascadeRays{};
+    }
+    yakl::SimpleNetCDF nc;
+    nc.open(config.atmos_path, yakl::NETCDF_MODE_READ);
+    int x_dim = nc.getDimSize("x");
+    int z_dim = nc.getDimSize("z");
+    int wave_dim = nc.getDimSize("wavelength");
+
+    typedef yakl::Array<f32, 3, yakl::memHost> Fp3dLoad;
+
+    Fp3dLoad eta("eta", z_dim, x_dim, wave_dim);
+    Fp3dLoad chi("chi", z_dim, x_dim, wave_dim);
+    nc.read(eta, "eta");
+    nc.read(chi, "chi");
+
+    f32 voxel_scale = FP(1.0);
+    if (nc.varExists("voxel_scale")) {
+        nc.read(voxel_scale, "voxel_scale");
+    }
+
+    st->given_state.voxel_scale = voxel_scale;
+#ifdef DEXRT_SINGLE_PREC
+    st->given_state.emis = eta.createDeviceCopy();
+    st->given_state.opac = chi.createDeviceCopy();
+#else
+    auto etad = eta.createDeviceCopy();
+    auto chid = eta.createDeviceCopy();
+    emis = Fp3d("eta", z_dim, x_dim, wave_dim);
+    opac = Fp3d("chi", z_dim, x_dim, wave_dim);
+    yakl::fence();
+    parallel_for(
+        "Convert f32->f64",
+        SimpleBounds<3>(z_dim, x_dim, wave_dim),
+        YAKL_LAMBDA (int z, int x, int la) {
+            emis(z, x, la) = etad(z, x, la);
+        }
+    )
+    parallel_for(
+        "Convert f32->f64",
+        SimpleBounds<3>(z_dim, x_dim, wave_dim),
+        YAKL_LAMBDA (int z, int x, int la) {
+            opac(z, x, la) = chid(z, x, la);
+        }
+    )
+    yakl::fence();
+#endif
+
+    // NOTE(cmo): Only zero boundaries are supported here.
+    st->boundary = BoundaryType::Zero;
+    CascadeRays c0_rays;
+    c0_rays.num_probes(0) = x_dim;
+    c0_rays.num_probes(1) = z_dim;
+    c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
+    c0_rays.num_incl = NUM_INCL;
+    c0_rays.wave_batch = WAVE_BATCH;
+    return c0_rays;
+}
+
+void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
+    if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
+        if (config.mode == DexrtMode::NonLte) {
+            state->alo = Fp5d(
+                "ALO",
+                state->c0_size.num_probes(1),
+                state->c0_size.num_probes(0),
+                state->c0_size.num_flat_dirs,
+                state->c0_size.wave_batch,
+                state->c0_size.num_incl
+            );
+        }
         state->dynamic_opac = decltype(state->dynamic_opac)(
             "Dynamic Emis/Opac",
             state->c0_size.num_probes(1),
@@ -465,7 +201,18 @@ void init_state (State* state, const DexrtConfig& config) {
             state->c0_size.wave_batch
         );
     }
+}
 
+void init_state (State* state, const DexrtConfig& config) {
+    state->mode = config.mode;
+    CascadeRays c0_rays;
+    if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
+        c0_rays = init_atmos_atoms(state, config);
+    } else {
+        c0_rays = init_given_emis_opac(state, config);
+    }
+
+    state->c0_size = cascade_rays_to_storage<PREAVERAGE>(c0_rays);
 
     Fp1dHost muy("muy", NUM_INCL);
     Fp1dHost wmuy("wmuy", NUM_INCL);
@@ -475,6 +222,18 @@ void init_state (State* state, const DexrtConfig& config) {
     }
     state->incl_quad.muy = muy.createDeviceCopy();
     state->incl_quad.wmuy = wmuy.createDeviceCopy();
+
+#ifdef DEXRT_USE_MAGMA
+    magma_init();
+    magma_queue_create(0, &state->magma_queue);
+#endif
+}
+
+void finalize_state(State* state) {
+#ifdef DEXRT_USE_MAGMA
+    magma_queue_destroy(state->magma_queue);
+    magma_finalize();
+#endif
 }
 
 FpConst3d final_cascade_to_J(
@@ -515,22 +274,43 @@ FpConst3d final_cascade_to_J(
     return J;
 }
 
-void save_results(const FpConst3d& J, const FpConst3d& eta, const FpConst3d& chi, const FpConst1d& wavelengths, const FpConst3d& pops, const FpConst1d& casc=FpConst1d(), const FpConst5d& alo=FpConst5d(), const FpConst2d& ne=FpConst2d(), const FpConst2d& nh_tot=FpConst2d()) {
+void save_results(
+    const DexrtConfig& config,
+    const FpConst3d& J,
+    const FpConst1d& wavelengths=FpConst1d(),
+    const FpConst3d& eta=FpConst3d(),
+    const FpConst3d& chi=FpConst3d(),
+    const FpConst3d& pops=FpConst3d(),
+    const FpConst1d& casc=FpConst1d(),
+    const FpConst5d& alo=FpConst5d(),
+    const FpConst2d& ne=FpConst2d(),
+    const FpConst2d& nh_tot=FpConst2d()
+) {
     fmt::print("Saving output...\n");
     auto dims = J.get_dimensions();
 
     yakl::SimpleNetCDF nc;
-    nc.create("output.nc", yakl::NETCDF_MODE_REPLACE);
+    nc.create(config.output_path, yakl::NETCDF_MODE_REPLACE);
 
     auto eta_dims = eta.get_dimensions();
     fmt::println("J: ({} {} {})", dims(0), dims(1), dims(2));
-    fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
-    nc.write(J, "image", {"wavelength", "z", "x"});
-    if (USE_ATMOSPHERE) {
-        nc.write(eta, "eta", {"z", "x", "wave_batch"});
-        nc.write(chi, "chi", {"z", "x", "wave_batch"});
+    nc.write(J, "J", {"wavelength", "z", "x"});
+
+    if (wavelengths.initialized()) {
         nc.write(wavelengths, "wavelength", {"wavelength"});
-        nc.write(pops, "pops", {"level", "z", "x"});
+    }
+
+    if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
+        if (eta.initialized()) {
+            fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
+            nc.write(eta, "eta", {"z", "x", "wave_batch"});
+        }
+        if (chi.initialized()) {
+            nc.write(chi, "chi", {"z", "x", "wave_batch"});
+        }
+        if (pops.initialized()) {
+            nc.write(pops, "pops", {"level", "z", "x"});
+        }
         if (casc.initialized()) {
             nc.write(casc, "cascade", {"cascade_shape"});
         }
@@ -551,8 +331,16 @@ int main(int argc, char** argv) {
 #ifdef HAVE_MPI
     MPI_Init(&argc, &argv);
 #endif
-    std::string config_path("dexrt_config.yaml");
-    const DexrtConfig config = parse_config(config_path);
+    argparse::ArgumentParser program("DexRT");
+    program.add_argument("--config")
+        .default_value(std::string("dexrt.yaml"))
+        .help("Path to config file")
+        .metavar("FILE");
+    program.add_epilog("DexRT Radiance Cascade based non-LTE solver.");
+
+    program.parse_args(argc, argv);
+
+    const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
 
     yakl::init(
         yakl::InitConfig()
@@ -560,75 +348,61 @@ int main(int argc, char** argv) {
             .set_pool_grow_mb(config.mem_pool_grow_gb * 1024)
     );
 
-#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
-    magma_init();
-#endif
+    State state;
     {
-        State state;
-        magma_queue_create(0, &state.magma_queue);
-
-        static_assert((!USE_ATMOSPHERE) || (USE_ATMOSPHERE && NUM_WAVELENGTHS == 1), "More than one wavelength per batch with USE_ATMOSPHERE - vectorisation is probably poor.");
-
-        if constexpr (USE_ATMOSPHERE) {
-            Atmosphere atmos = load_atmos(ATMOS_PATH);
-            ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
-            ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_4.yaml");
-            AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
-            // AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H});
-            state.adata = atomic_data.device;
-            state.adata_host = atomic_data.host;
-            state.have_h = atomic_data.have_h_model;
-            state.atoms = extract_atoms(atomic_data.device, atomic_data.host);
-            GammaAtomsAndMapping gamma_atoms = extract_atoms_with_gamma_and_mapping(atomic_data.device, atomic_data.host);
-            state.atoms_with_gamma = gamma_atoms.atoms;
-            state.atoms_with_gamma_mapping = gamma_atoms.mapping;
-            state.atmos = atmos;
-            state.phi = VoigtProfile<fp_t>(
-                VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
-                VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
-            );
-            state.nh_lte = HPartFn();
-            fmt::println("Scale: {} m", state.atmos.voxel_scale);
-        }
-
-        // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if not using an atmosphere
+        // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if
+        // not using an atmosphere
         init_state(&state, config);
         CascadeState casc_state = CascadeState_new(state.c0_size, MAX_CASCADE);
 
-        // if constexpr (!USE_ATMOSPHERE) {
-        //     for (int i = MAX_LEVEL; i >= 0; --i) {
-        //         if constexpr (BILINEAR_FIX) {
-        //             compute_cascade_i_bilinear_fix_2d(&state, i);
-        //         } else {
-        //             compute_cascade_i_2d(&state, i);
-        //         }
-        //         yakl::fence();
-        //     }
-        //     auto J = final_cascade_to_J(state.cascades[0]);
-        //     FpConst3d dummy_eta, dummy_chi, dummy_pops;
-        //     FpConst1d dummy_wave;
-        //     save_results(J, dummy_eta, dummy_chi, dummy_wave, dummy_pops);
-        // } else {
+        // NOTE(cmo): Provided emissivity and opacity in file: static solution.
+        if (config.mode == DexrtMode::GivenFs) {
+            int num_waves = state.given_state.emis.extent(2);
+            for (
+                int la_start = 0;
+                la_start < num_waves;
+                la_start += state.c0_size.wave_batch
+            ) {
+                const int la_end = std::min(la_start + state.c0_size.wave_batch, num_waves);
+                static_formal_sol_given_rc(
+                    state,
+                    casc_state,
+                    true,
+                    la_start,
+                    la_end
+                );
+                final_cascade_to_J(
+                    casc_state.i_cascades[0],
+                    state.c0_size,
+                    state.J,
+                    state.incl_quad,
+                    la_start,
+                    la_end
+                );
+            }
+
+            save_results(config, state.J);
+        } else {
+
             compute_lte_pops(&state);
-            constexpr bool non_lte = true;
-            constexpr bool static_soln = false;
-            constexpr bool conserve_charge = true;
+            const bool non_lte = config.mode == DexrtMode::NonLte;
+            const bool conserve_charge = config.conserve_charge;
             const bool actually_conserve_charge = state.have_h && conserve_charge;
-            constexpr bool conserve_pressure = true;
+            const bool conserve_pressure = config.conserve_pressure;
             const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
-            constexpr int initial_lambda_iterations = 3;
+            const int initial_lambda_iterations = config.initial_lambda_iterations;
+            const int max_iters = config.max_iter;
 
             constexpr fp_t non_lte_tol = FP(1e-3);
             auto& waves = state.adata_host.wavelength;
             auto fs_fn = dynamic_formal_sol_rc;
-            if (static_soln) {
-                fs_fn = static_formal_sol_rc;
-            }
+            // if (static_soln) {
+            //     fs_fn = static_formal_sol_rc;
+            // }
             fp_t max_change = FP(1.0);
             if (non_lte) {
-                constexpr int max_iters = 300;
                 int i = 0;
-                if (true && actually_conserve_charge) {
+                if (actually_conserve_charge) {
                     fmt::println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
@@ -653,12 +427,9 @@ int main(int argc, char** argv) {
                 while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
                     fmt::println("FS {}", i);
                     compute_nh0(state);
-                    // fmt::println("nh0 done");
                     compute_collisions_to_gamma(&state);
-                    // fmt::println("coll done");
                     state.J = FP(0.0);
                     compute_profile_normalisation(state, casc_state);
-                    // fmt::println("profiles done");
                     yakl::fence();
                     for (
                         int la_start = 0;
@@ -675,7 +446,6 @@ int main(int argc, char** argv) {
                             la_start,
                             la_end
                         );
-                        // fmt::println("FS batch done");
                         final_cascade_to_J(
                             casc_state.i_cascades[0],
                             state.c0_size,
@@ -684,12 +454,11 @@ int main(int argc, char** argv) {
                             la_start,
                             la_end
                         );
-                        // fmt::println("J done");
                     }
                     yakl::fence();
                     fmt::println("Stat eq");
                     max_change = stat_eq<f64>(&state);
-                    if (i > 2 && actually_conserve_charge) {
+                    if (i > 0 && actually_conserve_charge) {
                         fp_t nr_update = nr_post_update<f64>(&state);
                         max_change = std::max(nr_update, max_change);
                         if (actually_conserve_pressure) {
@@ -706,12 +475,11 @@ int main(int argc, char** argv) {
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                     fmt::println(
-                        "Computing wavelengths [{}, {}] ({}, {}) (static: {})",
+                        "Computing wavelengths [{}, {}] ({}, {})",
                         la_start,
                         la_end,
                         waves(la_start),
-                        waves(la_end-1),
-                        static_soln
+                        waves(la_end-1)
                     );
                     bool lambda_iterate = false;
                     fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
@@ -726,22 +494,20 @@ int main(int argc, char** argv) {
                 }
             }
             save_results(
+                config,
                 state.J,
+                state.adata.wavelength,
                 casc_state.eta,
                 casc_state.chi,
-                state.adata.wavelength,
                 state.pops,
                 casc_state.i_cascades[0],
                 state.alo,
                 state.atmos.ne,
                 state.atmos.nh_tot
             );
-        // }
-        magma_queue_destroy(state.magma_queue);
+        }
     }
-#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
-    magma_finalize();
-#endif
+    finalize_state(&state);
     yakl::finalize();
 #ifdef HAVE_MPI
     MPI_Finalize();

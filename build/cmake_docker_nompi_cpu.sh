@@ -9,5 +9,5 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DYAKL_PROFILE="On"             \
       -DYAKL_OPENMP_FLAGS="-O3 -fopenmp" \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \
-      -DLDFLAGS="$(nc-config --libs)" \
+      -DLDLIBS="$(nc-config --libs)" \
       ..
