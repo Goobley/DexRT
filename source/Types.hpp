@@ -87,6 +87,7 @@ struct CascadeState {
     int num_cascades;
     std::vector<Fp1d> i_cascades;
     std::vector<Fp1d> tau_cascades;
+    std::vector<yakl::Array<i32, 2, yakl::memDevice>> probes_to_compute; // [n, 2 (u, v)]
     Fp3d eta; // [z, x, wave]
     Fp3d chi; // [z, x, wave]
 };

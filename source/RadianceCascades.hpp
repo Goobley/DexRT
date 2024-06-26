@@ -140,6 +140,7 @@ void cascade_i_25d(
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
     constexpr bool dynamic = RcMode & RC_DYNAMIC;
     using DynamicState = std::conditional_t<dynamic, Raymarch2dDynamicState, DexEmpty>;
+    const bool sparse_calc = state.config.sparse_calculation;
 
     CascadeIdxs lookup = cascade_indices(casc_state, cascade_idx);
     Fp1d i_cascade_i = casc_state.i_cascades[lookup.i];
@@ -176,17 +177,38 @@ void cascade_i_25d(
 
     auto offset = get_offsets(atmos);
 
+    i64 spatial_bounds = dims.num_probes(1) * dims.num_probes(0);
+    yakl::Array<i32, 2, yakl::memDevice> probe_space_lookup;
+    if (sparse_calc) {
+        probe_space_lookup = casc_state.probes_to_compute[cascade_idx];
+        spatial_bounds = probe_space_lookup.extent(0);
+    }
+
     parallel_for(
         "RC Loop",
-        SimpleBounds<5>(
-            dims.num_probes(1),
-            dims.num_probes(0),
+        SimpleBounds<4>(
+            spatial_bounds,
+            // dims.num_probes(1),
+            // dims.num_probes(0),
             dims.num_flat_dirs,
             wave_batch,
             dims.num_incl
         ),
-        YAKL_LAMBDA (int v, int u, int phi_idx, int wave, int theta_idx) {
+        YAKL_LAMBDA (i64 k, /* int v, int u, */ int phi_idx, int wave, int theta_idx) {
             constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
+            int u, v;
+            if (sparse_calc) {
+                u = probe_space_lookup(k, 0);
+                v = probe_space_lookup(k, 1);
+            } else {
+                // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
+                // fast-running), but index as [u, v], i.e. dims.num_probes(0) =
+                // dim(u). Typical definition of k = u * Nv + v, but here we do
+                // loop index k = v * Nu + u where Nu = dims.num_probes(0). This
+                // preserves our iteration ordering
+                u = k % dims.num_probes(0);
+                v = k / dims.num_probes(0);
+            }
             ivec2 probe_coord;
             probe_coord(0) = u;
             probe_coord(1) = v;

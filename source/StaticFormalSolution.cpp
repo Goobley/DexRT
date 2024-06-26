@@ -21,6 +21,7 @@ void static_compute_gamma(
     const auto& pops = state.pops;
     const auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     const auto flat_lte_pops = lte_scratch.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+    const bool sparse_calc = state.config.sparse_calculation;
 
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
@@ -41,20 +42,37 @@ void static_compute_gamma(
         const auto& wphi = state.wphi.reshape<2>(Dims(state.wphi.extent(0), state.wphi.extent(1) * state.wphi.extent(2)));
 
         CascadeStorage dims = state.c0_size;
+        i64 num_active_space = flat_atmos.temperature.extent(0);
+        yakl::Array<i32, 2, yakl::memDevice> probe_spatial_lookup;
+        if (sparse_calc) {
+            probe_spatial_lookup = casc_state.probes_to_compute[0];
+            num_active_space = probe_spatial_lookup.extent(0);
+        }
 
         const auto& wavelength = adata.wavelength;
         parallel_for(
             "compute Gamma",
             SimpleBounds<4>(
-                flat_atmos.temperature.extent(0),
+                num_active_space,
                 dims.num_flat_dirs,
                 wave_batch,
                 dims.num_incl
             ),
-            YAKL_LAMBDA (i64 k, int phi_idx, int wave, int theta_idx) {
+            YAKL_LAMBDA (i64 k_active, /*i64 k, */ int phi_idx, int wave, int theta_idx) {
+                // k_active may or may not be k. For sparse calculation, it's
+                // the index into the active probe array, otherwise, it is k.
+                i64 k = k_active;
+                if (sparse_calc) {
+                    int u = probe_spatial_lookup(k_active, 0);
+                    int v = probe_spatial_lookup(k_active, 1);
+                    k = v * dims.num_probes(0) + u;
+                }
+
                 // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
                 // fast-running), but index as [u, v], i.e. dims.num_probes(0) =
-                // dim(u)
+                // dim(u). Typical definition of k = u * Nv + v, but here we do
+                // loop index k = v * Nu + u where Nu = dims.num_probes(0). This
+                // preserves our iteration ordering
                 ivec2 probe_coord;
                 probe_coord(0) = k % dims.num_probes(0);
                 probe_coord(1) = k / dims.num_probes(0);
@@ -173,7 +191,7 @@ void static_compute_gamma(
 }
 
 void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
-    assert(state.mode == DexrtMode::Lte || state.mode == DexrtMode::NonLte);
+    assert(state.config.mode == DexrtMode::Lte || state.config.mode == DexrtMode::NonLte);
     auto& atmos = state.atmos;
     auto& phi = state.phi;
     auto& pops = state.pops;
@@ -185,6 +203,7 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bo
     // it, for now, trust the pool allocator
     auto pops_dims = pops.get_dimensions();
     Fp3d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1), pops_dims(2));
+    const bool sparse_calc = state.config.sparse_calculation;
 
     if (la_end == -1) {
         la_end = la_start + 1;
@@ -203,11 +222,15 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bo
     auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
     auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
     auto flat_chi = chi.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
+    auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0), state.active.extent(1)));
     // NOTE(cmo): Compute emis/opac
     parallel_for(
         "Compute eta, chi",
         SimpleBounds<2>(flat_temperature.extent(0), wave_batch),
         YAKL_LAMBDA (int64_t k, int wave) {
+            if (sparse_calc && !flat_active(k)) {
+                return;
+            }
             AtmosPointParams local_atmos;
             local_atmos.temperature = flat_temperature(k);
             local_atmos.ne = flat_ne(k);
@@ -302,7 +325,7 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bo
 }
 
 void static_formal_sol_given_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
-    assert(state.mode == DexrtMode::GivenFs);
+    assert(state.config.mode == DexrtMode::GivenFs);
 
     if (la_end == -1) {
         la_end = la_start + 1;

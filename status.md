@@ -37,7 +37,7 @@ Features/ToDo
 - [x] Charge conservation
     - [ ] Finite difference charge conservation blows up if we're off the end of the grid -- makes sense; dC will also explode
 - [x] Pressure conservation
-- [ ] Config file/input flags
+- [x] Config file/input flags
 - [ ] Pydantic objects for input files
 - [x] Active atmosphere cells (temperature criterion)
 - [ ] Active probes (from C0 active cells)

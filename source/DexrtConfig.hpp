@@ -10,7 +10,7 @@
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_initial_gb = FP(2.0);
-    fp_t mem_pool_grow_gb = FP(1.0);
+    fp_t mem_pool_grow_gb = FP(1.4);
     std::string atmos_path;
     std::string output_path;
     std::vector<std::string> atom_paths;
@@ -26,7 +26,7 @@ struct DexrtConfig {
     int initial_lambda_iterations = 2;
 };
 
-void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
+inline void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
     DexrtConfig& config = *cfg;
     config.boundary = BoundaryType::Zero;
     config.sparse_calculation = false;
@@ -37,7 +37,7 @@ void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
     config.conserve_pressure = false;
 }
 
-void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
+inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
     DexrtConfig& config = *cfg;
 
     if (file["sparse_calculation"]) {
@@ -87,7 +87,7 @@ void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
     }
 }
 
-void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
+inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     // NOTE(cmo): Everything needed in Lte is also needed in NonLte.
     parse_extra_lte(cfg, file);
     DexrtConfig& config = *cfg;
@@ -112,7 +112,7 @@ void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     }
 }
 
-DexrtConfig parse_dexrt_config(const std::string& path) {
+inline DexrtConfig parse_dexrt_config(const std::string& path) {
     DexrtConfig config;
     config.atmos_path = "dexrt_atmos.nc";
     config.output_path = "dexrt.nc";

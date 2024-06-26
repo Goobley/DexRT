@@ -7,13 +7,14 @@
 #include "PromweaverBoundary.hpp"
 #include "ZeroBoundary.hpp"
 #include "BoundaryType.hpp"
+#include "DexrtConfig.hpp"
 
 #ifdef DEXRT_USE_MAGMA
     #include <magma_v2.h>
 #endif
 
 struct State {
-    DexrtMode mode;
+    DexrtConfig config;
     CascadeStorage c0_size;
     GivenEmisOpac given_state;
     Atmosphere atmos;

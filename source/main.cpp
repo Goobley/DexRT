@@ -32,7 +32,7 @@
 #include <argparse/argparse.hpp>
 
 CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
-    if (config.mode != DexrtMode::Lte || config.mode != DexrtMode::NonLte) {
+    if (!(config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte)) {
         return CascadeRays{};
     }
 
@@ -87,11 +87,12 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     const auto& temperature = state.atmos.temperature;
     const auto& active = state.active;
     const fp_t threshold = config.threshold_temperature;
+    const bool sparse_calculation = config.sparse_calculation;
     parallel_for(
         "Active bits",
         SimpleBounds<2>(temperature.extent(0), temperature.extent(1)),
         YAKL_LAMBDA (int z, int x) {
-            if (threshold == FP(0.0)) {
+            if (!sparse_calculation || threshold == FP(0.0)) {
                 active(z, x) = true;
             } else {
                 active(z, x) = (temperature(z, x) <= threshold);
@@ -204,7 +205,7 @@ void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
 }
 
 void init_state (State* state, const DexrtConfig& config) {
-    state->mode = config.mode;
+    state->config = config;
     CascadeRays c0_rays;
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
         c0_rays = init_atmos_atoms(state, config);
@@ -213,6 +214,8 @@ void init_state (State* state, const DexrtConfig& config) {
     }
 
     state->c0_size = cascade_rays_to_storage<PREAVERAGE>(c0_rays);
+
+    init_cascade_sized_arrays(state, config);
 
     Fp1dHost muy("muy", NUM_INCL);
     Fp1dHost wmuy("wmuy", NUM_INCL);
@@ -234,6 +237,120 @@ void finalize_state(State* state) {
     magma_queue_destroy(state->magma_queue);
     magma_finalize();
 #endif
+}
+
+void init_active_probes(const State& state, CascadeState* casc) {
+    // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if
+    // NOTE(cmo): Active probes in c_0
+    CascadeState& casc_state = *casc;
+    auto& active_bool = state.active;
+    yakl::Array<u64, 2, yakl::memDevice> prev_active(
+        "casc_active",
+        state.active.extent(0),
+        state.active.extent(1)
+    );
+    parallel_for(
+        SimpleBounds<2>(prev_active.extent(0), prev_active.extent(1)),
+        YAKL_LAMBDA (int z, int x) {
+            if (active_bool(z, x)) {
+                prev_active(z, x) = 1;
+            } else {
+                prev_active(z, x) = 0;
+            }
+        }
+    );
+    yakl::fence();
+    u64 num_active = yakl::intrinsics::sum(prev_active);
+    auto prev_active_h = prev_active.createHostCopy();
+    yakl::fence();
+    yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("c0 to compute", num_active, 2);
+    i32 idx = 0;
+    for (int z = 0; z < prev_active_h.extent(0); ++z) {
+        for (int x = 0; x < prev_active_h.extent(1); ++x) {
+            if (prev_active_h(z, x)) {
+                probes_to_compute_h(idx, 0) = x;
+                probes_to_compute_h(idx, 1) = z;
+                idx += 1;
+            }
+        }
+    }
+    auto probes_to_compute = probes_to_compute_h.createDeviceCopy();
+    casc_state.probes_to_compute.emplace_back(probes_to_compute);
+    fmt::println(
+        "C0 Active Probes {}/{} ({}%)",
+        num_active,
+        prev_active.extent(0)*prev_active.extent(1),
+        fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
+    );
+
+
+    for (int cascade_idx = 1; cascade_idx <= casc_state.num_cascades; ++cascade_idx) {
+        CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
+        yakl::Array<u64, 2, yakl::memDevice> curr_active(
+            "casc_active",
+            dims.num_probes(1),
+            dims.num_probes(0)
+        );
+        curr_active = 0;
+        yakl::fence();
+        auto my_atomic_max = YAKL_LAMBDA (u64& ref, unsigned long long int val) {
+            yakl::atomicMax(
+                *reinterpret_cast<unsigned long long int*>(&ref),
+                val
+            );
+        };
+        parallel_for(
+            SimpleBounds<2>(prev_active.extent(0), prev_active.extent(1)),
+            YAKL_LAMBDA (int z, int x) {
+                int z_bc = std::max(int((z - 1) / 2), 0);
+                int x_bc = std::max(int((x - 1) / 2), 0);
+                const bool z_clamp = (z_bc == 0) || (z_bc == (curr_active.extent(0) - 1));
+                const bool x_clamp = (x_bc == 0) || (x_bc == (curr_active.extent(1) - 1));
+
+                if (!prev_active(z, x)) {
+                    return;
+                }
+
+                // NOTE(cmo): Atomically set the (up-to) 4 valid
+                // probes for this active probe of cascade_idx-1
+                my_atomic_max(curr_active(z_bc, x_bc), 1);
+                if (!x_clamp) {
+                    my_atomic_max(curr_active(z_bc, x_bc+1), 1);
+                }
+                if (!z_clamp) {
+                    my_atomic_max(curr_active(z_bc+1, x_bc), 1);
+                }
+                if (!(z_clamp || x_clamp)) {
+                    my_atomic_max(curr_active(z_bc+1, x_bc+1), 1);
+                }
+            }
+        );
+        yakl::fence();
+        i64 num_active = yakl::intrinsics::sum(curr_active);
+        auto curr_active_h = curr_active.createHostCopy();
+        yakl::fence();
+        yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("probes to compute", num_active, 2);
+        i32 idx = 0;
+        for (int z = 0; z < curr_active_h.extent(0); ++z) {
+            for (int x = 0; x < curr_active_h.extent(1); ++x) {
+                if (curr_active_h(z, x)) {
+                    probes_to_compute_h(idx, 0) = x;
+                    probes_to_compute_h(idx, 1) = z;
+                    idx += 1;
+                }
+            }
+        }
+        auto probes_to_compute = probes_to_compute_h.createDeviceCopy();
+        casc_state.probes_to_compute.emplace_back(probes_to_compute);
+        prev_active = curr_active;
+        fmt::println(
+            "C{} Active Probes {}/{} ({}%)",
+            cascade_idx,
+            num_active,
+            prev_active.extent(0)*prev_active.extent(1),
+            fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
+        );
+    }
 }
 
 FpConst3d final_cascade_to_J(
@@ -348,8 +465,8 @@ int main(int argc, char** argv) {
             .set_pool_grow_mb(config.mem_pool_grow_gb * 1024)
     );
 
-    State state;
     {
+        State state;
         // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if
         // not using an atmosphere
         init_state(&state, config);
@@ -383,7 +500,9 @@ int main(int argc, char** argv) {
 
             save_results(config, state.J);
         } else {
-
+            if (config.sparse_calculation) {
+                init_active_probes(state, &casc_state);
+            }
             compute_lte_pops(&state);
             const bool non_lte = config.mode == DexrtMode::NonLte;
             const bool conserve_charge = config.conserve_charge;
@@ -468,6 +587,39 @@ int main(int argc, char** argv) {
                     }
                     i += 1;
                 }
+                if (state.config.sparse_calculation) {
+                    state.config.sparse_calculation = false;
+                    fmt::println("Final FS (dense)");
+                    compute_nh0(state);
+                    state.J = FP(0.0);
+                    yakl::fence();
+                    for (
+                        int la_start = 0;
+                        la_start < waves.extent(0);
+                        la_start += state.c0_size.wave_batch
+                    ) {
+                        int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
+
+                        bool lambda_iterate = i < initial_lambda_iterations;
+                        fs_fn(
+                            state,
+                            casc_state,
+                            lambda_iterate,
+                            la_start,
+                            la_end
+                        );
+                        final_cascade_to_J(
+                            casc_state.i_cascades[0],
+                            state.c0_size,
+                            state.J,
+                            state.incl_quad,
+                            la_start,
+                            la_end
+                        );
+                    }
+                    yakl::fence();
+                    state.config.sparse_calculation = true;
+                }
             } else {
                 state.J = FP(0.0);
                 compute_nh0(state);
@@ -506,8 +658,8 @@ int main(int argc, char** argv) {
                 state.atmos.nh_tot
             );
         }
+        finalize_state(&state);
     }
-    finalize_state(&state);
     yakl::finalize();
 #ifdef HAVE_MPI
     MPI_Finalize();
