@@ -1,4 +1,4 @@
-from dexrt_py.dexrt.config_schemas.dexrt import DexrtNonLteConfig, AtomicModelConfig
+from dexrt_py.dexrt.config_schemas.dexrt import DexrtNonLteConfig, AtomicModelConfig, DexrtLteConfig
 from dexrt_py.dexrt.write_config import write_config
 
 if __name__ == "__main__":
@@ -35,3 +35,15 @@ if __name__ == "__main__":
 
     write_config(config_dense, "build/snow_khi_dense.yaml")
     # 18 iter: 20m43s
+
+    config_lte = DexrtLteConfig(
+        atmos_path="snow_atmos_steeper_10Mm.nc",
+        output_path="snow_khi_10Mm_steeper_CaII_lte.nc",
+        atoms={
+            "Ca": AtomicModelConfig(
+                path="../tests/test_CaII.yaml"
+            )
+        },
+        boundary_type="Promweaver",
+    )
+    write_config(config_lte, "build/snow_khi_lte.yaml")

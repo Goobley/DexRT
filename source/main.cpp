@@ -144,8 +144,10 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     if (nc.varExists("voxel_scale")) {
         nc.read(voxel_scale, "voxel_scale");
     }
-
+    st->atmos.voxel_scale = voxel_scale;
     st->given_state.voxel_scale = voxel_scale;
+    fmt::println("Scale: {} m", st->atmos.voxel_scale);
+
 #ifdef DEXRT_SINGLE_PREC
     st->given_state.emis = eta.createDeviceCopy();
     st->given_state.opac = chi.createDeviceCopy();
@@ -170,7 +172,16 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
         }
     )
     yakl::fence();
+    st->given_state.emis = emis;
+    st->given_state.opac = opac;
 #endif
+
+    // NOTE(cmo): The raymarcher checks whether cells are active, we could remove, but this is a mode used infrequently, so set everything active.
+    st->active = yakl::Array<bool, 2, yakl::memDevice>("active cells", eta.extent(0), eta.extent(1));
+    st->active = true;
+    st->J = Fp3d("J", wave_dim, z_dim, x_dim);
+    st->J = FP(0.0);
+    yakl::fence();
 
     // NOTE(cmo): Only zero boundaries are supported here.
     st->boundary = BoundaryType::Zero;
@@ -241,6 +252,9 @@ void finalize_state(State* state) {
 
 void init_active_probes(const State& state, CascadeState* casc) {
     // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if
+    // Really this function is backwards. We can loop over each probe of i+1 and
+    // check the dependents in i, in parallel. The merge process remains the
+    // same.
     // NOTE(cmo): Active probes in c_0
     CascadeState& casc_state = *casc;
     auto& active_bool = state.active;
@@ -416,20 +430,20 @@ void save_results(
     if (wavelengths.initialized()) {
         nc.write(wavelengths, "wavelength", {"wavelength"});
     }
+    if (eta.initialized()) {
+        fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
+        nc.write(eta, "eta", {"z", "x", "wave_batch"});
+    }
+    if (chi.initialized()) {
+        nc.write(chi, "chi", {"z", "x", "wave_batch"});
+    }
+    if (casc.initialized()) {
+        nc.write(casc, "cascade", {"cascade_shape"});
+    }
 
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
-        if (eta.initialized()) {
-            fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
-            nc.write(eta, "eta", {"z", "x", "wave_batch"});
-        }
-        if (chi.initialized()) {
-            nc.write(chi, "chi", {"z", "x", "wave_batch"});
-        }
         if (pops.initialized()) {
             nc.write(pops, "pops", {"level", "z", "x"});
-        }
-        if (casc.initialized()) {
-            nc.write(casc, "cascade", {"cascade_shape"});
         }
         if (alo.initialized()) {
             nc.write(alo, "alo", {"z", "x", "dir", "wave_batch", "incl"});
@@ -498,7 +512,17 @@ int main(int argc, char** argv) {
                 );
             }
 
-            save_results(config, state.J);
+            Fp1d dummy_wavelengths;
+            Fp3d dummy_pops;
+            save_results(
+                config,
+                state.J,
+                dummy_wavelengths,
+                casc_state.eta,
+                casc_state.chi,
+                dummy_pops,
+                casc_state.i_cascades[0]
+            );
         } else {
             if (config.sparse_calculation) {
                 init_active_probes(state, &casc_state);

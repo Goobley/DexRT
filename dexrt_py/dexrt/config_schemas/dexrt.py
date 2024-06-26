@@ -17,7 +17,7 @@ class DexrtConfig(BaseModel):
 
 class DexrtLteConfig(DexrtConfig):
     mode: Literal["Lte"] = "Lte"
-    sparse_calculation: bool = True
+    sparse_calculation: bool = False
     threshold_temperature: float = 250e3
     atoms: Dict[str, AtomicModelConfig]
     boundary_type: Union[Literal["Zero"], Literal["Promweaver"]]

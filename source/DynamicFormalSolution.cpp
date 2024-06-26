@@ -327,13 +327,23 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         );
         yakl::fence();
     }
-    cascade_i_25d<RcModeAlo>(
-        state,
-        casc_state,
-        0,
-        la_start,
-        la_end
-    );
+    if (state.alo.initialized()) {
+        cascade_i_25d<RcModeAlo>(
+            state,
+            casc_state,
+            0,
+            la_start,
+            la_end
+        );
+    } else {
+        cascade_i_25d<RcModeNoBc>(
+            state,
+            casc_state,
+            0,
+            la_start,
+            la_end
+        );
+    }
     yakl::fence();
     if (state.alo.initialized()) {
         // NOTE(cmo): Add terms to Gamma
