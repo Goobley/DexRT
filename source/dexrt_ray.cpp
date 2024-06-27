@@ -16,6 +16,8 @@
 #include "JasPP.hpp"
 
 struct RayConfig {
+    fp_t mem_pool_initial_gb = FP(2.0);
+    fp_t mem_pool_grow_gb = FP(1.4);
     std::string dexrt_config_path;
     std::string ray_output_path;
     std::vector<fp_t> muz;
@@ -45,6 +47,15 @@ struct DexRayState {
     Fp2d ray_tau; // [wavelength, pos]
     Fp2d eta;
     Fp2d chi;
+
+    // NOTE(cmo): Depth-data output, big, and only allocated if needed
+    yakl::Array<i64, 1, yakl::memDevice> num_steps;
+    Fp2d pos; // Depth, locations after end of ray are padded with nan [num_steps, ray_idx]
+    Fp3d cont_fn; // [wavelength, num_steps, ray_idx]
+    Fp3d source_fn_depth;
+    Fp3d tau_depth;
+    Fp3d eta_depth;
+    Fp3d chi_depth;
 };
 
 template <typename Bc>
@@ -93,6 +104,16 @@ RayConfig parse_ray_config(const std::string& path) {
         config.output_eta_chi = file["output_eta_chi"].as<bool>();
     }
 
+    if (file["system"]) {
+        auto system = file["system"];
+        if (system["mem_pool_initial_gb"]) {
+            config.mem_pool_initial_gb = system["mem_pool_initial_gb"].as<fp_t>();
+        }
+        if (system["mem_pool_grow_gb"]) {
+            config.mem_pool_grow_gb = system["mem_pool_grow_gb"].as<fp_t>();
+        }
+    }
+
     config.dexrt = parse_dexrt_config(config.dexrt_config_path);
 
     auto require_key = [&] (const std::string& key) {
@@ -126,6 +147,23 @@ RayConfig parse_ray_config(const std::string& path) {
         throw std::runtime_error("muz and mux must be provided and have the same number of entries (non-zero).");
     }
 
+    // NOTE(cmo): Can't do this before yakl init, but we need to know pool params. Defer this. It's a bit messy.
+    // if (config.wavelength.size() == 0) {
+    //     yakl::Array<f32, 1, yakl::memHost> wavelengths;
+    //     yakl::SimpleNetCDF nc;
+    //     nc.open(config.dexrt.output_path, yakl::NETCDF_MODE_READ);
+    //     nc.read(wavelengths, "wavelength");
+    //     config.wavelength.reserve(wavelengths.extent(0));
+    //     for (int i = 0; i < wavelengths.extent(0); ++i) {
+    //         config.wavelength.push_back(wavelengths(i));
+    //     }
+    //     nc.close();
+    // }
+    return config;
+}
+
+void load_wavelength_if_missing(RayConfig* cfg) {
+    RayConfig& config = *cfg;
     if (config.wavelength.size() == 0) {
         yakl::Array<f32, 1, yakl::memHost> wavelengths;
         yakl::SimpleNetCDF nc;
@@ -137,7 +175,6 @@ RayConfig parse_ray_config(const std::string& path) {
         }
         nc.close();
     }
-    return config;
 }
 
 DexOutput load_dex_output(const std::string& path) {
@@ -361,8 +398,10 @@ YAKL_INLINE fp_t sample_bc(const Bc& bc, int la, vec2 pos, vec2 mu) {
 }
 
 template <typename Bc>
-void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
+void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
+    DexRayStateAndBc<Bc>& state = *st;
     JasUnpack(state.state, atmos, pops, ray_set, ray_I, ray_tau, eta, chi, adata, phi, nh_lte);
+    JasUnpack(state.state, num_steps, pos, cont_fn, source_fn_depth, tau_depth, eta_depth, chi_depth);
     auto& bc(state.bc);
 
     FlatAtmosphere<fp_t> flatmos = flatten(atmos);
@@ -419,6 +458,123 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
         );
         yakl::fence();
 
+        if (wave == 0 && (config.output_cfn || config.output_eta_chi)) {
+            num_steps = std::remove_reference_t<decltype(num_steps)>(
+                "num steps",
+                ray_set.start_coord.extent(0)
+            );
+            i64 num_rays = ray_set.start_coord.extent(0);
+            parallel_for(
+                "Compute max steps",
+                SimpleBounds<1>(num_rays),
+                YAKL_LAMBDA (int ray_idx) {
+                    vec2 start_pos;
+                    start_pos(0) = ray_set.start_coord(ray_idx, 0);
+                    start_pos(1) = ray_set.start_coord(ray_idx, 1);
+
+                    vec2 flatland_mu;
+                    fp_t flatland_mu_norm = std::sqrt(square(ray_set.mu(0)) + square(ray_set.mu(2)));
+                    flatland_mu(0) = ray_set.mu(0) / flatland_mu_norm;
+                    flatland_mu(1) = ray_set.mu(2) / flatland_mu_norm;
+
+                    fp_t max_dim = std::max(fp_t(atmos.temperature.extent(0)), fp_t(atmos.temperature.extent(1)));
+                    vec2 end_pos;
+                    end_pos(0) = start_pos(0) + flatland_mu(0) * FP(10.0) * max_dim;
+                    end_pos(1) = start_pos(1) + flatland_mu(1) * FP(10.0) * max_dim;
+
+                    vec2 box_x;
+                    box_x(0) = FP(0.0);
+                    box_x(1) = fp_t(atmos.temperature.extent(1));
+                    vec2 box_z;
+                    box_z(0) = FP(0.0);
+                    box_z(1) = fp_t(atmos.temperature.extent(0));
+
+                    ivec2 domain_size;
+                    domain_size(0) = atmos.temperature.extent(1);
+                    domain_size(1) = atmos.temperature.extent(0);
+                    auto marcher = RayMarch2d_new(
+                        start_pos,
+                        end_pos,
+                        domain_size
+                    );
+
+                    if (!marcher) {
+                        num_steps(ray_idx) = 0;
+                        return;
+                    }
+
+                    RayMarchState2d s = *marcher;
+                    i64 step_count = 0;
+                    do {
+                        const auto& sample_coord(s.curr_coord);
+                        if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
+                            break;
+                        }
+                        if (sample_coord(1) < 0 || sample_coord(1) >= domain_size(1)) {
+                            break;
+                        }
+                        step_count += 1;
+                    } while (next_intersection(&s));
+
+                    num_steps(ray_idx) = step_count;
+                }
+            );
+            yakl::fence();
+
+            i64 max_steps = yakl::intrinsics::maxval(num_steps);
+            fmt::println(
+                "Num rays: {}, max steps: {}, product: {}k",
+                num_rays,
+                max_steps,
+                fp_t(num_rays * max_steps) / FP(1024.0)
+            );
+            pos = Fp2d("ray coord", max_steps, num_rays);
+            pos = std::nanf("");
+            if (config.output_cfn) {
+                cont_fn = Fp3d(
+                    "cont fn",
+                    ray_set.wavelength.extent(0),
+                    max_steps,
+                    num_rays
+                );
+                source_fn_depth = Fp3d(
+                    "source fn",
+                    ray_set.wavelength.extent(0),
+                    max_steps,
+                    num_rays
+                );
+                tau_depth = Fp3d(
+                    "tau depth",
+                    ray_set.wavelength.extent(0),
+                    max_steps,
+                    num_rays
+                );
+                cont_fn = std::nanf("");
+                source_fn_depth = std::nanf("");
+                tau_depth = std::nanf("");
+            }
+            if (config.output_eta_chi) {
+                eta_depth = Fp3d(
+                    "eta depth",
+                    ray_set.wavelength.extent(0),
+                    max_steps,
+                    num_rays
+                );
+                chi_depth = Fp3d(
+                    "chi depth",
+                    ray_set.wavelength.extent(0),
+                    max_steps,
+                    num_rays
+                );
+                eta_depth = std::nanf("");
+                chi_depth = std::nanf("");
+            }
+            yakl::fence();
+        }
+
+        const bool output_cfn = config.output_cfn;
+        const bool output_eta_chi = config.output_eta_chi;
+
         parallel_for(
             "Trace Rays (front-to-back)",
             SimpleBounds<1>(ray_set.start_coord.extent(0)),
@@ -473,6 +629,7 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
                 RayMarchState2d s = *marcher;
                 const fp_t distance_factor = atmos.voxel_scale / std::sqrt(FP(1.0) - square(ray_set.mu(1)));
 
+                i64 step_idx = 0;
                 do {
                     const auto& sample_coord(s.curr_coord);
                     if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
@@ -491,6 +648,22 @@ void compute_ray_intensity(const DexRayStateAndBc<Bc>& state) {
                     fp_t local_I = one_m_edt * source_fn;
                     I += cumulative_trans * local_I;
                     cumulative_tau += tau;
+                    if (output_cfn || output_eta_chi) {
+                        if (wave == 0) {
+                            pos(step_idx, ray_idx) = s.t;
+                        }
+
+                        if (output_cfn) {
+                            source_fn_depth(wave, step_idx, ray_idx) = source_fn;
+                            tau_depth(wave, step_idx, ray_idx) = cumulative_tau;
+                            cont_fn(wave, step_idx, ray_idx) = eta_s * cumulative_trans;
+                        }
+                        if (output_eta_chi) {
+                            eta_depth(wave, step_idx, ray_idx) = eta_s;
+                            chi_depth(wave, step_idx, ray_idx) = chi_s;
+                        }
+                    }
+                    step_idx += 1;
                 } while (next_intersection(&s));
 
                 // NOTE(cmo): Check BC
@@ -531,11 +704,31 @@ yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
     return nc;
 }
 
-void write_output_plane(yakl::SimpleNetCDF& nc, const DexRayState& state, int mu_idx) {
+void write_output_plane(
+    yakl::SimpleNetCDF& nc,
+    const DexRayState& state,
+    const RayConfig& config,
+    int mu_idx
+) {
     std::string ray_idx = fmt::format("rays_{}", mu_idx);
     nc.write(state.ray_I, fmt::format("I_{}", mu_idx), {"wavelength", ray_idx});
     nc.write(state.ray_tau, fmt::format("tau_{}", mu_idx), {"wavelength", ray_idx});
     nc.write(state.ray_set.start_coord, fmt::format("ray_start_{}", mu_idx), {ray_idx, "2d-space"});
+
+    if (config.output_cfn || config.output_eta_chi) {
+        std::string num_steps = fmt::format("num_steps_{}", mu_idx);
+        nc.write(state.num_steps, fmt::format("rays_{}_num_steps", mu_idx), {ray_idx});
+        nc.write(state.pos, fmt::format("rays_{}_pos", mu_idx), {num_steps, ray_idx});
+        if (config.output_cfn) {
+            nc.write(state.cont_fn, fmt::format("rays_{}_cont_fn", mu_idx), {"wavelength", num_steps, ray_idx});
+            nc.write(state.source_fn_depth, fmt::format("rays_{}_source_fn", mu_idx), {"wavelength", num_steps, ray_idx});
+            nc.write(state.tau_depth, fmt::format("rays_{}_tau", mu_idx), {"wavelength", num_steps, ray_idx});
+        }
+        if (config.output_eta_chi) {
+            nc.write(state.eta_depth, fmt::format("rays_{}_eta", mu_idx), {"wavelength", num_steps, ray_idx});
+            nc.write(state.chi_depth, fmt::format("rays_{}_chi", mu_idx), {"wavelength", num_steps, ray_idx});
+        }
+    }
 }
 
 
@@ -549,9 +742,14 @@ int main(int argc, const char* argv[]) {
 
     program.parse_args(argc, argv);
 
-    yakl::init();
+    RayConfig config = parse_ray_config(program.get<std::string>("--config"));
+    yakl::init(
+        yakl::InitConfig()
+            .set_pool_initial_mb(config.mem_pool_initial_gb * 1024)
+            .set_pool_grow_mb(config.mem_pool_grow_gb * 1024)
+    );
     {
-        RayConfig config = parse_ray_config(program.get<std::string>("--config"));
+        load_wavelength_if_missing(&config);
         if (config.dexrt.mode == DexrtMode::GivenFs) {
             throw std::runtime_error(fmt::format("Models run in GivenFs mode not supported by {}", argv[0]));
         }
@@ -623,8 +821,9 @@ int main(int argc, const char* argv[]) {
                 .state = state,
                 .bc = pw_bc
             };
-            compute_ray_intensity(ray_state);
-            write_output_plane(out, state, mu);
+            compute_ray_intensity(&ray_state, config);
+            // NOTE(cmo): state isn't captured by reference (the arrays are), so if the depth data arrays are modified, this won't propagate back to the original state, so we pass ray_state.state.
+            write_output_plane(out, ray_state.state, config, mu);
         }
     }
     yakl::finalize();
