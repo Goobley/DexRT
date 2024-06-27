@@ -39,8 +39,13 @@ Features/ToDo
 - [x] Pressure conservation
 - [x] Config file/input flags
 - [ ] Pydantic objects for input files
+    - [x] Dexrt
+    - [ ] Ray
 - [x] Active atmosphere cells (temperature criterion)
-- [ ] Active probes (from C0 active cells)
+- [x] Active probes (from C0 active cells)
+- [ ] Save compiled params into output
+    - [ ] Add attributes to netcdf layer
+- [ ] Add groups to netcdf layer
 - [ ] Restart from snapshot
 - [ ] Embed git hash in build (https://jonathanhamberg.com/post/cmake-embedding-git-hash/)
 - [ ] PRD

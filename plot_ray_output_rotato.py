@@ -15,7 +15,7 @@ delta_lambda = 0.017
 delta_lambda = 0.082
 # outdir = Path("SnowKHIRay")
 # outdir = Path("Valeriia_a0500")
-outdir = Path("Valeriia_a0994")
+outdir = Path("Valeriia_a0500_1x")
 outdir.mkdir(parents=True, exist_ok=True)
 
 # atom_name = "Ca II"
@@ -64,12 +64,18 @@ def centres_to_edges(x):
     ])
 
 if __name__ == "__main__":
-    with open("build/dexrt_ray_91.yaml", "r") as f:
+    config_path = "dexrt_ray_valeriia_a0500_branch1_91.yaml"
+    with open(f"build/{config_path}", "r") as f:
         config = yaml.load(f, Loader=yaml.Loader)
 
-    atmos = netCDF4.Dataset("build/" + config["atmos_path"], "r")
-    dex_output = netCDF4.Dataset("build/" + config["dex_output_path"], "r")
-    ray_data = netCDF4.Dataset("build/ray_output.nc", "r")
+    ray_data = netCDF4.Dataset("build/" + config["ray_output_path"], "r")
+    dexrt_config_path = "build/" + config["dexrt_config_path"]
+
+    with open(dexrt_config_path, "r") as f:
+        dexrt_config = yaml.load(f, Loader=yaml.Loader)
+    atmos = netCDF4.Dataset("build/" + dexrt_config["atmos_path"], "r")
+    dex_output = netCDF4.Dataset("build/" + dexrt_config["output_path"], "r")
+
 
     voxel_scale = atmos["voxel_scale"][...] / 1e6
 

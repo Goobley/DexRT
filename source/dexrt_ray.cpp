@@ -16,15 +16,15 @@
 #include "JasPP.hpp"
 
 struct RayConfig {
-    std::string atmos_path;
-    std::string atom_path;
     std::string dexrt_config_path;
-    std::string dexrt_output_path;
     std::string ray_output_path;
     std::vector<fp_t> muz;
     std::vector<fp_t> mux;
     std::vector<fp_t> wavelength;
     bool rotate_aabb = true;
+    bool output_cfn = false;
+    bool output_eta_chi = false;
+    DexrtConfig dexrt;
 };
 
 template <int mem_space=yakl::memDevice>
@@ -72,24 +72,12 @@ struct LineSeg {
 
 RayConfig parse_ray_config(const std::string& path) {
     RayConfig config;
-    config.atmos_path = "atmos.nc";
-    config.atom_path = "../tests/test_CaII.yaml";
     config.dexrt_config_path = "dexrt.yaml";
-    config.dexrt_output_path = "output.nc";
     config.ray_output_path = "ray_output.nc";
 
     YAML::Node file = YAML::LoadFile(path);
-    if (file["atmos_path"]) {
-        config.atmos_path = file["atmos_path"].as<std::string>();
-    }
-    if (file["atom_path"]) {
-        config.atom_path = file["atom_path"].as<std::string>();
-    }
     if (file["dexrt_config_path"]) {
         config.dexrt_config_path = file["dexrt_config_path"].as<std::string>();
-    }
-    if (file["dexrt_output_path"]) {
-        config.dexrt_output_path = file["dexrt_output_path"].as<std::string>();
     }
     if (file["ray_output_path"]) {
         config.ray_output_path = file["ray_output_path"].as<std::string>();
@@ -98,6 +86,14 @@ RayConfig parse_ray_config(const std::string& path) {
     if (file["rotate_aabb"]) {
         config.rotate_aabb = file["rotate_aabb"].as<bool>();
     }
+    if (file["output_cfn"]) {
+        config.output_cfn = file["output_cfn"].as<bool>();
+    }
+    if (file["output_eta_chi"]) {
+        config.output_eta_chi = file["output_eta_chi"].as<bool>();
+    }
+
+    config.dexrt = parse_dexrt_config(config.dexrt_config_path);
 
     auto require_key = [&] (const std::string& key) {
         if (!file[key]) {
@@ -133,7 +129,7 @@ RayConfig parse_ray_config(const std::string& path) {
     if (config.wavelength.size() == 0) {
         yakl::Array<f32, 1, yakl::memHost> wavelengths;
         yakl::SimpleNetCDF nc;
-        nc.open(config.dexrt_output_path, yakl::NETCDF_MODE_READ);
+        nc.open(config.dexrt.output_path, yakl::NETCDF_MODE_READ);
         nc.read(wavelengths, "wavelength");
         config.wavelength.reserve(wavelengths.extent(0));
         for (int i = 0; i < wavelengths.extent(0); ++i) {
@@ -556,20 +552,22 @@ int main(int argc, const char* argv[]) {
     yakl::init();
     {
         RayConfig config = parse_ray_config(program.get<std::string>("--config"));
-        DexrtConfig dexrt_config = parse_dexrt_config(config.dexrt_config_path);
-        if (dexrt_config.mode == DexrtMode::GivenFs) {
+        if (config.dexrt.mode == DexrtMode::GivenFs) {
             throw std::runtime_error(fmt::format("Models run in GivenFs mode not supported by {}", argv[0]));
         }
-        if (dexrt_config.boundary != BoundaryType::Promweaver) {
+        if (config.dexrt.boundary != BoundaryType::Promweaver) {
             throw std::runtime_error(fmt::format("Only promweaver boundaries are supported by {}", argv[0]));
         }
-        Atmosphere atmos = load_atmos(config.atmos_path);
-        update_atmosphere(config.dexrt_output_path, &atmos);
-        // TODO(cmo): Load from the dexrt_config
-        ModelAtom<f64> CaII = parse_crtaf_model<f64>("../tests/test_CaII.yaml");
-        ModelAtom<f64> H = parse_crtaf_model<f64>("../tests/H_4.yaml");
-        AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>({H, CaII});
-        DexOutput model_output = load_dex_output(config.dexrt_output_path);
+        Atmosphere atmos = load_atmos(config.dexrt.atmos_path);
+        update_atmosphere(config.dexrt.output_path, &atmos);
+        std::vector<ModelAtom<f64>> crtaf_models;
+        // TODO(cmo): Override atoms in ray config
+        crtaf_models.reserve(config.dexrt.atom_paths.size());
+        for (auto p : config.dexrt.atom_paths) {
+            crtaf_models.emplace_back(parse_crtaf_model<f64>(p));
+        }
+        AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
+        DexOutput model_output = load_dex_output(config.dexrt.output_path);
 
         DexRayState state{
             .atmos = atmos,
@@ -599,7 +597,12 @@ int main(int argc, const char* argv[]) {
         for (int mu = 0; mu < config.muz.size(); ++mu) {
             state.ray_set = compute_ray_set<yakl::memDevice>(config, atmos, mu);
             // TODO(cmo): Hoist this if possible
-            PwBc<> pw_bc = load_bc(config.atmos_path, state.ray_set.wavelength, dexrt_config.boundary);
+            PwBc<> pw_bc = load_bc(
+                config.dexrt.atmos_path,
+                state.ray_set.wavelength,
+                config.dexrt.boundary
+            );
+
             if (
                 !state.ray_I.initialized()
                 || (state.ray_I.extent(0) != state.ray_set.wavelength.extent(0))
