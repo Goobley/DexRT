@@ -958,6 +958,7 @@ inline void compute_lte_pops(State* state, const Fp3d shared_pops) {
     }
 }
 
+#ifdef DEXRT_USE_MAGMA
 template <typename T=fp_t>
 inline fp_t stat_eq(State* state) {
     fp_t global_max_change = FP(0.0);
@@ -1209,6 +1210,10 @@ inline fp_t stat_eq(State* state) {
     }
     return global_max_change;
 }
+#else
+template <typename T=fp_t>
+inline fp_t stat_eq(State* state) { return FP(0.0); }
+#endif
 
 inline void compute_nh0(const State& state) {
     const auto& nh0 = state.atmos.nh0;

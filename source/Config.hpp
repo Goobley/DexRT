@@ -2,6 +2,7 @@
 #define DEXRT_CONFIG_HPP
 #include "YAKL.h"
 #include "AlwaysFalse.hpp"
+#include <cassert>
 
 #define DEXRT_SINGLE_PREC
 #ifdef DEXRT_SINGLE_PREC
@@ -39,7 +40,7 @@ constexpr bool PREAVERAGE = false;
 // constexpr bool USE_MIPMAPS = false;
 // constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
 
-constexpr bool PINGPONG_BUFFERS = false;
+constexpr bool PINGPONG_BUFFERS = true;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 // constexpr bool USE_BC = true;
@@ -107,6 +108,7 @@ yakl::SArray<fp_t, 1, NumIncl> get_incl_weights() {
 
 #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
 #define DEXRT_USE_MAGMA
+#include <magma_v2.h>
 #endif
 
 #else

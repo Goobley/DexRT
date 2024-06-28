@@ -1,6 +1,5 @@
 #include <math.h>
 #include <limits>
-#include <magma_v2.h>
 #include "Config.hpp"
 #include "Types.hpp"
 #include "State.hpp"

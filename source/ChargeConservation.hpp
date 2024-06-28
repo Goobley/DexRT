@@ -6,6 +6,7 @@
 #include "Collisions.hpp"
 #include "GammaMatrix.hpp"
 
+#ifdef DEXRT_USE_MAGMA
 template <typename T=fp_t>
 inline fp_t nr_post_update(State* state) {
     constexpr bool print_debug = false;
@@ -432,6 +433,10 @@ inline fp_t nr_post_update(State* state) {
     );
     return max_change;
 }
+#else
+template <typename T=fp_t>
+inline fp_t nr_post_update(State* state) { return FP(0.0); };
+#endif
 
 
 
