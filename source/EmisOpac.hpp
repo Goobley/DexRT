@@ -457,7 +457,7 @@ YAKL_INLINE EmisOpac emis_opac(
         if (la_effective == la_effective_p) {
             t = FP(1.0);
         } else {
-            t = lambda - adata.wavelength(la_effective) / (adata.wavelength(la_effective_p) - adata.wavelength(la_effective));
+            t = (lambda - adata.wavelength(la_effective)) / (adata.wavelength(la_effective_p) - adata.wavelength(la_effective));
         }
 
         using namespace ConstantsFP;

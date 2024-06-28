@@ -440,8 +440,8 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                     .nh0 = nh0
                 };
 
-                auto eta_chi = emis_opac(
-                    EmisOpacSpecState<>{
+
+                auto state = EmisOpacSpecState<>{
                         .adata = adata,
                         .profile = phi,
                         .lambda = lambda,
@@ -449,7 +449,13 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                         .n_star_scratch = flat_n_star,
                         .k = k,
                         .atmos = local_atmos
-                    }
+                    };
+
+                if (wave == 0 && k % eta.extent(0) == 100 && k / eta.extent(0) == 100) {
+                    int break_here = 42;
+                }
+                auto eta_chi = emis_opac(
+                    state
                 );
 
                 flat_eta(k) = eta_chi.eta;

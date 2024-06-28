@@ -9,16 +9,15 @@ def make_atom():
     conv = LightweaverAtomConverter()
     model = conv.convert(H_6_atom())
     for l in model.lines:
-        l.wavelength_grid.q_core *= 3
-        l.wavelength_grid.q_wing *= 2
-        l.wavelength_grid.n_lambda //= 2
+        l.wavelength_grid.q_core *= 4
+        l.wavelength_grid.q_wing *= 5
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
-    new_lines = []
-    for l in model_simplified.lines:
-        if l.lambda0 < 1000.0 * u.nm:
-            new_lines.append(l)
-    model_simplified.lines = new_lines
+    # new_lines = []
+    # for l in model_simplified.lines:
+    #     if l.lambda0 < 1000.0 * u.nm:
+    #         new_lines.append(l)
+    # model_simplified.lines = new_lines
     return model_simplified
 
 def make_H_4():
