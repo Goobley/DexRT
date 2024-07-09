@@ -13,15 +13,15 @@ struct RaymarchParams {
     fp_t incl_weight;
     int la;
     vec3 offset;
-    yakl::Array<bool, 2, yakl::memDevice> active;
-    DynamicState dyn_state;
+    const yakl::Array<bool, 2, yakl::memDevice>& active;
+    const DynamicState& dyn_state;
 };
 
 template <
     int RcMode=0,
     typename Bc,
     typename DynamicState,
-    typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>>
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
 YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeStorage& dims,
@@ -91,7 +91,7 @@ DynamicState get_dyn_state(
     const Atmosphere& atmos,
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
-    const Fp3d& n,
+    const Fp2d& flat_pops,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
 ) {
     return DynamicState{};
@@ -106,7 +106,7 @@ Raymarch2dDynamicState get_dyn_state(
     const Atmosphere& atmos,
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
-    const Fp3d& n,
+    const Fp2d& flat_pops,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
@@ -122,7 +122,7 @@ Raymarch2dDynamicState get_dyn_state(
         .adata = adata,
         .profile = profile,
         .nh0 = atmos.nh0,
-        .n = n.reshape<2>(Dims(n.extent(0), n.extent(1) * n.extent(2))),
+        .n = flat_pops
     };
 }
 
@@ -174,6 +174,7 @@ void cascade_i_25d(
         .zero_bc = state.zero_bc,
         .pw_bc = state.pw_bc
     };
+    auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
 
     auto offset = get_offsets(atmos);
 
@@ -233,7 +234,7 @@ void cascade_i_25d(
                     atmos,
                     adata,
                     profile,
-                    pops,
+                    flat_pops,
                     dynamic_opac
                 );
                 RaymarchParams<DynamicState> params {
@@ -248,8 +249,12 @@ void cascade_i_25d(
 
                 RadianceInterval<AloType> ri;
                 auto& casc_dims = dims;
+#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
                 const auto boundaries = boundaries_h;
-                if constexpr (RcMode && RC_SAMPLE_BC) {
+#else
+                const auto& boundaries = boundaries_h;
+#endif
+                if constexpr (RcMode & RC_SAMPLE_BC) {
                     switch (boundaries.boundary) {
                         case BoundaryType::Zero: {
                             auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
@@ -272,6 +277,7 @@ void cascade_i_25d(
                             );
                         } break;
                         default: {
+                            sycl::_V1::ext::oneapi::experimental::printf(">>>>> %d <<<<<\n", int(boundaries.boundary));
                             assert(false && "Unknown BC type");
                         }
                     }

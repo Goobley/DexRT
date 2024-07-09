@@ -30,7 +30,7 @@ YAKL_INLINE fp_t chromo_ray_mu(fp_t mu, fp_t altitude_m) {
     // NOTE(cmo): Rearranged from (Rs + alt)^2 / Rs^2
     out_mu2 *= FP(1.0) + FP(2.0) * altitude_m / Rs + square(altitude_m / Rs);
     out_mu2 = FP(1.0) - out_mu2;
-    if (out_mu2 < 0.0) {
+    if (out_mu2 < FP(0.0)) {
         return FP(-1.0);
     }
     return std::sqrt(out_mu2);

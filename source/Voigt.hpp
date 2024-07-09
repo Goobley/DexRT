@@ -12,6 +12,11 @@ using DexComplex = cuda::std::complex<T>;
 #include <thrust/complex.h>
 template <typename T>
 using DexComplex = thrust::complex<T>;
+#elif defined(YAKL_ARCH_SYCL)
+#define SYCL_EXT_ONEAPI_COMPLEX
+#include <sycl/ext/oneapi/experimental/complex/complex.hpp>
+template <typename T>
+using DexComplex = sycl::_V1::ext::oneapi::experimental::complex<T>;
 #else
 #include <complex>
 template <typename T>
@@ -25,6 +30,8 @@ YAKL_INLINE T cexp(const T& x) {
     return cuda::std::exp(x);
 #elif defined(YAKL_ARCH_HIP)
     return thrust::exp(x);
+#elif defined(YAKL_ARCH_SYCL)
+    return sycl::_V1::ext::oneapi::experimental::exp(x);
 #else
     return std::exp(x);
 #endif
@@ -49,16 +56,16 @@ YAKL_INLINE DexComplex<T> humlicek_voigt(T a, T v) {
         return (z * (FPT(1.410474) + u*FPT(0.5641896))) / (FPT(0.75) + (u*(FPT(3.0) + u)));
     } else if (a >= FPT(0.195) * std::abs(v) - FPT(0.176)) {
         // Region III
-        return (FPT(16.4955) + 
-            z*(FPT(20.20933) + z*(FPT(11.96482) + z*(FPT(3.778987) + FPT(0.5642236)*z)))) / 
-          (FPT(16.4955) + z*(FPT(38.82363) + z*(FPT(39.27121) + z*(FPT(21.69274) + 
+        return (FPT(16.4955) +
+            z*(FPT(20.20933) + z*(FPT(11.96482) + z*(FPT(3.778987) + FPT(0.5642236)*z)))) /
+          (FPT(16.4955) + z*(FPT(38.82363) + z*(FPT(39.27121) + z*(FPT(21.69274) +
             z*(FPT(6.699398) + z)))));
     } else {
         // Region IV
         auto u = z * z;
-        return cexp(u) - (z*(FPT(36183.31) - u*(FPT(3321.99) - u*(FPT(1540.787) - 
-          u*(FPT(219.031) - u*(FPT(35.7668) - u*(FPT(1.320522) - u*FPT(0.56419))))))) / 
-          (FPT(32066.6) - u*(FPT(24322.84) - u*(FPT(9022.228) - u*(FPT(2186.181) - 
+        return cexp(u) - (z*(FPT(36183.31) - u*(FPT(3321.99) - u*(FPT(1540.787) -
+          u*(FPT(219.031) - u*(FPT(35.7668) - u*(FPT(1.320522) - u*FPT(0.56419))))))) /
+          (FPT(32066.6) - u*(FPT(24322.84) - u*(FPT(9022.228) - u*(FPT(2186.181) -
           u*(FPT(364.2191) - u*(FPT(61.57037) - u*(FPT(1.841439) - u))))))));
     }
 #undef FPT
@@ -107,7 +114,7 @@ struct VoigtProfile {
     VoigtProfile() {};
     VoigtProfile(Linspace _a_range, Linspace _v_range) :
         a_range(_a_range),
-        v_range(_v_range) 
+        v_range(_v_range)
     {
         a_step = (a_range.max - a_range.min) / T(a_range.n - 1);
         v_step = (v_range.max - v_range.min) / T(v_range.n - 1);
@@ -132,7 +139,7 @@ struct VoigtProfile {
         using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
         if constexpr (mem_space == yakl::memDevice) {
             parallel_for(
-                "compute voigt", 
+                "compute voigt",
                 SimpleBounds<2>(a_range.n, v_range.n),
                 YAKL_LAMBDA (int ia, int iv) {
                     mut_samples(ia, iv) = result_t::value(voigt_sample(ia, iv));

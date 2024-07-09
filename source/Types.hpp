@@ -106,8 +106,8 @@ struct DeviceCascadeState {
 
 template <typename Bc>
 struct CascadeStateAndBc {
-    DeviceCascadeState state;
-    Bc bc;
+    const DeviceCascadeState& state;
+    const Bc& bc;
 };
 
 struct Atmosphere {

@@ -103,6 +103,7 @@ YAKL_INLINE T interp(
     const yakl::Array<T, 1, mem_space>& y
 ) {
     // NOTE(cmo): The optimiser should eat this up
+    // Narrator: It did not (because of the mutex in OpenMP land)
     yakl::Array<T const, 1, mem_space> xx(x);
     yakl::Array<T const, 1, mem_space> yy(y);
     return interp(alpha, xx, yy);

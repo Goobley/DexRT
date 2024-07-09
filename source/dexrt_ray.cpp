@@ -323,8 +323,8 @@ RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos,
         int num_rays = int(std::ceil(seg_length));
         Fp2dHost ray_pos("ray_starts", num_rays, 2);
         for (int i = 0; i < num_rays; ++i) {
-            ray_pos(i, 0) = image_plane.start(0) + (0.5 + i) * image_plane_dir(0);
-            ray_pos(i, 1) = image_plane.start(1) + (0.5 + i) * image_plane_dir(1);
+            ray_pos(i, 0) = image_plane.start(0) + (FP(0.5) + i) * image_plane_dir(0);
+            ray_pos(i, 1) = image_plane.start(1) + (FP(0.5) + i) * image_plane_dir(1);
         }
         vec3 mu;
         mu(0) = -cfg.mux[mu_idx];
@@ -406,7 +406,8 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
 
     FlatAtmosphere<fp_t> flatmos = flatten(atmos);
     Fp2d flat_pops = pops.reshape(pops.extent(0), pops.extent(1) * pops.extent(2));
-    Fp2d flat_n_star = flat_pops.createDeviceObject();
+    // Fp2d flat_n_star = flat_pops.createDeviceObject();
+    Fp2d flat_n_star = Fp2d("flat_n_star", flat_pops.extent(0), flat_pops.extent(1));
     Fp1d flat_eta = eta.collapse();
     Fp1d flat_chi = chi.collapse();
 

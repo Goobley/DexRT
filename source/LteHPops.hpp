@@ -47,8 +47,8 @@ namespace LteHPopsDetail {
 */
 template <int mem_space=yakl::memDevice>
 struct HPartFn {
-    yakl::Array<fp_t, 1, mem_space> log_T;
-    yakl::Array<fp_t, 1, mem_space> h_partfn;
+    yakl::Array<const fp_t, 1, mem_space> log_T;
+    yakl::Array<const fp_t, 1, mem_space> h_partfn;
 
     HPartFn() {
         using namespace LteHPopsDetail;

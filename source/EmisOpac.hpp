@@ -51,7 +51,8 @@ struct EmisOpacState {
     const AtomicData<T, mem_space>& adata;
     const VoigtProfile<T, false, mem_space>& profile;
     int la;
-    const yakl::Array<fp_t const, 2, mem_space>& n;
+    // const yakl::Array<fp_t const, 2, mem_space>& n;
+    const yakl::Array<fp_t, 2, mem_space>& n;
     const yakl::Array<fp_t, 2, mem_space>& n_star_scratch = {};
     int64_t k;
     const AtmosPointParams& atmos;
@@ -66,7 +67,8 @@ struct EmisOpacSpecState {
     const AtomicData<T, mem_space>& adata;
     const VoigtProfile<T, false, mem_space>& profile;
     fp_t lambda;
-    const yakl::Array<fp_t const, 2, mem_space>& n;
+    // const yakl::Array<fp_t const, 2, mem_space>& n;
+    const yakl::Array<fp_t, 2, mem_space>& n;
     const yakl::Array<fp_t, 2, mem_space>& n_star_scratch;
     int64_t k;
     const AtmosPointParams& atmos;
@@ -146,7 +148,7 @@ YAKL_INLINE fp_t damping_from_gamma(fp_t gamma, fp_t lambda, fp_t dop_width) {
 template <int mem_space=yakl::memDevice>
 YAKL_INLINE fp_t gamma_from_broadening(
     const CompLine<fp_t>& line,
-    yakl::Array<ScaledExponentsBroadening<fp_t> const, 1, mem_space> broadeners,
+    const yakl::Array<ScaledExponentsBroadening<fp_t> const, 1, mem_space>& broadeners,
     fp_t temperature,
     fp_t ne,
     fp_t nh0

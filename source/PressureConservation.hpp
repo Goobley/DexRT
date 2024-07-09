@@ -39,7 +39,9 @@ inline fp_t simple_conserve_pressure(State* state) {
                 nh_tot_correction(k) = N_corr;
                 fp_t new_nhtot = flatmos.nh_tot(k) + nh_tot_correction(k);
                 if (new_nhtot < FP(0.0)) {
+#ifndef YAKL_ARCH_SYCL
                     printf("Nhtot driven negative @ k = %" PRId64 ", clamped to 1.0e10 m-3\n", k);
+#endif
                     new_nhtot = FP(1e10);
                 }
                 nh_tot_ratio(k) = new_nhtot / flatmos.nh_tot(k);

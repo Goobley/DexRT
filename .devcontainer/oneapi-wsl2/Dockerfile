@@ -1,10 +1,6 @@
-FROM nvcr.io/nvidia/nvhpc:24.5-devel-cuda12.4-ubuntu22.04
+FROM intel/hpckit:2024.2.0-1-devel-ubuntu22.04
 
-RUN apt update && apt install -y git curl libcurl4-openssl-dev
-
-WORKDIR /src/magma
-COPY magma/docker_setup.sh .
-RUN ./docker_setup.sh "-DMAGMA_ENABLE_CUDA=ON -DCMAKE_C_COMPILER=nvc -DCMAKE_CXX_COMPILER=nvc++"
+RUN apt update && apt install -y git curl libcurl4-openssl-dev m4 libz-dev
 
 WORKDIR /src/hdf5
 COPY hdf5/docker_setup.sh .

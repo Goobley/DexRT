@@ -40,7 +40,7 @@ namespace ConstantsFP {
     constexpr fp_t k_B = FP(1.380649e-23); // [J / K]
     constexpr fp_t k_B_eV =  FP(8.61733326e-05); // [eV / K]
     constexpr fp_t k_B_u = FP(8314.46262102654); // [J / (K kg)]
-    constexpr f64 pi = FP(3.14159265358979312);
+    constexpr fp_t pi = FP(3.14159265358979312);
     constexpr fp_t four_pi = FP(4.0) * pi;
     constexpr fp_t sqrt_pi = FP(1.7724538509055159);
     constexpr fp_t seaton_c0 = FP(8.629132180819956e-12); // [m2 J(1/2) K(1/2) / kg(1/2)]

@@ -259,7 +259,7 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(
     for (int d = 0; d < NumDim; ++d) {
         r.direction(d) *= inv_length;
         if (r.direction(d) > FP(0.0)) {
-            r.next_hit(d) = (r.curr_coord(d) + 1 - r.p0(d)) / r.direction(d);
+            r.next_hit(d) = fp_t(r.curr_coord(d) + 1 - r.p0(d)) / r.direction(d);
             r.step(d) = 1;
         } else if (r.direction(d) == FP(0.0)) {
             r.step(d) = 0;
@@ -268,7 +268,7 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(
             r.step(d) = -1;
             r.next_hit(d) = (r.curr_coord(d) - r.p0(d)) / r.direction(d);
         }
-        r.delta(d) = r.step(d) / r.direction(d);
+        r.delta(d) = fp_t(r.step(d)) / r.direction(d);
     }
 
     r.t = FP(0.0);
@@ -312,15 +312,15 @@ struct Raymarch2dArgs {
     int wave;
     int la;
     vec3 offset;
-    yakl::Array<bool, 2, yakl::memDevice> active;
-    DynamicState dyn_state;
+    const yakl::Array<bool, 2, yakl::memDevice>& active;
+    const DynamicState& dyn_state;
 };
 
 template <
     int RcMode=0,
     typename Bc,
     typename DynamicState,
-    typename Alo=std::conditional_t<RcMode & RC_COMPUTE_ALO, fp_t, DexEmpty>
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>
 >
 YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     const Raymarch2dArgs<Bc, DynamicState>& args
@@ -342,7 +342,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
         // NOTE(cmo): Check the ray is going up along z.
         if ((ray.dir(1) > FP(0.0)) && la != -1) {
             const fp_t cos_theta = incl;
-            const fp_t sin_theta = std::sqrt(1.0 - square(cos_theta));
+            const fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
             vec3 mu;
             mu(0) = -ray.dir(0) * sin_theta;
             mu(1) = cos_theta;
@@ -402,17 +402,19 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
                     .vel = vel,
                     .nh0 = dyn_state.nh0.get_data()[k]
                 };
-                EmisOpacState<fp_t> emis_opac_state{
-                    .adata = dyn_state.adata,
-                    .profile = dyn_state.profile,
-                    .la = la,
-                    .n = dyn_state.n,
-                    .k = k,
-                    .atmos = local_atmos,
-                    .active_set = dyn_state.active_set,
-                    .mode = EmisOpacMode::DynamicOnly
-                };
-                auto lines = emis_opac(emis_opac_state);
+                auto lines = emis_opac(
+                    EmisOpacState<fp_t>{
+                        .adata = dyn_state.adata,
+                        .profile = dyn_state.profile,
+                        .la = la,
+                        .n = dyn_state.n,
+                        .k = k,
+                        .atmos = local_atmos,
+                        .active_set = dyn_state.active_set,
+                        .mode = EmisOpacMode::DynamicOnly
+                    }
+                );
+
                 eta_s += lines.eta;
                 chi_s += lines.chi;
             }
