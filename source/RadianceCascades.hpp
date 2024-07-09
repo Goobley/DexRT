@@ -163,10 +163,9 @@ void cascade_i_25d(
     if constexpr (compute_alo) {
         dev_casc_state.alo = state.alo;
     }
-    constexpr bool preaverage = RcMode & RC_PREAVERAGE;
 
     CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
-    CascadeRays ray_set = cascade_compute_size<preaverage>(state.c0_size, cascade_idx);
+    CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
     int wave_batch = la_end - la_start;
 
     DeviceBoundaries boundaries_h{
@@ -216,6 +215,7 @@ void cascade_i_25d(
             int la = la_start + wave;
 
             RadianceInterval<AloType> average_ri{};
+            static_assert(false, "This isn't correct in the case of DIR_BY_DIR");
             const int num_rays_per_texel = ray_set.num_flat_dirs / dims.num_flat_dirs;
             const fp_t sample_weight = FP(1.0) / fp_t(num_rays_per_texel);
             for (int i = 0; i < num_rays_per_texel; ++i) {
@@ -303,7 +303,7 @@ void cascade_i_25d(
                 .incl=theta_idx,
                 .wave=wave
             };
-            i64 lin_idx = probe_linear_index(dims, probe_storage_idx);
+            i64 lin_idx = probe_linear_index<RcMode>(dims, probe_storage_idx);
             dev_casc_state.cascade_I(lin_idx) = average_ri.I;
             dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
             if constexpr (dev_compute_alo) {

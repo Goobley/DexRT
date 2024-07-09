@@ -25,6 +25,8 @@ void dynamic_compute_gamma(
     const auto& wphi = state.wphi.reshape<2>(Dims(state.wphi.extent(0), state.wphi.extent(1) * state.wphi.extent(2)));
     const bool sparse_calc = state.config.sparse_calculation;
 
+    constexpr int RcMode = RC_flags_storage();
+
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
         const auto flat_Gamma = Gamma.reshape<3>(Dims(
@@ -43,7 +45,7 @@ void dynamic_compute_gamma(
         int wave_batch = la_end - la_start;
 
         CascadeStorage dims = state.c0_size;
-        CascadeRays ray_set = cascade_compute_size<PREAVERAGE>(state.c0_size, 0);
+        CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
         const int num_cascades = casc_state.num_cascades;
 
         i64 num_active_space = flat_atmos.temperature.extent(0);
@@ -87,7 +89,7 @@ void dynamic_compute_gamma(
                     .wave=wave
                 };
                 RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
-                const fp_t intensity = probe_fetch(I, dims, probe_idx);
+                const fp_t intensity = probe_fetch<RcMode>(I, dims, probe_idx);
 
                 const int la = la_start + wave;
                 fp_t lambda = wavelength(la);

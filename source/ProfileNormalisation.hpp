@@ -19,8 +19,9 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
     const auto& profile = state.phi;
     const int num_cascades = casc_state.num_cascades;
 
+    constexpr int RcMode = RC_flags_storage();
     CascadeStorage dims = state.c0_size;
-    CascadeRays ray_set = cascade_compute_size<PREAVERAGE>(state.c0_size, 0);
+    CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
     // NOTE(cmo): This is pretty thrown-together
     parallel_for(
         "Compute wphi",

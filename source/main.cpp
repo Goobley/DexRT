@@ -223,7 +223,8 @@ void init_state (State* state, const DexrtConfig& config) {
         c0_rays = init_given_emis_opac(state, config);
     }
 
-    state->c0_size = cascade_rays_to_storage<PREAVERAGE>(c0_rays);
+    constexpr int RcMode = RC_flags_storage();
+    state->c0_size = cascade_rays_to_storage<RcMode>(c0_rays);
 
     init_cascade_sized_arrays(state, config);
 
@@ -386,6 +387,7 @@ FpConst3d final_cascade_to_J(
             wave_batch,
             c0_dims.num_incl),
         YAKL_LAMBDA (int z, int x, int phi_idx, int wave, int theta_idx) {
+            constexpr int RcMode = RC_flags_storage();
             fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
             int la = la_start + wave;
             ivec2 coord;
@@ -397,7 +399,7 @@ FpConst3d final_cascade_to_J(
                 .incl=theta_idx,
                 .wave=wave
             };
-            const fp_t sample = probe_fetch(final_cascade, c0_dims, idx);
+            const fp_t sample = probe_fetch<RcMode>(final_cascade, c0_dims, idx);
             yakl::atomicAdd(J(la, z, x), ray_weight * sample);
         }
     );

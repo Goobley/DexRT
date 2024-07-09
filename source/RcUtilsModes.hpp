@@ -7,13 +7,15 @@ constexpr int RC_DYNAMIC = 0x1;
 constexpr int RC_PREAVERAGE = 0x2;
 constexpr int RC_SAMPLE_BC = 0x4;
 constexpr int RC_COMPUTE_ALO = 0x8;
+constexpr int RC_DIR_BY_DIR = 0x10;
 
 struct RcFlags {
-    bool dynamic;
-    bool preaverage;
-    bool sample_bc;
-    bool compute_alo;
-};
+    bool dynamic = false;
+    bool preaverage = false;
+    bool sample_bc = false;
+    bool compute_alo = false;
+    bool dir_by_dir = false;
+} ;
 
 
 YAKL_INLINE constexpr int RC_flags_pack(const RcFlags& flags) {
@@ -30,7 +32,18 @@ YAKL_INLINE constexpr int RC_flags_pack(const RcFlags& flags) {
     if (flags.compute_alo) {
         flag |= RC_COMPUTE_ALO;
     }
+    if (flags.dir_by_dir) {
+        flag |= RC_DIR_BY_DIR;
+    }
     return flag;
+}
+
+/// Returns the packed RC flags that affect cascade storage (i.e. known at compile time)
+YAKL_INLINE constexpr int RC_flags_storage() {
+    return RC_flags_pack(RcFlags{
+        .preaverage=PREAVERAGE,
+        .dir_by_dir=DIR_BY_DIR
+    });
 }
 
 YAKL_INLINE CascadeStorage cascade_size(const CascadeStorage& c0, int n) {
@@ -53,12 +66,12 @@ YAKL_INLINE CascadeRays cascade_compute_size(const CascadeRays& c0, int n) {
     return c;
 }
 
-template <bool Preaverage>
+template <int RcMode>
 YAKL_INLINE CascadeRays cascade_compute_size(const CascadeStorage& c0, int n) {
     CascadeRays c;
     c.num_probes(0) = std::max(1, (c0.num_probes(0) >> n));
     c.num_probes(1) = std::max(1, (c0.num_probes(1) >> n));
-    if constexpr (Preaverage) {
+    if constexpr ((RcMode & RC_PREAVERAGE) || (RcMode & RC_DIR_BY_DIR)) {
         c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * (n + 1)));
     } else {
         c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
@@ -68,12 +81,12 @@ YAKL_INLINE CascadeRays cascade_compute_size(const CascadeStorage& c0, int n) {
     return c;
 }
 
-template <bool Preaverage>
+template <int RcMode>
 YAKL_INLINE CascadeStorage cascade_rays_to_storage(const CascadeRays& r) {
     CascadeStorage c;
     c.num_probes(0) = r.num_probes(0);
     c.num_probes(1) = r.num_probes(1);
-    if constexpr (Preaverage) {
+    if constexpr ((RcMode & RC_PREAVERAGE) || (RcMode & RC_DIR_BY_DIR)) {
         c.num_flat_dirs = r.num_flat_dirs / (1 << CASCADE_BRANCHING_FACTOR);
     } else {
         c.num_flat_dirs = r.num_flat_dirs;
@@ -181,6 +194,7 @@ struct ProbeIndex {
     int wave;
 };
 
+template <int RcMode>
 YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeIndex& probe) {
     // NOTE(cmo): probe_coord is stored as [u, v], but these are stored in the buffer as [v, u]
     // Current cascade storage is [v, u, ray, wave, incl] to give coalesced warp access
@@ -189,7 +203,14 @@ YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeIndex&
     i64 dim_mul = dims.num_incl;
     idx += dim_mul * probe.wave;
     dim_mul *= dims.wave_batch;
-    idx += dim_mul * probe.dir;
+
+    int dir = probe.dir;
+    if constexpr (RcMode & RC_PREAVERAGE) {
+        dir /= (1 << CASCADE_BRANCHING_FACTOR);
+    } else if constexpr (RcMode & RC_DIR_BY_DIR) {
+        dir = dir % (1 << CASCADE_BRANCHING_FACTOR);
+    }
+    idx += dim_mul * dir;
     dim_mul *= dims.num_flat_dirs;
     idx += dim_mul * probe.coord(0);
     dim_mul *= dims.num_probes(0);
@@ -197,14 +218,15 @@ YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeIndex&
     return idx;
 }
 
-template <bool Preaverage>
+template <int RcMode>
 YAKL_INLINE i64 probe_linear_index(const CascadeRays& dims, const ProbeIndex& probe) {
-    CascadeStorage storage = cascade_rays_to_storage<Preaverage>(dims);
-    return probe_linear_index(storage, probe);
+    CascadeStorage storage = cascade_rays_to_storage<RcMode>(dims);
+    return probe_linear_index<RcMode>(storage, probe);
 }
 
+template <int RcMode>
 YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeStorage& dims, const ProbeIndex& index) {
-    i64 lin_idx = probe_linear_index(dims, index);
+    i64 lin_idx = probe_linear_index<RcMode>(dims, index);
 // #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
 //     return __ldg(casc.data() + lin_idx);
 // #else
@@ -212,9 +234,9 @@ YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeStorage& dims, 
 // #endif
 }
 
-template <bool Preaverage>
+template <int RcMode>
 YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeRays& dims, const ProbeIndex& index) {
-    i64 lin_idx = probe_linear_index<Preaverage>(dims, index);
+    i64 lin_idx = probe_linear_index<RcMode>(dims, index);
 // #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
 //     return __ldg(casc.data() + lin_idx);
 // #else

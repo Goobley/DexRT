@@ -23,6 +23,8 @@ void static_compute_gamma(
     const auto flat_lte_pops = lte_scratch.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     const bool sparse_calc = state.config.sparse_calculation;
 
+    constexpr int RcMode = RC_flags_storage();
+
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
         const auto flat_Gamma = Gamma.reshape<3>(Dims(
@@ -82,7 +84,7 @@ void static_compute_gamma(
                     .incl=theta_idx,
                     .wave=wave
                 };
-                const fp_t intensity = probe_fetch(I, dims, probe_idx);
+                const fp_t intensity = probe_fetch<RcMode>(I, dims, probe_idx);
 
                 const int la = la_start + wave;
                 fp_t lambda = wavelength(la);
