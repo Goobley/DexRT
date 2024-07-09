@@ -277,7 +277,6 @@ void cascade_i_25d(
                             );
                         } break;
                         default: {
-                            sycl::_V1::ext::oneapi::experimental::printf(">>>>> %d <<<<<\n", int(boundaries.boundary));
                             assert(false && "Unknown BC type");
                         }
                     }

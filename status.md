@@ -45,8 +45,11 @@ Features/ToDo
 - [x] Active probes (from C0 active cells)
 - [ ] Save compiled params into output
     - [ ] Add attributes to netcdf layer
+- [ ] Control dexrt output
+- [ ] Allow loading populations into "lte" mode.
+- [ ] Avoid writing nonsense from non-active probes in C0 into J when pingponging
 - [ ] Add groups to netcdf layer
-- [ ] Restart from snapshot
+- [ ] Save/Restart from snapshot
 - [ ] Embed git hash in build (https://jonathanhamberg.com/post/cmake-embedding-git-hash/)
 - [ ] PRD
 - [ ] Sparse VDB-like grid

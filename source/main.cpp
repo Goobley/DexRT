@@ -656,7 +656,7 @@ int main(int argc, char** argv) {
                         waves(la_start),
                         waves(la_end-1)
                     );
-                    bool lambda_iterate = false;
+                    bool lambda_iterate = true;
                     fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
                     final_cascade_to_J(
                         casc_state.i_cascades[0],
