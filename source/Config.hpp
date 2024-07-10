@@ -34,7 +34,7 @@ constexpr bool LAST_CASCADE_TO_INFTY = true;
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
 
 constexpr bool PREAVERAGE = false;
-constexpr bool DIR_BY_DIR = true;
+constexpr bool DIR_BY_DIR = false;
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
 
 // constexpr bool BRANCH_RAYS = false;

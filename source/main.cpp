@@ -367,45 +367,6 @@ void init_active_probes(const State& state, CascadeState* casc) {
     }
 }
 
-FpConst3d final_cascade_to_J(
-    const FpConst1d& final_cascade,
-    const CascadeStorage& c0_dims,
-    const Fp3d& J,
-    const InclQuadrature incl_quad,
-    int la_start,
-    int la_end
-) {
-    const fp_t phi_weight = FP(1.0) / fp_t(c0_dims.num_flat_dirs);
-    int wave_batch = la_end - la_start;
-
-    parallel_for(
-        "final_cascade_to_J",
-        SimpleBounds<5>(
-            c0_dims.num_probes(1),
-            c0_dims.num_probes(0),
-            c0_dims.num_flat_dirs,
-            wave_batch,
-            c0_dims.num_incl),
-        YAKL_LAMBDA (int z, int x, int phi_idx, int wave, int theta_idx) {
-            constexpr int RcMode = RC_flags_storage();
-            fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
-            int la = la_start + wave;
-            ivec2 coord;
-            coord(0) = x;
-            coord(1) = z;
-            ProbeIndex idx{
-                .coord=coord,
-                .dir=phi_idx,
-                .incl=theta_idx,
-                .wave=wave
-            };
-            const fp_t sample = probe_fetch<RcMode>(final_cascade, c0_dims, idx);
-            yakl::atomicAdd(J(la, z, x), ray_weight * sample);
-        }
-    );
-    return J;
-}
-
 void save_results(
     const DexrtConfig& config,
     const FpConst3d& J,
@@ -503,14 +464,6 @@ int main(int argc, char** argv) {
                     la_start,
                     la_end
                 );
-                final_cascade_to_J(
-                    casc_state.i_cascades[0],
-                    state.c0_size,
-                    state.J,
-                    state.incl_quad,
-                    la_start,
-                    la_end
-                );
             }
 
             Fp1d dummy_wavelengths;
@@ -590,14 +543,6 @@ int main(int argc, char** argv) {
                             la_start,
                             la_end
                         );
-                        final_cascade_to_J(
-                            casc_state.i_cascades[0],
-                            state.c0_size,
-                            state.J,
-                            state.incl_quad,
-                            la_start,
-                            la_end
-                        );
                     }
                     yakl::fence();
                     fmt::println("Stat eq");
@@ -633,14 +578,6 @@ int main(int argc, char** argv) {
                             la_start,
                             la_end
                         );
-                        final_cascade_to_J(
-                            casc_state.i_cascades[0],
-                            state.c0_size,
-                            state.J,
-                            state.incl_quad,
-                            la_start,
-                            la_end
-                        );
                     }
                     yakl::fence();
                     state.config.sparse_calculation = true;
@@ -660,14 +597,6 @@ int main(int argc, char** argv) {
                     );
                     bool lambda_iterate = true;
                     fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
-                    final_cascade_to_J(
-                        casc_state.i_cascades[0],
-                        state.c0_size,
-                        state.J,
-                        state.incl_quad,
-                        la_start,
-                        la_end
-                    );
                 }
             }
             save_results(

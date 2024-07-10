@@ -6,14 +6,15 @@
 #include "GammaMatrix.hpp"
 #include "Atmosphere.hpp"
 #include "RcUtilsModes.hpp"
+#include "MergeToJ.hpp"
 
 void static_compute_gamma(
     const State& state,
     const CascadeState& casc_state,
-    int la_start,
-    int la_end,
-    const Fp3d& lte_scratch
+    const Fp3d& lte_scratch,
+    const CascadeCalcSubset& subset
 ) {
+    JasUnpack(subset, la_start, la_end, subset_idx);
     using namespace ConstantsFP;
     const auto flat_atmos = flatten<const fp_t>(state.atmos);
     const auto& adata = state.adata;
@@ -78,7 +79,7 @@ void static_compute_gamma(
                 ivec2 probe_coord;
                 probe_coord(0) = k % dims.num_probes(0);
                 probe_coord(1) = k / dims.num_probes(0);
-                const ProbeIndex probe_idx{
+                const ProbeStorageIndex probe_idx{
                     .coord=probe_coord,
                     .dir=phi_idx,
                     .incl=theta_idx,
@@ -99,7 +100,7 @@ void static_compute_gamma(
                 } else {
                     wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
                 }
-                const fp_t wl_ray_weight = wl_weight / fp_t(dims.num_flat_dirs);
+                const fp_t wl_ray_weight = wl_weight / fp_t(c0_dirs_to_average<RcMode>());
 
                 AtmosPointParams local_atmos;
                 local_atmos.temperature = flat_atmos.temperature(k);
@@ -263,77 +264,92 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bo
         state.alo = FP(0.0);
     }
     yakl::fence();
-    // NOTE(cmo): Compute RC FS
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
         .sample_bc = true,
-        .compute_alo = false
+        .compute_alo = false,
+        .dir_by_dir = DIR_BY_DIR
     });
     constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
-        .compute_alo = false
+        .compute_alo = false,
+        .dir_by_dir = DIR_BY_DIR
     });
     constexpr int RcModeAlo = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
-        .compute_alo = true
+        .compute_alo = true,
+        .dir_by_dir = DIR_BY_DIR
     });
-    cascade_i_25d<RcModeBc>(
-        state,
-        casc_state,
-        casc_state.num_cascades,
-        la_start,
-        la_end
-    );
-    yakl::fence();
-    for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
-        cascade_i_25d<RcModeNoBc>(
+    constexpr int RcStorage = RC_flags_storage();
+
+    // NOTE(cmo): Compute RC FS
+    constexpr int num_subets = subset_tasks_per_cascade<RcStorage>();
+    for (int subset_idx = 0; subset_idx < num_subets; ++subset_idx) {
+        CascadeCalcSubset subset{
+            .la_start=la_start,
+            .la_end=la_end,
+            .subset_idx=subset_idx
+        };
+        cascade_i_25d<RcModeBc>(
             state,
             casc_state,
-            casc_idx,
+            casc_state.num_cascades,
+            subset
+        );
+        yakl::fence();
+        for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
+            cascade_i_25d<RcModeNoBc>(
+                state,
+                casc_state,
+                casc_idx,
+                subset
+            );
+            yakl::fence();
+        }
+        if (state.alo.initialized() && !lambda_iterate) {
+            cascade_i_25d<RcModeAlo>(
+                state,
+                casc_state,
+                0,
+                subset
+            );
+        } else {
+            cascade_i_25d<RcModeNoBc>(
+                state,
+                casc_state,
+                0,
+                subset
+            );
+        }
+        yakl::fence();
+        if (state.alo.initialized()) {
+            // NOTE(cmo): Add terms to Gamma
+            if (lambda_iterate) {
+                state.alo = FP(0.0);
+                yakl::fence();
+            }
+            static_compute_gamma(
+                state,
+                casc_state,
+                lte_scratch,
+                subset
+            );
+        }
+        merge_c0_to_J(
+            casc_state.i_cascades[0],
+            state.c0_size,
+            state.J,
+            state.incl_quad,
             la_start,
             la_end
         );
         yakl::fence();
     }
-    if (state.alo.initialized()) {
-        cascade_i_25d<RcModeAlo>(
-            state,
-            casc_state,
-            0,
-            la_start,
-            la_end
-        );
-    } else {
-        cascade_i_25d<RcModeNoBc>(
-            state,
-            casc_state,
-            0,
-            la_start,
-            la_end
-        );
-    }
-    yakl::fence();
-    if (state.alo.initialized()) {
-        // NOTE(cmo): Add terms to Gamma
-        if (lambda_iterate) {
-            state.alo = FP(0.0);
-            yakl::fence();
-        } else {
-            static_compute_gamma(
-                state,
-                casc_state,
-                la_start,
-                la_end,
-                lte_scratch
-            );
-        }
-    }
-    // NOTE(cmo): J is not computed in this function, but done in main for now
 }
 
 void static_formal_sol_given_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
@@ -360,36 +376,53 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         }
     );
     yakl::fence();
-    // NOTE(cmo): Compute RC FS
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
         .sample_bc = true,
-        .compute_alo = false
+        .compute_alo = false,
+        .dir_by_dir = DIR_BY_DIR
     });
     constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
-        .compute_alo = false
+        .compute_alo = false,
+        .dir_by_dir = DIR_BY_DIR
     });
-    cascade_i_25d<RcModeBc>(
-        state,
-        casc_state,
-        casc_state.num_cascades,
-        la_start,
-        la_end
-    );
-    yakl::fence();
-    for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 0; --casc_idx) {
-        cascade_i_25d<RcModeNoBc>(
+    constexpr int RcStorage = RC_flags_storage();
+    // NOTE(cmo): Compute RC FS
+    constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
+    for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
+        CascadeCalcSubset subset{
+            .la_start=la_start,
+            .la_end=la_end,
+            .subset_idx=subset_idx
+        };
+        cascade_i_25d<RcModeBc>(
             state,
             casc_state,
-            casc_idx,
+            casc_state.num_cascades,
+            subset
+        );
+        yakl::fence();
+        for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 0; --casc_idx) {
+            cascade_i_25d<RcModeNoBc>(
+                state,
+                casc_state,
+                casc_idx,
+                subset
+            );
+            yakl::fence();
+        }
+        merge_c0_to_J(
+            casc_state.i_cascades[0],
+            state.c0_size,
+            state.J,
+            state.incl_quad,
             la_start,
             la_end
         );
         yakl::fence();
     }
-    // NOTE(cmo): J is not computed in this function, but done in main for now
 }

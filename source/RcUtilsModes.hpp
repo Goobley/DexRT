@@ -11,10 +11,10 @@ constexpr int RC_DIR_BY_DIR = 0x10;
 
 struct RcFlags {
     bool dynamic = false;
-    bool preaverage = false;
+    bool preaverage = PREAVERAGE;
     bool sample_bc = false;
     bool compute_alo = false;
-    bool dir_by_dir = false;
+    bool dir_by_dir = DIR_BY_DIR;
 } ;
 
 
@@ -71,8 +71,10 @@ YAKL_INLINE CascadeRays cascade_compute_size(const CascadeStorage& c0, int n) {
     CascadeRays c;
     c.num_probes(0) = std::max(1, (c0.num_probes(0) >> n));
     c.num_probes(1) = std::max(1, (c0.num_probes(1) >> n));
-    if constexpr ((RcMode & RC_PREAVERAGE) || (RcMode & RC_DIR_BY_DIR)) {
+    if constexpr (RcMode & RC_PREAVERAGE) {
         c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * (n + 1)));
+    } else if constexpr  (RcMode & RC_DIR_BY_DIR) {
+        c.num_flat_dirs = (c0.num_flat_dirs * PROBE0_NUM_RAYS) * (1 << (CASCADE_BRANCHING_FACTOR * n));
     } else {
         c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
     }
@@ -86,14 +88,88 @@ YAKL_INLINE CascadeStorage cascade_rays_to_storage(const CascadeRays& r) {
     CascadeStorage c;
     c.num_probes(0) = r.num_probes(0);
     c.num_probes(1) = r.num_probes(1);
-    if constexpr ((RcMode & RC_PREAVERAGE) || (RcMode & RC_DIR_BY_DIR)) {
+    if constexpr (RcMode & RC_PREAVERAGE) {
         c.num_flat_dirs = r.num_flat_dirs / (1 << CASCADE_BRANCHING_FACTOR);
+    } else if constexpr (RcMode & RC_DIR_BY_DIR) {
+        c.num_flat_dirs = r.num_flat_dirs / PROBE0_NUM_RAYS;
     } else {
         c.num_flat_dirs = r.num_flat_dirs;
     }
     c.num_incl = r.num_incl;
     c.wave_batch = r.wave_batch;
     return c;
+}
+
+/// The number of rays to be computed for each texel in the cascade arrays.
+/// These are essentially used for preaveraging, where we store the 4 rays in
+/// one write to global (since they are always read as an averaged group).
+template <int RcMode>
+YAKL_INLINE constexpr int rays_per_stored_texel() {
+    if constexpr (RcMode & RC_PREAVERAGE) {
+        return (1 << CASCADE_BRANCHING_FACTOR);
+    } else {
+        return 1;
+    }
+}
+
+/// The number of upper ray directions to be loaded/averaged for each ray in the
+/// current cascade
+template <int RcMode>
+YAKL_INLINE constexpr int upper_texels_per_ray() {
+    if constexpr (RcMode & RC_PREAVERAGE) {
+        return 1;
+    } else {
+        return (1 << CASCADE_BRANCHING_FACTOR);
+    }
+}
+
+/// Number of flat directions to average in C0 merge to J.
+template <int RcMode>
+YAKL_INLINE constexpr int c0_dirs_to_average() {
+    if constexpr (RcMode & RC_PREAVERAGE) {
+        return PROBE0_NUM_RAYS / (1 << CASCADE_BRANCHING_FACTOR);
+    } else {
+        return PROBE0_NUM_RAYS;
+    }
+}
+
+/// The number of sub-tasks that need to be computed per cascade. Normally 1,
+/// but the number of c0 rays in the case of DIR_BY_DIR.
+template <int RcMode>
+YAKL_INLINE constexpr int subset_tasks_per_cascade() {
+    if constexpr (RcMode & RC_DIR_BY_DIR) {
+        return PROBE0_NUM_RAYS;
+    } else {
+        return 1;
+    }
+}
+
+template <int RcMode>
+YAKL_INLINE constexpr CascadeRaysSubset nth_rays_subset(const CascadeRays& rays, int n) {
+    if constexpr (RcMode & RC_DIR_BY_DIR) {
+        const int dirs_per_subset = rays.num_flat_dirs / PROBE0_NUM_RAYS;
+        return CascadeRaysSubset{
+            .start_probes=ivec2(0),
+            .num_probes=rays.num_probes,
+            .start_flat_dirs=n * dirs_per_subset,
+            .num_flat_dirs=dirs_per_subset,
+            .start_wave_batch=0,
+            .wave_batch=rays.wave_batch,
+            .start_incl=0,
+            .num_incl=rays.num_incl
+        };
+    } else {
+        return CascadeRaysSubset{
+            .start_probes=ivec2(0),
+            .num_probes=rays.num_probes,
+            .start_flat_dirs=0,
+            .num_flat_dirs=rays.num_flat_dirs,
+            .start_wave_batch=0,
+            .wave_batch=rays.wave_batch,
+            .start_incl=0,
+            .num_incl=rays.num_incl
+        };
+    }
 }
 
 
@@ -187,7 +263,16 @@ YAKL_INLINE ivec2 bilinear_offset(const BilinearCorner& bilin, const ivec2& num_
     assert(false);
 }
 
+/// The index of the desired _ray_ within the cascade, irrespective of storage layout.
 struct ProbeIndex {
+    ivec2 coord;
+    int dir;
+    int incl;
+    int wave;
+};
+
+/// The index of the desired _texel_ within the cascade, affected by storage layout.
+struct ProbeStorageIndex {
     ivec2 coord;
     int dir;
     int incl;
@@ -198,7 +283,6 @@ template <int RcMode>
 YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeIndex& probe) {
     // NOTE(cmo): probe_coord is stored as [u, v], but these are stored in the buffer as [v, u]
     // Current cascade storage is [v, u, ray, wave, incl] to give coalesced warp access
-
     i64 idx = probe.incl;
     i64 dim_mul = dims.num_incl;
     idx += dim_mul * probe.wave;
@@ -208,9 +292,25 @@ YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeIndex&
     if constexpr (RcMode & RC_PREAVERAGE) {
         dir /= (1 << CASCADE_BRANCHING_FACTOR);
     } else if constexpr (RcMode & RC_DIR_BY_DIR) {
-        dir = dir % (1 << CASCADE_BRANCHING_FACTOR);
+        dir = dir % dims.num_flat_dirs;
     }
     idx += dim_mul * dir;
+    dim_mul *= dims.num_flat_dirs;
+    idx += dim_mul * probe.coord(0);
+    dim_mul *= dims.num_probes(0);
+    idx += dim_mul * probe.coord(1);
+    return idx;
+}
+
+template <int RcMode>
+YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeStorageIndex& probe) {
+    // NOTE(cmo): probe_coord is stored as [u, v], but these are stored in the buffer as [v, u]
+    // Current cascade storage is [v, u, ray, wave, incl] to give coalesced warp access
+    i64 idx = probe.incl;
+    i64 dim_mul = dims.num_incl;
+    idx += dim_mul * probe.wave;
+    dim_mul *= dims.wave_batch;
+    idx += dim_mul * probe.dir;
     dim_mul *= dims.num_flat_dirs;
     idx += dim_mul * probe.coord(0);
     dim_mul *= dims.num_probes(0);
@@ -225,7 +325,7 @@ YAKL_INLINE i64 probe_linear_index(const CascadeRays& dims, const ProbeIndex& pr
 }
 
 template <int RcMode>
-YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeStorage& dims, const ProbeIndex& index) {
+YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeStorage& dims, const ProbeStorageIndex& index) {
     i64 lin_idx = probe_linear_index<RcMode>(dims, index);
 // #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
 //     return __ldg(casc.data() + lin_idx);

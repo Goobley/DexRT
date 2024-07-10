@@ -46,7 +46,7 @@ enum class DexrtMode {
     GivenFs,
 };
 
-// NOTE(cmo): The texel setup for a cascade
+/// The texel storage setup for a cascade
 struct CascadeStorage {
     ivec2 num_probes;
     int num_flat_dirs;
@@ -54,11 +54,24 @@ struct CascadeStorage {
     int num_incl;
 };
 
-// NOTE(cmo): The rays in a cascade
+/// The rays to be computed in a cascade
 struct CascadeRays {
     ivec2 num_probes;
     int num_flat_dirs;
     int wave_batch;
+    int num_incl;
+};
+
+/// The rays in the partition of a cascade we're computing. For all
+/// entries we compute [start, start+num)
+struct CascadeRaysSubset {
+    ivec2 start_probes;
+    ivec2 num_probes;
+    int start_flat_dirs;
+    int num_flat_dirs;
+    int start_wave_batch;
+    int wave_batch;
+    int start_incl;
     int num_incl;
 };
 
@@ -108,6 +121,12 @@ template <typename Bc>
 struct CascadeStateAndBc {
     const DeviceCascadeState& state;
     const Bc& bc;
+};
+
+struct CascadeCalcSubset {
+    int la_start = -1;
+    int la_end = -1;
+    int subset_idx = 0;
 };
 
 struct Atmosphere {
