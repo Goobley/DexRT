@@ -114,7 +114,7 @@ struct DeviceCascadeState {
     FpConst1d upper_tau;
     Fp3d eta; // [z, x, wave]
     Fp3d chi; // [z, x, wave]
-    Fp5d alo; // [z, x, phi, wave, theta]
+    Fp1d alo; /// [z, x, phi, wave, theta], but flattened. Index using Cascade operators (probe_lin_index) -- you need to fetch intensity at the same time anyway.
 };
 
 template <typename Bc>

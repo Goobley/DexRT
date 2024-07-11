@@ -32,8 +32,8 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
 
             const auto& line = adata.lines(kr);
             ivec2 probe_coord;
-            probe_coord(0) = k % dims.num_probes(1);
-            probe_coord(1) = k / dims.num_probes(1);
+            probe_coord(0) = k % dims.num_probes(0);
+            probe_coord(1) = k / dims.num_probes(0);
             AtmosPointParams local_atmos;
             local_atmos.temperature = flatmos.temperature(k);
             local_atmos.ne = flatmos.ne(k);
@@ -44,8 +44,8 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
             const fp_t dop_width = doppler_width(line.lambda0, adata.mass(line.atom), local_atmos.temperature, local_atmos.vturb);
             const fp_t gamma = gamma_from_broadening(line, adata.broadening, local_atmos.temperature, local_atmos.ne, local_atmos.nh0);
 
-            for (int phi_idx = 0; phi_idx < dims.num_flat_dirs; ++phi_idx) {
-                for (int theta_idx = 0; theta_idx < dims.num_incl; ++theta_idx) {
+            for (int phi_idx = 0; phi_idx < ray_set.num_flat_dirs; ++phi_idx) {
+                for (int theta_idx = 0; theta_idx < ray_set.num_incl; ++theta_idx) {
                     const ProbeIndex probe_idx{
                         .coord=probe_coord,
                         .dir=phi_idx,
@@ -66,7 +66,7 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
                             + flatmos.vz(k) * mu(2)
                     );
 
-                    const fp_t ray_weight = FP(1.0) / fp_t(dims.num_flat_dirs) * incl_quad.wmuy(theta_idx);
+                    const fp_t ray_weight = FP(1.0) / fp_t(ray_set.num_flat_dirs) * incl_quad.wmuy(theta_idx);
 
                     for (int la = 0; la < wavelength.extent(0); ++la) {
                         if (!line.is_active(la)) {

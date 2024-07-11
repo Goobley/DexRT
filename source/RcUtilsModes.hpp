@@ -299,6 +299,38 @@ YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeIndex&
     idx += dim_mul * probe.coord(0);
     dim_mul *= dims.num_probes(0);
     idx += dim_mul * probe.coord(1);
+#ifdef DEXRT_DEBUG
+    if (probe.incl >= dims.num_incl) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [incl] ({} >= {}).", probe.incl, dims.num_incl);
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [incl] out of bounds.");
+    }
+    if (probe.wave >= dims.wave_batch) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [wave] ({} >= {}).", probe.wave, dims.wave_batch);
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [wave] out of bounds.");
+    }
+    if (dir >= dims.num_flat_dirs) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [dir] ({} >= {}).", dir, dims.num_flat_dirs);
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [dir] out of bounds.");
+    }
+    if (probe.coord(0) >= dims.num_probes(0)) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [coord(0)] ({} >= {}).", probe.coord(0), dims.num_probes(0));
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [coord(0)] out of bounds.");
+    }
+    if (probe.coord(1) >= dims.num_probes(1)) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [coord(1)] ({} >= {}).", probe.coord(1), dims.num_probes(1));
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [coord(1)] out of bounds.");
+    }
+#endif
     return idx;
 }
 
@@ -315,6 +347,38 @@ YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeStorag
     idx += dim_mul * probe.coord(0);
     dim_mul *= dims.num_probes(0);
     idx += dim_mul * probe.coord(1);
+#ifdef DEXRT_DEBUG
+    if (probe.incl >= dims.num_incl) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [incl] ({} >= {}).", probe.incl, dims.num_incl);
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [incl] out of bounds.");
+    }
+    if (probe.wave >= dims.wave_batch) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [wave] ({} >= {}).", probe.wave, dims.wave_batch);
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [wave] out of bounds.");
+    }
+    if (probe.dir >= dims.num_flat_dirs) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [dir] ({} >= {}).", probe.dir, dims.num_flat_dirs);
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [dir] out of bounds.");
+    }
+    if (probe.coord(0) >= dims.num_probes(0)) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [coord(0)] ({} >= {}).", probe.coord(0), dims.num_probes(0));
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [coord(0)] out of bounds.");
+    }
+    if (probe.coord(1) >= dims.num_probes(1)) {
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            fmt::println(stderr, "DexRT Error: Cascade index [coord(1)] ({} >= {}).", probe.coord(1), dims.num_probes(1));
+        );
+        yakl::yakl_throw("DexRT Error: Cascade index [coord(1)] out of bounds.");
+    }
+#endif
     return idx;
 }
 

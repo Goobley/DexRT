@@ -195,14 +195,12 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
 
 void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
+
         if (config.mode == DexrtMode::NonLte) {
-            state->alo = Fp5d(
+            i64 alo_size = cascade_entries(state->c0_size);
+            state->alo = Fp1d(
                 "ALO",
-                state->c0_size.num_probes(1),
-                state->c0_size.num_probes(0),
-                state->c0_size.num_flat_dirs,
-                state->c0_size.wave_batch,
-                state->c0_size.num_incl
+                alo_size
             );
         }
         state->dynamic_opac = decltype(state->dynamic_opac)(
@@ -375,7 +373,7 @@ void save_results(
     const FpConst3d& chi=FpConst3d(),
     const FpConst3d& pops=FpConst3d(),
     const FpConst1d& casc=FpConst1d(),
-    const FpConst5d& alo=FpConst5d(),
+    const FpConst1d& alo=FpConst1d(),
     const FpConst2d& ne=FpConst2d(),
     const FpConst2d& nh_tot=FpConst2d()
 ) {
@@ -408,7 +406,7 @@ void save_results(
             nc.write(pops, "pops", {"level", "z", "x"});
         }
         if (alo.initialized()) {
-            nc.write(alo, "alo", {"z", "x", "dir", "wave_batch", "incl"});
+            nc.write(alo, "alo", {"cascade_shape"});
         }
         if (ne.initialized()) {
             nc.write(ne, "ne", {"z", "x"});

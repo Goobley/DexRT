@@ -182,27 +182,12 @@ void cascade_i_25d(
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset_idx);
     assert(ray_subset.start_probes(0) == 0 && ray_subset.start_probes(1) == 0 && "Subset splitting probes is not handled");
 
-    // fmt::println(
-    //     "subset {}: probes ({}, {}), dir {} (start {}), wave {}, incl {}",
-    //     subset_idx,
-    //     ray_subset.num_probes(0),
-    //     ray_subset.num_probes(1),
-    //     ray_subset.num_flat_dirs,
-    //     ray_subset.start_flat_dirs,
-    //     ray_subset.wave_batch,
-    //     ray_subset.num_incl
-    // );
-
     i64 spatial_bounds = ray_subset.num_probes(1) * ray_subset.num_probes(0);
     wave_batch = std::min(wave_batch, ray_subset.wave_batch);
     yakl::Array<i32, 2, yakl::memDevice> probe_space_lookup;
     if (sparse_calc) {
         probe_space_lookup = casc_state.probes_to_compute[cascade_idx];
         spatial_bounds = probe_space_lookup.extent(0);
-    }
-    Fp1d flat_alo;
-    if constexpr (compute_alo) {
-        flat_alo = dev_casc_state.alo.collapse();
     }
 
     parallel_for(
@@ -318,18 +303,20 @@ void cascade_i_25d(
                 }
             }
 
-            ProbeIndex probe_storage_idx{
+            ProbeIndex probe_idx{
                 .coord=probe_coord,
+                // NOTE(cmo): Access the "first" entry stored in a texel, if we
+                // have more than one ray per texel
                 .dir=phi_idx * num_rays_per_texel,
                 .incl=theta_idx,
                 .wave=wave
             };
-            i64 lin_idx = probe_linear_index<RcMode>(dims, probe_storage_idx);
+            i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
             dev_casc_state.cascade_I(lin_idx) = average_ri.I;
             dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
             if constexpr (dev_compute_alo) {
                 // dev_casc_state.alo(v, u, phi_idx, wave, theta_idx) = average_ri.alo;
-                flat_alo(lin_idx) = average_ri.alo;
+                dev_casc_state.alo(lin_idx) = average_ri.alo;
             }
         }
     );

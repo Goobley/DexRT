@@ -32,7 +32,7 @@ struct State {
     Fp3d wphi; /// [kr, z, x]
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y]
-    Fp5d alo; /// [z, x, phi, wave, theta]
+    Fp1d alo; /// [z, x, phi, wave, theta], but flattened. Index using Cascade operators (probe_lin_index) -- you need to fetch intensity at the same time anyway.
     std::vector<Fp4d> Gamma; /// [i, j, x, y]
     PwBc<> pw_bc;
     ZeroBc zero_bc;

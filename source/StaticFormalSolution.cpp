@@ -33,12 +33,7 @@ void static_compute_gamma(
             Gamma.extent(1),
             Gamma.extent(2) * Gamma.extent(3)
         ));
-        const auto& alo = state.alo.reshape<4>(Dims(
-            state.alo.extent(0) * state.alo.extent(1),
-            state.alo.extent(2),
-            state.alo.extent(3),
-            state.alo.extent(4)
-        ));
+        const auto& alo = state.alo;
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
         int wave_batch = la_end - la_start;
@@ -86,6 +81,7 @@ void static_compute_gamma(
                     .wave=wave
                 };
                 const fp_t intensity = probe_fetch<RcMode>(I, dims, probe_idx);
+                const fp_t alo_entry = probe_fetch<RcMode>(alo, dims, probe_idx);
 
                 const int la = la_start + wave;
                 fp_t lambda = wavelength(la);
@@ -141,7 +137,7 @@ void static_compute_gamma(
                         .chi = chi,
                         .uv = uv,
                         .I = intensity,
-                        .alo = alo(k, phi_idx, wave, theta_idx),
+                        .alo = alo_entry,
                         .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx) * wphi(kr, k),
                         .Gamma = flat_Gamma,
                         .i = l.i,
@@ -179,7 +175,7 @@ void static_compute_gamma(
                         .chi = chi,
                         .uv = uv,
                         .I = intensity,
-                        .alo = alo(k, phi_idx, wave, theta_idx),
+                        .alo = alo_entry,
                         .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx),
                         .Gamma = flat_Gamma,
                         .i = cont.i,

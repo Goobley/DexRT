@@ -368,6 +368,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
         const auto& sample_coord(s.curr_coord);
         const int u = sample_coord(0);
         const int v = sample_coord(1);
+        one_m_edt = FP(0.0);
 
         if (u < 0 || u >= domain_size(0)) {
             break;
@@ -439,7 +440,8 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     } while (next_intersection(&s));
 
     if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
-        result.alo = std::max(one_m_edt, FP(0.0));
+        // result.alo = std::max(one_m_edt, FP(0.0));
+        result.alo = one_m_edt;
     }
 
     return result;

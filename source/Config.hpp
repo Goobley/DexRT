@@ -21,6 +21,10 @@ typedef uint32_t u32;
 typedef int64_t i64;
 typedef uint64_t u64;
 
+#ifdef YAKL_DEBUG
+#define DEXRT_DEBUG
+#endif
+
 constexpr int DEXRT_WARP_SIZE = 32;
 
 constexpr fp_t PROBE0_LENGTH = FP(2.0);
@@ -34,7 +38,7 @@ constexpr bool LAST_CASCADE_TO_INFTY = true;
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
 
 constexpr bool PREAVERAGE = false;
-constexpr bool DIR_BY_DIR = false;
+constexpr bool DIR_BY_DIR = true;
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
 
 // constexpr bool BRANCH_RAYS = false;

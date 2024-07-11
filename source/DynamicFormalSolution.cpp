@@ -43,12 +43,7 @@ void dynamic_compute_gamma(
             Gamma.extent(1),
             Gamma.extent(2) * Gamma.extent(3)
         ));
-        const auto& alo = state.alo.reshape<4>(Dims(
-            state.alo.extent(0) * state.alo.extent(1),
-            state.alo.extent(2),
-            state.alo.extent(3),
-            state.alo.extent(4)
-        ));
+        const auto& alo = state.alo;
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
         int wave_batch = la_end - la_start;
@@ -101,6 +96,7 @@ void dynamic_compute_gamma(
                 };
                 RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
                 const fp_t intensity = probe_fetch<RcMode>(I, ray_set, probe_idx);
+                const fp_t alo_entry = probe_fetch<RcMode>(alo, ray_set, probe_idx);
 
                 const int la = la_start + wave;
                 fp_t lambda = wavelength(la);
@@ -160,14 +156,12 @@ void dynamic_compute_gamma(
                     const fp_t eta = flat_pops(offset + l.j, k) * uv.Uji;
                     const fp_t chi = flat_pops(offset + l.i, k) * uv.Vij - flat_pops(offset + l.j, k) * uv.Vji + FP(1e-20);
 
-
-                    static_assert(false, "ALO is being indexed wrong (phi_idx) -- needs to be storage index");
                     add_to_gamma<true>(GammaAccumState{
                         .eta = eta,
                         .chi = chi,
                         .uv = uv,
                         .I = intensity,
-                        .alo = alo(k, phi_idx, wave, theta_idx),
+                        .alo = alo_entry,
                         .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx) * wphi(kr, k),
                         .Gamma = flat_Gamma,
                         .i = l.i,
@@ -205,7 +199,7 @@ void dynamic_compute_gamma(
                         .chi = chi,
                         .uv = uv,
                         .I = intensity,
-                        .alo = alo(k, phi_idx, wave, theta_idx),
+                        .alo = alo_entry,
                         .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx),
                         .Gamma = flat_Gamma,
                         .i = cont.i,
@@ -300,9 +294,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             flat_chi(k, wave) = result.chi;
         }
     );
-    if (state.alo.initialized()) {
-        state.alo = FP(0.0);
-    }
     yakl::fence();
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
@@ -330,6 +321,9 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
+        if (state.alo.initialized()) {
+            state.alo = FP(0.0);
+        }
         CascadeCalcSubset subset{
             .la_start=la_start,
             .la_end=la_end,
@@ -369,10 +363,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         yakl::fence();
         if (state.alo.initialized()) {
             // NOTE(cmo): Add terms to Gamma
-            if (lambda_iterate) {
-                state.alo = FP(0.0);
-                yakl::fence();
-            }
             dynamic_compute_gamma(
                 state,
                 casc_state,
