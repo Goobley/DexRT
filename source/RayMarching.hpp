@@ -440,8 +440,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     } while (next_intersection(&s));
 
     if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
-        // result.alo = std::max(one_m_edt, FP(0.0));
-        result.alo = one_m_edt;
+        result.alo = std::max(one_m_edt, FP(0.0));
     }
 
     return result;
