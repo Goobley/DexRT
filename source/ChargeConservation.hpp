@@ -9,6 +9,7 @@
 #ifdef DEXRT_USE_MAGMA
 template <typename T=fp_t>
 inline fp_t nr_post_update(State* state) {
+    yakl::timer_start("Charge conservation");
     constexpr bool print_debug = false;
     // NOTE(cmo): Here be big angry dragons. The implementation is disgusting and hard to follow. This needs to be redone.
     // TODO(cmo): There's too many fences in here!
@@ -431,6 +432,7 @@ inline fp_t nr_post_update(State* state) {
         step_size_host(max_change_loc / F.extent(1)),
         max_change_loc
     );
+    yakl::timer_stop("Charge conservation");
     return max_change;
 }
 #else

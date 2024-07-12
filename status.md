@@ -43,9 +43,10 @@ Features/ToDo
     - [ ] Ray
 - [x] Active atmosphere cells (temperature criterion)
 - [x] Active probes (from C0 active cells)
-- [ ] Save compiled params into output
+- [x] Save compiled params into output
     - [ ] Add attributes to netcdf layer
-- [ ] Control dexrt output
+        - [x] Not done properly, but key attributes added by shoving through netcdf-c functions directly.
+- [x] Control dexrt output
 - [ ] Allow loading populations into "lte" mode.
 - [ ] Avoid writing nonsense from non-active probes in C0 into J when pingponging
 - [ ] Add groups to netcdf layer
@@ -53,6 +54,7 @@ Features/ToDo
 - [ ] Embed git hash in build (https://jonathanhamberg.com/post/cmake-embedding-git-hash/)
 - [ ] PRD
 - [ ] Sparse VDB-like grid
+- [x] Optionally page J out to host memory (enabled by default)
 
 
 Ideas
@@ -67,7 +69,7 @@ Ideas
 - [x] Full per-wavelength active set treatment. GPU benefits a lot more from this
 - [x] Bring back wavelength batches -- consider a warp (32 threads) of inclination rays (e.g. 4) with e.g. 8 wavelengths. The raymarching will be entirely coherent for these. Emissivity/Opacity gather will be almost perfectly coherent too. In 3D, if we have memory do full warps of wavelengths to get this coherence back.
 - [x] Refactor to only have one raymarch/RC impl
-- [ ] Handle case of solving one direction of c0 at a time (with all necessary components of upper cascades) - same memory as preaveraging, but useful for e.g. dynamic models in 3D
+- [x] Handle case of solving one direction of c0 at a time (with all necessary components of upper cascades) - same memory as preaveraging, but useful for e.g. dynamic models in 3D
 - [ ] Is it possible to create a basis of emissivity and opacity that can be interpolated as a function of mux/muy/muz to allow emissivity/opacity to be computed for fewer directions, mipmapped, and then linearly combined in-situ? Needs tests
 
 

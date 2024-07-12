@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 inline fp_t simple_conserve_pressure(State* state) {
+    yakl::timer_start("Pressure conservation");
     assert(state->have_h && "Requires H model to be present");
     using namespace ConstantsFP;
 
@@ -91,6 +92,7 @@ inline fp_t simple_conserve_pressure(State* state) {
         max_change_z,
         max_change_x
     );
+    yakl::timer_stop("Pressure conservation");
     return max_change;
 }
 

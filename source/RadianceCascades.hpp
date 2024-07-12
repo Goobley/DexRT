@@ -190,6 +190,8 @@ void cascade_i_25d(
         spatial_bounds = probe_space_lookup.extent(0);
     }
 
+    std::string name = fmt::format("Cascade {}", cascade_idx);
+    yakl::timer_start(name.c_str());
     parallel_for(
         "RC Loop",
         SimpleBounds<4>(
@@ -320,6 +322,8 @@ void cascade_i_25d(
             }
         }
     );
+    yakl::fence();
+    yakl::timer_stop(name.c_str());
 }
 
 #else

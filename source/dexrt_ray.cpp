@@ -39,6 +39,7 @@ struct RaySet {
 struct DexRayState {
     Atmosphere atmos;
     AtomicData<fp_t> adata;
+    yakl::Array<bool, 2, yakl::memDevice> active;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
     Fp3d pops;
@@ -52,6 +53,7 @@ struct DexRayState {
     yakl::Array<i64, 1, yakl::memDevice> num_steps;
     Fp2d pos; // Depth, locations after end of ray are padded with nan [num_steps, ray_idx]
     Fp3d cont_fn; // [wavelength, num_steps, ray_idx]
+    Fp3d chi_tau;
     Fp3d source_fn_depth;
     Fp3d tau_depth;
     Fp3d eta_depth;
@@ -67,6 +69,7 @@ struct DexRayStateAndBc {
 struct DexOutput {
     // TODO(cmo): When we have scattering, add J
     Fp3d pops;
+    yakl::Array<bool, 2, yakl::memDevice> active;
 };
 
 struct AabbPoints {
@@ -182,6 +185,25 @@ DexOutput load_dex_output(const std::string& path) {
     nc.open(path, yakl::NETCDF_MODE_READ);
     DexOutput result;
     nc.read(result.pops, "pops");
+
+    if (nc.varExists("active")) {
+        // NOTE(cmo): This is dumb, but isn't going to cause an issue, and netCDF doesn't let us save bool arrays.
+        yakl::Array<unsigned char, 2, yakl::memHost> active_char;
+        nc.read(active_char, "active");
+        yakl::Array<bool, 2, yakl::memHost> active_host("active", active_char.extent(0), active_char.extent(1));
+        for (int z = 0; z < active_char.extent(0); ++z) {
+            for (int x = 0; x < active_char.extent(1); ++x) {
+                active_host(z, x) = active_char(z, x);
+            }
+        }
+        result.active = active_host.createDeviceCopy();
+    } else {
+        // NOTE(cmo): If the active mask isn't in the file, then set everything to true
+        result.active = decltype(result.active)("active", result.pops.extent(1), result.pops.extent(2));
+        result.active = true;
+        yakl::fence();
+    }
+
     nc.close();
     return result;
 }
@@ -402,6 +424,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
     DexRayStateAndBc<Bc>& state = *st;
     JasUnpack(state.state, atmos, pops, ray_set, ray_I, ray_tau, eta, chi, adata, phi, nh_lte);
     JasUnpack(state.state, num_steps, pos, cont_fn, source_fn_depth, tau_depth, eta_depth, chi_depth);
+    JasUnpack(state.state, chi_tau, active);
     auto& bc(state.bc);
 
     FlatAtmosphere<fp_t> flatmos = flatten(atmos);
@@ -410,12 +433,18 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
     Fp2d flat_n_star = Fp2d("flat_n_star", flat_pops.extent(0), flat_pops.extent(1));
     Fp1d flat_eta = eta.collapse();
     Fp1d flat_chi = chi.collapse();
+    auto flat_active = active.collapse();
 
     for (int wave = 0; wave < ray_set.wavelength.extent(0); ++wave) {
         parallel_for(
             "Compute eta, chi",
             SimpleBounds<1>(flatmos.temperature.extent(0)),
             YAKL_LAMBDA (i64 k) {
+                if (!flat_active(k)) {
+                    flat_eta(k) = FP(0.0);
+                    flat_chi(k) = FP(0.0);
+                    return;
+                }
                 fp_t lambda = ray_set.wavelength(wave);
                 // NOTE(cmo): The projection vector is inverted here as we are
                 // tracing front-to-back.
@@ -529,11 +558,17 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                 max_steps,
                 fp_t(num_rays * max_steps) / FP(1024.0)
             );
-            pos = Fp2d("ray coord", max_steps, num_rays);
+            pos = Fp2d("ray coord start", max_steps, num_rays);
             pos = std::nanf("");
             if (config.output_cfn) {
                 cont_fn = Fp3d(
                     "cont fn",
+                    ray_set.wavelength.extent(0),
+                    max_steps,
+                    num_rays
+                );
+                chi_tau = Fp3d(
+                    "chi/tau",
                     ray_set.wavelength.extent(0),
                     max_steps,
                     num_rays
@@ -551,6 +586,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                     num_rays
                 );
                 cont_fn = std::nanf("");
+                chi_tau = std::nanf("");
                 source_fn_depth = std::nanf("");
                 tau_depth = std::nanf("");
             }
@@ -658,6 +694,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                             source_fn_depth(wave, step_idx, ray_idx) = source_fn;
                             tau_depth(wave, step_idx, ray_idx) = cumulative_tau;
                             cont_fn(wave, step_idx, ray_idx) = eta_s * cumulative_trans;
+                            chi_tau(wave, step_idx, ray_idx) = chi_s / cumulative_tau;
                         }
                         if (output_eta_chi) {
                             eta_depth(wave, step_idx, ray_idx) = eta_s;
@@ -702,6 +739,20 @@ yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
     }
     nc.write(mu, "mu", {"mu", "3d-space"});
 
+    const auto ncwrap = [] (int ierr, int line) {
+        if (ierr != NC_NOERR) {
+            printf("NetCDF Error writing attributes at main.cpp:%d\n", line);
+            printf("%s\n",nc_strerror(ierr));
+            yakl::yakl_throw(nc_strerror(ierr));
+        }
+    };
+    int ncid = nc.file.ncid;
+    std::string name = "dexrt_ray (2d)";
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "program", name.size(), name.c_str()),
+        __LINE__
+    );
+
     return nc;
 }
 
@@ -722,6 +773,7 @@ void write_output_plane(
         nc.write(state.pos, fmt::format("rays_{}_pos", mu_idx), {num_steps, ray_idx});
         if (config.output_cfn) {
             nc.write(state.cont_fn, fmt::format("rays_{}_cont_fn", mu_idx), {"wavelength", num_steps, ray_idx});
+            nc.write(state.chi_tau, fmt::format("rays_{}_chi_tau", mu_idx), {"wavelength", num_steps, ray_idx});
             nc.write(state.source_fn_depth, fmt::format("rays_{}_source_fn", mu_idx), {"wavelength", num_steps, ray_idx});
             nc.write(state.tau_depth, fmt::format("rays_{}_tau", mu_idx), {"wavelength", num_steps, ray_idx});
         }
@@ -771,6 +823,7 @@ int main(int argc, const char* argv[]) {
         DexRayState state{
             .atmos = atmos,
             .adata = atomic_data.device,
+            .active = model_output.active,
             .phi = VoigtProfile<fp_t>(
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.15), 1024},
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(1.5e3), 64 * 1024}

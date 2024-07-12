@@ -335,7 +335,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             casc_state.num_cascades,
             subset
         );
-        yakl::fence();
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
             cascade_i_25d<RcModeNoBc>(
                 state,
@@ -343,7 +342,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 casc_idx,
                 subset
             );
-            yakl::fence();
         }
         if (state.alo.initialized() && !lambda_iterate) {
             cascade_i_25d<RcModeAlo>(
@@ -360,7 +358,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 subset
             );
         }
-        yakl::fence();
         if (state.alo.initialized()) {
             // NOTE(cmo): Add terms to Gamma
             dynamic_compute_gamma(

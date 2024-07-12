@@ -945,7 +945,7 @@ inline void compute_lte_pops(State* state) {
 /**
  * Computes the LTE populations in to a provided allocated array.
 */
-inline void compute_lte_pops(State* state, const Fp3d shared_pops) {
+inline void compute_lte_pops(const State* state, const Fp3d shared_pops) {
     for (int ia = 0; ia < state->atoms.size(); ++ia) {
         const auto& atom = state->atoms[ia];
         const auto pops = slice_pops(
@@ -961,6 +961,7 @@ inline void compute_lte_pops(State* state, const Fp3d shared_pops) {
 #ifdef DEXRT_USE_MAGMA
 template <typename T=fp_t>
 inline fp_t stat_eq(State* state) {
+    yakl::timer_start("Stat eq");
     fp_t global_max_change = FP(0.0);
     const auto& active = state->active.collapse();
     for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
@@ -1208,6 +1209,7 @@ inline fp_t stat_eq(State* state) {
         global_max_change = std::max(max_change, global_max_change);
 
     }
+    yakl::timer_stop("Stat eq");
     return global_max_change;
 }
 #else

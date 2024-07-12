@@ -7,12 +7,25 @@
 #include "BoundaryType.hpp"
 #include <yaml-cpp/yaml.h>
 
+struct DexrtOutputConfig {
+    bool wavelength = true;
+    bool J = true;
+    bool pops = true;
+    bool lte_pops = true;
+    bool ne = true;
+    bool nh_tot = true;
+    bool alo = false;
+    bool active = true;
+    std::vector<int> cascades;
+};
+
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_initial_gb = FP(2.0);
     fp_t mem_pool_grow_gb = FP(1.4);
     std::string atmos_path;
     std::string output_path;
+    DexrtOutputConfig output;
     bool store_J_on_cpu = true;
     std::vector<std::string> atom_paths;
     std::vector<AtomicTreatment> atom_modes;
@@ -113,6 +126,76 @@ inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     }
 }
 
+inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::Node& file) {
+    DexrtConfig& config = *cfg;
+    DexrtOutputConfig out;
+
+    auto output = file["output"];
+    if (output["wavelength"]) {
+        out.wavelength = output["wavelength"].as<bool>();
+    }
+    if (output["J"]) {
+        out.J = output["J"].as<bool>();
+    }
+    if (output["pops"]) {
+        out.pops = output["pops"].as<bool>();
+    }
+    if (output["lte_pops"]) {
+        out.lte_pops = output["lte_pops"].as<bool>();
+    }
+    if (output["ne"]) {
+        out.ne = output["ne"].as<bool>();
+    }
+    if (output["nh_tot"]) {
+        out.nh_tot = output["nh_tot"].as<bool>();
+    }
+    if (output["alo"]) {
+        out.alo = output["alo"].as<bool>();
+    }
+    if (output["cascades"]) {
+        for (const auto& c : output["cascades"]) {
+            out.cascades.push_back(c.as<int>());
+        }
+    }
+
+    // NOTE(cmo): Setup applicable based on mode.
+    if (config.mode == DexrtMode::GivenFs) {
+        out.ne = false;
+        out.nh_tot = false;
+        out.pops = false;
+        out.active = false;
+        out.alo = false;
+    } else if (config.mode == DexrtMode::Lte) {
+        out.ne = false;
+        out.nh_tot = false;
+        out.alo = false;
+        out.active = config.sparse_calculation;
+    } else if (config.mode == DexrtMode::NonLte) {
+        out.active = config.sparse_calculation;
+        if (!(config.conserve_charge && config.conserve_pressure)) {
+            out.ne = false;
+            out.nh_tot = false;
+        }
+    }
+    if (out.cascades.size() > 0) {
+        if constexpr (DIR_BY_DIR) {
+            fmt::println(stderr, "Cascade output requested, but DIR_BY_DIR is enabled, only the entries corresponding to the final direction of C0 will be output.");
+        }
+        for (int casc_to_output : out.cascades) {
+            if (casc_to_output > MAX_CASCADE) {
+                throw std::runtime_error(fmt::format("Output of cascade {} requested, greater than max cascade {}.", casc_to_output, MAX_CASCADE));
+            }
+            if constexpr (PINGPONG_BUFFERS) {
+                if (casc_to_output > 1) {
+                    throw std::runtime_error(fmt::format("Output of cascade {} requested, which is > 1, and PINGPONG_BUFFERS is enabled, overwriting the other cascades to save memory", casc_to_output));
+                }
+            }
+        }
+    }
+
+    config.output = out;
+}
+
 inline DexrtConfig parse_dexrt_config(const std::string& path) {
     DexrtConfig config;
     config.atmos_path = "dexrt_atmos.nc";
@@ -160,6 +243,10 @@ inline DexrtConfig parse_dexrt_config(const std::string& path) {
         case DexrtMode::GivenFs: {
             parse_extra_givenfs(&config, file);
         } break;
+    }
+
+    if (file["output"]) {
+        parse_and_update_dexrt_output_config(&config, file);
     }
 
     return config;

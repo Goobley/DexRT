@@ -29,6 +29,7 @@
 #include <optional>
 #include <fmt/core.h>
 #include <argparse/argparse.hpp>
+#include <sstream>
 
 CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     if (!(config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte)) {
@@ -404,56 +405,215 @@ void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
     }
 }
 
-template <int J_mem_space>
-void save_results(
-    const DexrtConfig& config,
-    const yakl::Array<fp_t, 3, J_mem_space>& J,
-    const FpConst1d& wavelengths=FpConst1d(),
-    const FpConst3d& eta=FpConst3d(),
-    const FpConst3d& chi=FpConst3d(),
-    const FpConst3d& pops=FpConst3d(),
-    const FpConst1d& casc=FpConst1d(),
-    const FpConst1d& alo=FpConst1d(),
-    const FpConst2d& ne=FpConst2d(),
-    const FpConst2d& nh_tot=FpConst2d()
-) {
-    fmt::print("Saving output...\n");
-    auto dims = J.get_dimensions();
+/// Add Dex's metadata to the file using attributes. The netcdf layer needs extending to do this, so I'm just throwing it in manually.
+void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i32 num_iter) {
+    const auto ncwrap = [] (int ierr, int line) {
+        if (ierr != NC_NOERR) {
+            printf("NetCDF Error writing attributes at main.cpp:%d\n", line);
+            printf("%s\n",nc_strerror(ierr));
+            yakl::yakl_throw(nc_strerror(ierr));
+        }
+    };
+    int ncid = file.file.ncid;
+    if (ncid == -999) {
+        throw std::runtime_error("File appears to have been closed before writing attributes!");
+    }
+
+    std::string name = "dexrt (2d)";
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "program", name.size(), name.c_str()),
+        __LINE__
+    );
+
+    std::string precision = "f64";
+#ifdef DEXRT_SINGLE_PREC
+    precision = "f32";
+#endif
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "precision", precision.size(), precision.c_str()),
+        __LINE__
+    );
+    f64 probe0_length = PROBE0_LENGTH;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "probe0_length", NC_DOUBLE, 1, &probe0_length),
+        __LINE__
+    );
+    i32 probe0_num_rays = PROBE0_NUM_RAYS;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "probe0_num_rays", NC_INT, 1, &probe0_num_rays),
+        __LINE__
+    );
+    i32 probe0_spacing = PROBE0_SPACING;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "probe0_spacing", NC_INT, 1, &probe0_spacing),
+        __LINE__
+    );
+    i32 cascade_branching = CASCADE_BRANCHING_FACTOR;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "cascade_branching_factor", NC_INT, 1, &cascade_branching),
+        __LINE__
+    );
+    i32 max_cascade = MAX_CASCADE;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "max_cascade", NC_INT, 1, &max_cascade),
+        __LINE__
+    );
+    i32 last_casc_to_inf = LAST_CASCADE_TO_INFTY;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "last_casc_to_infty", NC_INT, 1, &last_casc_to_inf),
+        __LINE__
+    );
+    f64 last_casc_dist = LAST_CASCADE_MAX_DIST;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "last_cascade_max_distance", NC_DOUBLE, 1, &last_casc_dist),
+        __LINE__
+    );
+    i32 preaverage = PREAVERAGE;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "preaverage", NC_INT, 1, &preaverage),
+        __LINE__
+    );
+    i32 dir_by_dir = DIR_BY_DIR;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "dir_by_dir", NC_INT, 1, &dir_by_dir),
+        __LINE__
+    );
+    i32 pingpong = PINGPONG_BUFFERS;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "pingpong_buffers", NC_INT, 1, &pingpong),
+        __LINE__
+    );
+    f64 thermal_vel_frac = ANGLE_INVARIANT_THERMAL_VEL_FRAC;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "angle_invariant_thermal_vel_frac", NC_DOUBLE, 1, &thermal_vel_frac),
+        __LINE__
+    );
+    i32 warp_size = DEXRT_WARP_SIZE;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "warp_size", NC_INT, 1, &warp_size),
+        __LINE__
+    );
+    i32 wave_batch = WAVE_BATCH;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "wave_batch", NC_INT, 1, &wave_batch),
+        __LINE__
+    );
+    i32 num_incl = NUM_INCL;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_incl", NC_INT, 1, &num_incl),
+        __LINE__
+    );
+    f64 incl_rays[NUM_INCL];
+    f64 incl_weights[NUM_INCL];
+    for (int i = 0; i < NUM_INCL; ++i) {
+        incl_rays[i] = INCL_RAYS[i];
+        incl_weights[i] = INCL_WEIGHTS[i];
+    }
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "incl_rays", NC_DOUBLE, num_incl, incl_rays),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "incl_weights", NC_DOUBLE, num_incl, incl_weights),
+        __LINE__
+    );
+    i32 num_atom = state.adata_host.num_level.extent(0);
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_atom", NC_INT, 1, &num_atom),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_level", NC_INT, num_atom, state.adata_host.num_level.get_data()),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_line", NC_INT, state.adata_host.num_line.extent(0), state.adata_host.num_line.get_data()),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "line_start", NC_INT, state.adata_host.line_start.extent(0), state.adata_host.line_start.get_data()),
+        __LINE__
+    );
+    yakl::Array<f64, 1, yakl::memHost> lambda0("lambda0", state.adata_host.lines.extent(0));
+    for (int i = 0; i < lambda0.extent(0); ++i) {
+        lambda0(i) = state.adata_host.lines(i).lambda0;
+    }
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "lambda0", NC_DOUBLE, lambda0.extent(0), lambda0.get_data()),
+        __LINE__
+    );
+
+    // NOTE(cmo): Hack to save timing data. These functions only print to stdout -- want to redirect that.
+    auto cout_buf = std::cout.rdbuf();
+    std::ostringstream timer_buffer;
+    std::cout.rdbuf(timer_buffer.rdbuf());
+    yakl::timer_finalize();
+    std::cout.rdbuf(cout_buf);
+    std::string timer_data = timer_buffer.str();
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "timing", timer_data.size(), timer_data.c_str()),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_iter", NC_INT, 1, &num_iter),
+        __LINE__
+    );
+}
+
+void save_results(const State& state, const CascadeState& casc_state, i32 num_iter) {
+    const auto& config = state.config;
+    const auto& out_cfg = config.output;
 
     yakl::SimpleNetCDF nc;
     nc.create(config.output_path, yakl::NETCDF_MODE_REPLACE);
+    fmt::println("Saving output to {}...", config.output_path);
+    add_netcdf_attributes(state, nc, num_iter);
 
-    auto eta_dims = eta.get_dimensions();
-    fmt::println("J: ({} {} {})", dims(0), dims(1), dims(2));
-    nc.write(J, "J", {"wavelength", "z", "x"});
-
-    if (wavelengths.initialized()) {
-        nc.write(wavelengths, "wavelength", {"wavelength"});
-    }
-    if (eta.initialized()) {
-        fmt::println("eta: ({} {} {})", eta_dims(0), eta_dims(1), eta_dims(2));
-        nc.write(eta, "eta", {"z", "x", "wave_batch"});
-    }
-    if (chi.initialized()) {
-        nc.write(chi, "chi", {"z", "x", "wave_batch"});
-    }
-    if (casc.initialized()) {
-        nc.write(casc, "cascade", {"cascade_shape"});
+    if (out_cfg.J) {
+        if (config.store_J_on_cpu) {
+            nc.write(state.J_cpu, "J", {"wavelength", "z", "x"});
+        } else {
+            nc.write(state.J, "J", {"wavelength", "z", "x"});
+        }
     }
 
-    if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
-        if (pops.initialized()) {
-            nc.write(pops, "pops", {"level", "z", "x"});
-        }
-        if (alo.initialized()) {
-            nc.write(alo, "alo", {"cascade_shape"});
-        }
-        if (ne.initialized()) {
-            nc.write(ne, "ne", {"z", "x"});
-        }
-        if (nh_tot.initialized()) {
-            nc.write(nh_tot, "nh_tot", {"z", "x"});
-        }
+    if (out_cfg.wavelength && state.adata.wavelength.initialized()) {
+        nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
+    }
+    if (out_cfg.pops && state.pops.initialized()) {
+        nc.write(state.pops, "pops", {"level", "z", "x"});
+    }
+    if (out_cfg.lte_pops) {
+        Fp3d lte_pops = state.pops.createDeviceObject();
+        compute_lte_pops(&state, lte_pops);
+        yakl::fence();
+        nc.write(lte_pops, "lte_pops", {"level", "z", "x"});
+    }
+    if (out_cfg.ne && state.atmos.ne.initialized()) {
+        nc.write(state.atmos.ne, "ne", {"z", "x"});
+    }
+    if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
+        nc.write(state.atmos.nh_tot, "nh_tot", {"z", "x"});
+    }
+    if (out_cfg.alo && state.alo.initialized()) {
+        nc.write(state.alo, "alo", {"casc_shape"});
+    }
+    if (out_cfg.active && state.active.initialized()) {
+        const auto& active_copy = state.active.createHostCopy();
+        yakl::Array<unsigned char, 2, yakl::memHost> active_char(
+            "active_char",
+            (unsigned char*)active_copy.get_data(),
+            active_copy.extent(0),
+            active_copy.extent(1)
+        );
+        nc.write(active_char, "active", {"z", "x"});
+    }
+    for (int casc : out_cfg.cascades) {
+        // NOTE(cmo): The validity of these + necessary warning were checked/output in the config parsing step
+        std::string name = fmt::format("I_C{}", casc);
+        nc.write(casc_state.i_cascades[casc], name, {"casc_shape"});
+        name = fmt::format("tau_C{}", casc);
+        nc.write(casc_state.tau_cascades[casc], name, {"casc_shape"});
     }
     nc.close();
 }
@@ -485,6 +645,7 @@ int main(int argc, char** argv) {
         // not using an atmosphere
         init_state(&state, config);
         CascadeState casc_state = CascadeState_new(state.c0_size, MAX_CASCADE);
+        yakl::timer_start("DexRT");
 
         // NOTE(cmo): Provided emissivity and opacity in file: static solution.
         if (config.mode == DexrtMode::GivenFs) {
@@ -508,27 +669,8 @@ int main(int argc, char** argv) {
 
             Fp1d dummy_wavelengths;
             Fp3d dummy_pops;
-            if (config.store_J_on_cpu) {
-                save_results(
-                    config,
-                    state.J_cpu,
-                    dummy_wavelengths,
-                    casc_state.eta,
-                    casc_state.chi,
-                    dummy_pops,
-                    casc_state.i_cascades[0]
-                );
-            } else {
-                save_results(
-                    config,
-                    state.J,
-                    dummy_wavelengths,
-                    casc_state.eta,
-                    casc_state.chi,
-                    dummy_pops,
-                    casc_state.i_cascades[0]
-                );
-            }
+            yakl::timer_stop("DexRT");
+            save_results(state, casc_state, 1);
         } else {
             if (config.sparse_calculation) {
                 init_active_probes(state, &casc_state);
@@ -549,6 +691,7 @@ int main(int argc, char** argv) {
             //     fs_fn = static_formal_sol_rc;
             // }
             fp_t max_change = FP(1.0);
+            int num_iter = 1;
             if (non_lte) {
                 int i = 0;
                 if (actually_conserve_charge) {
@@ -642,6 +785,7 @@ int main(int argc, char** argv) {
                     yakl::fence();
                     state.config.sparse_calculation = true;
                 }
+                num_iter = i;
             } else {
                 state.J = FP(0.0);
                 compute_nh0(state);
@@ -664,33 +808,8 @@ int main(int argc, char** argv) {
                     finalise_wavelength_batch(state, la_start, la_end);
                 }
             }
-            if (config.store_J_on_cpu) {
-                save_results(
-                    config,
-                    state.J_cpu,
-                    state.adata.wavelength,
-                    casc_state.eta,
-                    casc_state.chi,
-                    state.pops,
-                    casc_state.i_cascades[0],
-                    state.alo,
-                    state.atmos.ne,
-                    state.atmos.nh_tot
-                );
-            } else {
-                save_results(
-                    config,
-                    state.J,
-                    state.adata.wavelength,
-                    casc_state.eta,
-                    casc_state.chi,
-                    state.pops,
-                    casc_state.i_cascades[0],
-                    state.alo,
-                    state.atmos.ne,
-                    state.atmos.nh_tot
-                );
-            }
+            yakl::timer_stop("DexRT");
+            save_results(state, casc_state, num_iter);
         }
         finalize_state(&state);
     }

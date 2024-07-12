@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Union
+from typing import Dict, Literal, Union, List
 from pydantic import BaseModel, Field
 
 class AtomicModelConfig(BaseModel):
@@ -9,12 +9,23 @@ class DexrtSystemConfig(BaseModel):
     mem_pool_initial_gb: float = 2.0
     mem_pool_grow_gb: float = 1.4
 
+class DexrtOutputConfig(BaseModel):
+    wavelength: bool = True
+    J: bool = True
+    pops: bool = True
+    lte_pops: bool = True
+    ne: bool = True
+    nh_tot: bool = True
+    alo: bool = False
+    cascades: List[int] = Field(default_factory=list)
+
 class DexrtConfig(BaseModel):
     system: DexrtSystemConfig = Field(default_factory=DexrtSystemConfig)
     atmos_path: str = "dexrt_atmos.nc"
     output_path: str = "dexrt.nc"
     mode: Union[Literal["Lte"], Literal["NonLte"], Literal["GivenFs"]] = "NonLte"
     store_J_on_cpu: bool = True
+    output: DexrtOutputConfig
 
 class DexrtLteConfig(DexrtConfig):
     mode: Literal["Lte"] = "Lte"
