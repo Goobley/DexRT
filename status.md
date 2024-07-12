@@ -40,7 +40,7 @@ Features/ToDo
 - [x] Config file/input flags
 - [ ] Pydantic objects for input files
     - [x] Dexrt
-    - [ ] Ray
+    - [x] Ray
 - [x] Active atmosphere cells (temperature criterion)
 - [x] Active probes (from C0 active cells)
 - [x] Save compiled params into output
