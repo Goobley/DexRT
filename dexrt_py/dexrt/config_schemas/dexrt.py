@@ -25,7 +25,7 @@ class DexrtConfig(BaseModel):
     output_path: str = "dexrt.nc"
     mode: Union[Literal["Lte"], Literal["NonLte"], Literal["GivenFs"]] = "NonLte"
     store_J_on_cpu: bool = True
-    output: DexrtOutputConfig
+    output: DexrtOutputConfig = Field(default_factory=DexrtOutputConfig)
 
 class DexrtLteConfig(DexrtConfig):
     mode: Literal["Lte"] = "Lte"
