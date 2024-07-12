@@ -5,6 +5,7 @@
 #include "Constants.hpp"
 #include "Utils.hpp"
 #include "State.hpp"
+#include "JasPP.hpp"
 
 template <typename T=fp_t, typename U=fp_t, int mem_space=yakl::memDevice>
 CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {

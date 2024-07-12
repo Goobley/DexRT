@@ -64,116 +64,116 @@ endif()
 
 #############################
 
-add_executable(lw_comparison_2d
-    demos/lightweaver_comparison_2d/main.cpp
-    ${DEX_SOURCE_FILES}
-)
-target_include_directories(lw_comparison_2d SYSTEM PUBLIC
-    "${GCC_INCLUDE_PATH}"
-    "${MPI_INCLUDE_PATH}"
-    "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
-)
-target_include_directories(lw_comparison_2d PUBLIC "../source/")
-target_include_directories(lw_comparison_2d PUBLIC "../YAKL/src")
-target_include_directories(lw_comparison_2d PUBLIC ../fmt/include)
-target_link_libraries(lw_comparison_2d "${LDFLAGS}")
-target_link_libraries(lw_comparison_2d fmt::fmt)
-target_link_libraries(lw_comparison_2d yaml-cpp::yaml-cpp)
-set_target_properties(lw_comparison_2d PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS YES
-)
-yakl_process_target(lw_comparison_2d)
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
-    set_target_properties(lw_comparison_2d PROPERTIES LINKER_LANGUAGE CXX)
-endif()
+# add_executable(lw_comparison_2d
+#     demos/lightweaver_comparison_2d/main.cpp
+#     ${DEX_SOURCE_FILES}
+# )
+# target_include_directories(lw_comparison_2d SYSTEM PUBLIC
+#     "${GCC_INCLUDE_PATH}"
+#     "${MPI_INCLUDE_PATH}"
+#     "${NETCDF_INCLUDE_PATH}"
+#     "${MAGMA_INCLUDE_PATH}"
+# )
+# target_include_directories(lw_comparison_2d PUBLIC "../source/")
+# target_include_directories(lw_comparison_2d PUBLIC "../YAKL/src")
+# target_include_directories(lw_comparison_2d PUBLIC ../fmt/include)
+# target_link_libraries(lw_comparison_2d "${LDFLAGS}")
+# target_link_libraries(lw_comparison_2d fmt::fmt)
+# target_link_libraries(lw_comparison_2d yaml-cpp::yaml-cpp)
+# set_target_properties(lw_comparison_2d PROPERTIES
+#     CXX_STANDARD 17
+#     CXX_STANDARD_REQUIRED YES
+#     CXX_EXTENSIONS YES
+# )
+# yakl_process_target(lw_comparison_2d)
+# if ("${YAKL_ARCH}" STREQUAL "CUDA")
+#     set_target_properties(lw_comparison_2d PROPERTIES LINKER_LANGUAGE CXX)
+# endif()
 
-#############################
+# #############################
 
-add_executable(diffuse_source
-    demos/diffuse_source/main.cpp
-    ${DEX_SOURCE_FILES}
-)
-target_include_directories(diffuse_source SYSTEM PUBLIC
-    "${GCC_INCLUDE_PATH}"
-    "${MPI_INCLUDE_PATH}"
-    "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
-)
-target_include_directories(diffuse_source PUBLIC "../source/")
-target_include_directories(diffuse_source PUBLIC "../YAKL/src")
-target_include_directories(diffuse_source PUBLIC ../fmt/include)
-target_link_libraries(diffuse_source "${LDFLAGS}")
-target_link_libraries(diffuse_source fmt::fmt)
-target_link_libraries(diffuse_source yaml-cpp::yaml-cpp)
-set_target_properties(diffuse_source PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS YES
-)
-yakl_process_target(diffuse_source)
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
-    set_target_properties(diffuse_source PROPERTIES LINKER_LANGUAGE CXX)
-endif()
+# add_executable(diffuse_source
+#     demos/diffuse_source/main.cpp
+#     ${DEX_SOURCE_FILES}
+# )
+# target_include_directories(diffuse_source SYSTEM PUBLIC
+#     "${GCC_INCLUDE_PATH}"
+#     "${MPI_INCLUDE_PATH}"
+#     "${NETCDF_INCLUDE_PATH}"
+#     "${MAGMA_INCLUDE_PATH}"
+# )
+# target_include_directories(diffuse_source PUBLIC "../source/")
+# target_include_directories(diffuse_source PUBLIC "../YAKL/src")
+# target_include_directories(diffuse_source PUBLIC ../fmt/include)
+# target_link_libraries(diffuse_source "${LDFLAGS}")
+# target_link_libraries(diffuse_source fmt::fmt)
+# target_link_libraries(diffuse_source yaml-cpp::yaml-cpp)
+# set_target_properties(diffuse_source PROPERTIES
+#     CXX_STANDARD 17
+#     CXX_STANDARD_REQUIRED YES
+#     CXX_EXTENSIONS YES
+# )
+# yakl_process_target(diffuse_source)
+# if ("${YAKL_ARCH}" STREQUAL "CUDA")
+#     set_target_properties(diffuse_source PROPERTIES LINKER_LANGUAGE CXX)
+# endif()
 
-#############################
+# #############################
 
-add_executable(solid_source
-    demos/solid_source/main.cpp
-    ${DEX_SOURCE_FILES}
-)
-target_include_directories(solid_source SYSTEM PUBLIC
-    "${GCC_INCLUDE_PATH}"
-    "${MPI_INCLUDE_PATH}"
-    "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
-)
-target_include_directories(solid_source PUBLIC "../source/")
-target_include_directories(solid_source PUBLIC "../YAKL/src")
-target_include_directories(solid_source PUBLIC ../fmt/include)
-target_link_libraries(solid_source "${LDFLAGS}")
-target_link_libraries(solid_source fmt::fmt)
-target_link_libraries(solid_source yaml-cpp::yaml-cpp)
-set_target_properties(solid_source PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS YES
-)
-yakl_process_target(solid_source)
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
-    set_target_properties(solid_source PROPERTIES LINKER_LANGUAGE CXX)
-endif()
+# add_executable(solid_source
+#     demos/solid_source/main.cpp
+#     ${DEX_SOURCE_FILES}
+# )
+# target_include_directories(solid_source SYSTEM PUBLIC
+#     "${GCC_INCLUDE_PATH}"
+#     "${MPI_INCLUDE_PATH}"
+#     "${NETCDF_INCLUDE_PATH}"
+#     "${MAGMA_INCLUDE_PATH}"
+# )
+# target_include_directories(solid_source PUBLIC "../source/")
+# target_include_directories(solid_source PUBLIC "../YAKL/src")
+# target_include_directories(solid_source PUBLIC ../fmt/include)
+# target_link_libraries(solid_source "${LDFLAGS}")
+# target_link_libraries(solid_source fmt::fmt)
+# target_link_libraries(solid_source yaml-cpp::yaml-cpp)
+# set_target_properties(solid_source PROPERTIES
+#     CXX_STANDARD 17
+#     CXX_STANDARD_REQUIRED YES
+#     CXX_EXTENSIONS YES
+# )
+# yakl_process_target(solid_source)
+# if ("${YAKL_ARCH}" STREQUAL "CUDA")
+#     set_target_properties(solid_source PROPERTIES LINKER_LANGUAGE CXX)
+# endif()
 
-#############################
+# #############################
 
-add_executable(static_lte_fs
-    demos/static_lte_fs/main.cpp
-    ${DEX_SOURCE_FILES}
-)
-target_include_directories(static_lte_fs SYSTEM PUBLIC
-    "${GCC_INCLUDE_PATH}"
-    "${MPI_INCLUDE_PATH}"
-    "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
-)
-target_include_directories(static_lte_fs PUBLIC "../source/")
-target_include_directories(static_lte_fs PUBLIC "../YAKL/src")
-target_include_directories(static_lte_fs PUBLIC ../fmt/include)
-target_link_libraries(static_lte_fs "${LDFLAGS}")
-target_link_libraries(static_lte_fs fmt::fmt)
-target_link_libraries(static_lte_fs yaml-cpp::yaml-cpp)
-set_target_properties(static_lte_fs PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS YES
-)
-yakl_process_target(static_lte_fs)
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
-    set_target_properties(static_lte_fs PROPERTIES LINKER_LANGUAGE CXX)
-endif()
+# add_executable(static_lte_fs
+#     demos/static_lte_fs/main.cpp
+#     ${DEX_SOURCE_FILES}
+# )
+# target_include_directories(static_lte_fs SYSTEM PUBLIC
+#     "${GCC_INCLUDE_PATH}"
+#     "${MPI_INCLUDE_PATH}"
+#     "${NETCDF_INCLUDE_PATH}"
+#     "${MAGMA_INCLUDE_PATH}"
+# )
+# target_include_directories(static_lte_fs PUBLIC "../source/")
+# target_include_directories(static_lte_fs PUBLIC "../YAKL/src")
+# target_include_directories(static_lte_fs PUBLIC ../fmt/include)
+# target_link_libraries(static_lte_fs "${LDFLAGS}")
+# target_link_libraries(static_lte_fs fmt::fmt)
+# target_link_libraries(static_lte_fs yaml-cpp::yaml-cpp)
+# set_target_properties(static_lte_fs PROPERTIES
+#     CXX_STANDARD 17
+#     CXX_STANDARD_REQUIRED YES
+#     CXX_EXTENSIONS YES
+# )
+# yakl_process_target(static_lte_fs)
+# if ("${YAKL_ARCH}" STREQUAL "CUDA")
+#     set_target_properties(static_lte_fs PROPERTIES LINKER_LANGUAGE CXX)
+# endif()
 
-#############################
+# #############################
 
 add_test(NAME dexrt_unit_test COMMAND $<TARGET_FILE:dexrt_test>)

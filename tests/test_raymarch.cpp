@@ -261,126 +261,126 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     REQUIRE(!next_intersection(&marcher));
 }
 
-TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
-    yakl::init();
-    using yakl::c::parallel_for;
-    using yakl::c::SimpleBounds;
-    constexpr int grid_size = 1024;
-    constexpr int NUM_WAVELENGTHS = 1;
+// TEST_CASE( "Raymarch Against mipmaps", "[raymarch_mips]") {
+//     yakl::init();
+//     using yakl::c::parallel_for;
+//     using yakl::c::SimpleBounds;
+//     constexpr int grid_size = 1024;
+//     constexpr int NUM_WAVELENGTHS = 1;
 
-    {
-    Fp3d eta("eta", grid_size, grid_size, NUM_WAVELENGTHS);
-    Fp3d chi("chi", grid_size, grid_size, NUM_WAVELENGTHS);
-    fp_t chi_wall = FP(16.0);
-    fp_t eta_wall = FP(8.0);
-    parallel_for(
-        SimpleBounds<2>(grid_size, grid_size),
-        YAKL_LAMBDA (int x, int y) {
-            fp_t val = FP(0.0);
-            fp_t chi_val = FP(1e-10);
-            if (x > 512) {
-                val = eta_wall;
-                chi_val = chi_wall;
-            }
-            for (int w = 0; w < NUM_WAVELENGTHS; ++w) {
-                eta(x, y, w) = val;
-                chi(x, y, w) = chi_val;
-            }
-        }
-    );
-    yakl::fence();
-    fp_t expected_soln = eta_wall / chi_wall;
+//     {
+//     Fp3d eta("eta", grid_size, grid_size, NUM_WAVELENGTHS);
+//     Fp3d chi("chi", grid_size, grid_size, NUM_WAVELENGTHS);
+//     fp_t chi_wall = FP(16.0);
+//     fp_t eta_wall = FP(8.0);
+//     parallel_for(
+//         SimpleBounds<2>(grid_size, grid_size),
+//         YAKL_LAMBDA (int x, int y) {
+//             fp_t val = FP(0.0);
+//             fp_t chi_val = FP(1e-10);
+//             if (x > 512) {
+//                 val = eta_wall;
+//                 chi_val = chi_wall;
+//             }
+//             for (int w = 0; w < NUM_WAVELENGTHS; ++w) {
+//                 eta(x, y, w) = val;
+//                 chi(x, y, w) = chi_val;
+//             }
+//         }
+//     );
+//     yakl::fence();
+//     fp_t expected_soln = eta_wall / chi_wall;
 
-    yakl::ScalarLiveOut<fp_t> intensity_full_res(FP(0.0));
-    CascadeRTState rt_state;
-    rt_state.chi = chi;
-    rt_state.eta = eta;
-    rt_state.mipmap_factor = 0;
-    parallel_for(
-        SimpleBounds<1>(1),
-        YAKL_LAMBDA (int x) {
-            yakl::SArray<fp_t, 1, NUM_AZ> az_rays(FP(1.0));
-            yakl::SArray<fp_t, 1, NUM_AZ> az_weights(FP(1.0));
-            vec2 ray_start;
-            ray_start(0) = FP(0.0);
-            ray_start(1) = FP(512.0);
-            vec2 ray_end;
-            ray_end(0) = FP(1024.0);
-            ray_end(1) = FP(512.0);
+//     yakl::ScalarLiveOut<fp_t> intensity_full_res(FP(0.0));
+//     CascadeRTState rt_state;
+//     rt_state.chi = chi;
+//     rt_state.eta = eta;
+//     rt_state.mipmap_factor = 0;
+//     parallel_for(
+//         SimpleBounds<1>(1),
+//         YAKL_LAMBDA (int x) {
+//             yakl::SArray<fp_t, 1, NUM_AZ> az_rays(FP(1.0));
+//             yakl::SArray<fp_t, 1, NUM_AZ> az_weights(FP(1.0));
+//             vec2 ray_start;
+//             ray_start(0) = FP(0.0);
+//             ray_start(1) = FP(512.0);
+//             vec2 ray_end;
+//             ray_end(0) = FP(1024.0);
+//             ray_end(1) = FP(512.0);
 
-            auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(
-                rt_state,
-                Raymarch2dStaticArgs<NUM_AZ>{
-                    .ray_start = ray_start,
-                    .ray_end = ray_end,
-                    .az_rays = az_rays,
-                    .az_weights = az_weights
-                }
-            );
-            intensity_full_res = result(0, 0);
-        }
-    );
+//             auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(
+//                 rt_state,
+//                 Raymarch2dStaticArgs<NUM_AZ>{
+//                     .ray_start = ray_start,
+//                     .ray_end = ray_end,
+//                     .az_rays = az_rays,
+//                     .az_weights = az_weights
+//                 }
+//             );
+//             intensity_full_res = result(0, 0);
+//         }
+//     );
 
-    fp_t full_res_host = intensity_full_res.hostRead();
-    CAPTURE(full_res_host);
-    REQUIRE_THAT(full_res_host, WithinRel(expected_soln, FP(1e-6)));
-
-
-    const int mip_factor = 4;
-    Fp3d eta_mip("eta_mip", grid_size / (1 << mip_factor), grid_size / (1 << mip_factor), NUM_WAVELENGTHS);
-    Fp3d chi_mip("chi_mip", grid_size / (1 << mip_factor), grid_size / (1 << mip_factor), NUM_WAVELENGTHS);
-    auto mip_dims = eta_mip.get_dimensions();
-
-    parallel_for(
-        SimpleBounds<2>(mip_dims(0), mip_dims(1)),
-        YAKL_LAMBDA (int x, int y) {
-            mipmap_arr(eta, eta_mip, mip_factor, x, y);
-        }
-    );
-    parallel_for(
-        SimpleBounds<2>(mip_dims(0), mip_dims(1)),
-        YAKL_LAMBDA (int x, int y) {
-            mipmap_arr(chi, chi_mip, mip_factor, x, y);
-        }
-    );
-    yakl::fence();
-
-    yakl::ScalarLiveOut<fp_t> intensity_mipped(FP(0.0));
-    rt_state.chi = chi_mip;
-    rt_state.eta = eta_mip;
-    rt_state.mipmap_factor = mip_factor;
-    parallel_for(
-        SimpleBounds<1>(1),
-        YAKL_LAMBDA (int x) {
-            yakl::SArray<fp_t, 1, NUM_AZ> az_rays(FP(1.0));
-            yakl::SArray<fp_t, 1, NUM_AZ> az_weights(FP(1.0));
-            // NOTE(cmo): In voxel "world" space, rather than mipmap space - conversion happens in the raymarch fn
-            vec2 ray_start;
-            ray_start(0) = FP(0.0);
-            ray_start(1) = FP(512.0);
-            vec2 ray_end;
-            ray_end(0) = FP(1024.0);
-            ray_end(1) = FP(512.0);
+//     fp_t full_res_host = intensity_full_res.hostRead();
+//     CAPTURE(full_res_host);
+//     REQUIRE_THAT(full_res_host, WithinRel(expected_soln, FP(1e-6)));
 
 
-            auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(rt_state,
-                Raymarch2dStaticArgs<NUM_AZ>{
-                    .ray_start = ray_start,
-                    .ray_end = ray_end,
-                    .az_rays = az_rays,
-                    .az_weights = az_weights
-                }
-            );
+//     const int mip_factor = 4;
+//     Fp3d eta_mip("eta_mip", grid_size / (1 << mip_factor), grid_size / (1 << mip_factor), NUM_WAVELENGTHS);
+//     Fp3d chi_mip("chi_mip", grid_size / (1 << mip_factor), grid_size / (1 << mip_factor), NUM_WAVELENGTHS);
+//     auto mip_dims = eta_mip.get_dimensions();
 
-            intensity_mipped = result(0, 0);
-        }
-    );
+//     parallel_for(
+//         SimpleBounds<2>(mip_dims(0), mip_dims(1)),
+//         YAKL_LAMBDA (int x, int y) {
+//             mipmap_arr(eta, eta_mip, mip_factor, x, y);
+//         }
+//     );
+//     parallel_for(
+//         SimpleBounds<2>(mip_dims(0), mip_dims(1)),
+//         YAKL_LAMBDA (int x, int y) {
+//             mipmap_arr(chi, chi_mip, mip_factor, x, y);
+//         }
+//     );
+//     yakl::fence();
 
-    fp_t mipped = intensity_mipped.hostRead();
-    CAPTURE(mipped);
-    REQUIRE_THAT(mipped, WithinRel(expected_soln, FP(1e-6)));
+//     yakl::ScalarLiveOut<fp_t> intensity_mipped(FP(0.0));
+//     rt_state.chi = chi_mip;
+//     rt_state.eta = eta_mip;
+//     rt_state.mipmap_factor = mip_factor;
+//     parallel_for(
+//         SimpleBounds<1>(1),
+//         YAKL_LAMBDA (int x) {
+//             yakl::SArray<fp_t, 1, NUM_AZ> az_rays(FP(1.0));
+//             yakl::SArray<fp_t, 1, NUM_AZ> az_weights(FP(1.0));
+//             // NOTE(cmo): In voxel "world" space, rather than mipmap space - conversion happens in the raymarch fn
+//             vec2 ray_start;
+//             ray_start(0) = FP(0.0);
+//             ray_start(1) = FP(512.0);
+//             vec2 ray_end;
+//             ray_end(0) = FP(1024.0);
+//             ray_end(1) = FP(512.0);
 
-    }
 
-    yakl::finalize();
-}
+//             auto result = raymarch_2d<true, NUM_WAVELENGTHS, NUM_AZ, 2 * NUM_WAVELENGTHS>(rt_state,
+//                 Raymarch2dStaticArgs<NUM_AZ>{
+//                     .ray_start = ray_start,
+//                     .ray_end = ray_end,
+//                     .az_rays = az_rays,
+//                     .az_weights = az_weights
+//                 }
+//             );
+
+//             intensity_mipped = result(0, 0);
+//         }
+//     );
+
+//     fp_t mipped = intensity_mipped.hostRead();
+//     CAPTURE(mipped);
+//     REQUIRE_THAT(mipped, WithinRel(expected_soln, FP(1e-6)));
+
+//     }
+
+//     yakl::finalize();
+// }

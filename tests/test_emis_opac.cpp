@@ -17,6 +17,7 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
                 FP(5.841142999999999e16),
                 FP(7452.542),
                 FP(1.1230805474824998e17),
+                FP(0.0),
                 FP(63145751664873.24)
             },
             AtmosPointParams{
@@ -24,6 +25,7 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
                 FP(6.141941999999999e+16),
                 FP(7399.466),
                 FP(1.1666706228599998e+17),
+                FP(0.0),
                 FP(89305991548028.25),
             },
             AtmosPointParams{
@@ -31,12 +33,14 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
                 FP(6.651615999999999e+16),
                 FP(7268.274),
                 FP(1.2817307512372998e+17),
+                FP(0.0),
                 FP(174405534535138.75)
             }
         };
 
         auto model = parse_crtaf_model<f64>("../test_CaII.yaml");
-        auto atom = to_comp_atom(model);
+        // auto atom = to_comp_atom(model);
+        auto atomic_data = to_atomic_data<fp_t, f64>({model});
         constexpr int num_wave = 8;
         const fp_t wavelengths[num_wave] = {
             fp_t(model.lines[0].lambda0),
@@ -53,7 +57,7 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
 
         constexpr int atmos_idx[num_wave] = {1, 2, 1, 0, 0, 1, 1, 2};
 
-        auto wavelength_grid = atom.wavelength.createHostCopy();
+        auto wavelength_grid = atomic_data.host.wavelength;
         yakl::Array<int, 1, yakl::memHost> wave_idxs("idxs", num_wave);
         for (int i = 0; i < wave_idxs.extent(0); ++i) {
             fp_t min_dist = FP(1.0);
@@ -75,9 +79,11 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
 
         Fp1d eta("eta", las.extent(0));
         Fp1d chi("chi", las.extent(0));
-        Fp2d lte("lte", atom.energy.extent(0), 3);
-        Fp2d n_star_scratch("scratch", atom.energy.extent(0), 3);
+        Fp2d lte("lte", atomic_data.host.energy.extent(0), 3);
+        Fp2d n_star_scratch("scratch", atomic_data.host.energy.extent(0), 3);
 
+        const auto& adata = atomic_data.device;
+        REQUIRE(atomic_data.host.num_level.extent(0) == 1);
         parallel_for(
             "Compute Emis Opac",
             SimpleBounds<1>(1),
@@ -85,12 +91,12 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
                 for (int i = 0; i < sizeof(atmos) / sizeof(atmos[0]); ++i) {
                     const auto& a = atmos[i];
                     lte_pops(
-                        atom.energy,
-                        atom.g,
-                        atom.stage,
+                        adata.energy,
+                        adata.g,
+                        adata.stage,
                         a.temperature,
                         a.ne,
-                        atom.abundance * a.nhtot,
+                        adata.abundance(0)  * a.nhtot,
                         lte,
                         i
                     );
@@ -99,7 +105,7 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
                 for (int i = 0; i < sizeof(atmos_idx) / sizeof(atmos_idx[0]); ++i) {
                     auto result = emis_opac<fp_t, yakl::memDevice>(
                         EmisOpacState<fp_t>{
-                            .atom = atom,
+                            .adata = adata,
                             .profile = profile,
                             .la = las(i),
                             .n = lte,
@@ -113,6 +119,7 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
                 }
             }
         );
+        yakl::fence();
         auto eta_h = eta.createHostCopy();
         auto chi_h = chi.createHostCopy();
         auto lte_h = lte.createHostCopy();

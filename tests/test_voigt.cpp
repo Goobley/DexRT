@@ -75,12 +75,20 @@ TEST_CASE("Voigt Interp", "[voigt_interp]") {
         );
 
         yakl::Array<decltype(complex_prof)::Voigt_t, 2, yakl::memDevice> complex_dev("complex samples", n_a, n_v);
-        YAKL_SCOPE(as_local, a);
-        YAKL_SCOPE(vs_local, v);
+        yakl::Array<f64, 1, yakl::memHost> as("as", n_a);
+        yakl::Array<f64, 1, yakl::memHost> vs("vs", n_v);
+        for (int ia = 0; ia < n_a; ++ia) {
+            as(ia) = a[ia];
+        }
+        for (int iv = 0; iv < n_v; ++iv) {
+            vs(iv) = v[iv];
+        }
+        auto as_local = as.createDeviceCopy();
+        auto vs_local = vs.createDeviceCopy();
         parallel_for(
             SimpleBounds<2>(n_a, n_v),
             YAKL_LAMBDA (int ia, int iv) {
-                complex_dev(ia, iv) = complex_prof(as_local[ia], vs_local[iv]);
+                complex_dev(ia, iv) = complex_prof(as_local(ia), vs_local(iv));
             }
         );
         auto complex_host = complex_dev.createHostCopy();
