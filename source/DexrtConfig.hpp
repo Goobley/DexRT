@@ -13,6 +13,7 @@ struct DexrtConfig {
     fp_t mem_pool_grow_gb = FP(1.4);
     std::string atmos_path;
     std::string output_path;
+    bool store_J_on_cpu = true;
     std::vector<std::string> atom_paths;
     std::vector<AtomicTreatment> atom_modes;
     BoundaryType boundary = BoundaryType::Zero;
@@ -144,6 +145,9 @@ inline DexrtConfig parse_dexrt_config(const std::string& path) {
         } else {
             throw std::runtime_error(fmt::format("Unexpected program mode: {}", mode));
         }
+    }
+    if (file["store_J_on_cpu"]) {
+        config.store_J_on_cpu = file["store_J_on_cpu"].as<bool>();
     }
 
     switch (config.mode) {

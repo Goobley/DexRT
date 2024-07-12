@@ -70,8 +70,6 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     // populations not on a probe - we don't have any way to compute this outside LTE.
     const int n_level_total = state.adata.energy.extent(0);
     state.pops = Fp3d("pops", n_level_total, space_x, space_y);
-    state.J = Fp3d("J", state.adata.wavelength.extent(0), space_x, space_y);
-    state.J = FP(0.0);
 
     if (config.mode == DexrtMode::NonLte) {
         for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
@@ -119,6 +117,14 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
     c0_rays.num_incl = NUM_INCL;
     c0_rays.wave_batch = WAVE_BATCH;
+
+    if (config.store_J_on_cpu) {
+        state.J = Fp3d("J", c0_rays.wave_batch, space_x, space_y);
+        state.J_cpu = Fp3dHost("JHost", state.adata.wavelength.extent(0), space_x, space_y);
+    } else {
+        state.J = Fp3d("J", state.adata.wavelength.extent(0), space_x, space_y);
+    }
+    state.J = FP(0.0);
     return c0_rays;
 }
 
@@ -178,9 +184,6 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     // NOTE(cmo): The raymarcher checks whether cells are active, we could remove, but this is a mode used infrequently, so set everything active.
     st->active = yakl::Array<bool, 2, yakl::memDevice>("active cells", eta.extent(0), eta.extent(1));
     st->active = true;
-    st->J = Fp3d("J", wave_dim, z_dim, x_dim);
-    st->J = FP(0.0);
-    yakl::fence();
 
     // NOTE(cmo): Only zero boundaries are supported here.
     st->boundary = BoundaryType::Zero;
@@ -190,6 +193,15 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
     c0_rays.num_incl = NUM_INCL;
     c0_rays.wave_batch = WAVE_BATCH;
+
+    if (config.store_J_on_cpu) {
+        st->J = Fp3d("J", c0_rays.wave_batch, z_dim, x_dim);
+        st->J_cpu = Fp3dHost("JHost", wave_dim, z_dim, x_dim);
+    } else {
+        st->J = Fp3d("J", wave_dim, z_dim, x_dim);
+    }
+    st->J = FP(0.0);
+    yakl::fence();
     return c0_rays;
 }
 
@@ -365,9 +377,37 @@ void init_active_probes(const State& state, CascadeState* casc) {
     }
 }
 
+/// Called to copy J from GPU to plane of host array if config.store_J_on_cpu
+void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
+    int wave_batch = la_end - la_start;
+    const Fp3dHost J_copy = state.J.createHostCopy();
+    // TODO(cmo): Replace with a memcpy?
+    for (int wave = 0; wave < wave_batch; ++wave) {
+        for (int z = 0; z < J_copy.extent(1); ++z) {
+            for (int x = 0; x < J_copy.extent(2); ++x) {
+                state.J_cpu(la_start + wave, z, x) = J_copy(wave, z, x);
+            }
+        }
+    }
+}
+
+void setup_wavelength_batch(const State& state, int la_start, int la_end) {
+    if (state.config.store_J_on_cpu) {
+        state.J = FP(0.0);
+        yakl::fence();
+    }
+}
+
+void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
+    if (state.config.store_J_on_cpu) {
+        copy_J_plane_to_host(state, la_start, la_end);
+    }
+}
+
+template <int J_mem_space>
 void save_results(
     const DexrtConfig& config,
-    const FpConst3d& J,
+    const yakl::Array<fp_t, 3, J_mem_space>& J,
     const FpConst1d& wavelengths=FpConst1d(),
     const FpConst3d& eta=FpConst3d(),
     const FpConst3d& chi=FpConst3d(),
@@ -455,6 +495,7 @@ int main(int argc, char** argv) {
                 la_start += state.c0_size.wave_batch
             ) {
                 const int la_end = std::min(la_start + state.c0_size.wave_batch, num_waves);
+                setup_wavelength_batch(state, la_start, la_end);
                 static_formal_sol_given_rc(
                     state,
                     casc_state,
@@ -462,19 +503,32 @@ int main(int argc, char** argv) {
                     la_start,
                     la_end
                 );
+                finalise_wavelength_batch(state, la_start, la_end);
             }
 
             Fp1d dummy_wavelengths;
             Fp3d dummy_pops;
-            save_results(
-                config,
-                state.J,
-                dummy_wavelengths,
-                casc_state.eta,
-                casc_state.chi,
-                dummy_pops,
-                casc_state.i_cascades[0]
-            );
+            if (config.store_J_on_cpu) {
+                save_results(
+                    config,
+                    state.J_cpu,
+                    dummy_wavelengths,
+                    casc_state.eta,
+                    casc_state.chi,
+                    dummy_pops,
+                    casc_state.i_cascades[0]
+                );
+            } else {
+                save_results(
+                    config,
+                    state.J,
+                    dummy_wavelengths,
+                    casc_state.eta,
+                    casc_state.chi,
+                    dummy_pops,
+                    casc_state.i_cascades[0]
+                );
+            }
         } else {
             if (config.sparse_calculation) {
                 init_active_probes(state, &casc_state);
@@ -525,6 +579,9 @@ int main(int argc, char** argv) {
                     compute_collisions_to_gamma(&state);
                     state.J = FP(0.0);
                     compute_profile_normalisation(state, casc_state);
+                    if (config.store_J_on_cpu) {
+                        state.J_cpu = FP(0.0);
+                    }
                     yakl::fence();
                     for (
                         int la_start = 0;
@@ -532,7 +589,7 @@ int main(int argc, char** argv) {
                         la_start += state.c0_size.wave_batch
                     ) {
                         int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
-
+                        setup_wavelength_batch(state, la_start, la_end);
                         bool lambda_iterate = i < initial_lambda_iterations;
                         fs_fn(
                             state,
@@ -541,6 +598,7 @@ int main(int argc, char** argv) {
                             la_start,
                             la_end
                         );
+                        finalise_wavelength_batch(state, la_start, la_end);
                     }
                     yakl::fence();
                     fmt::println("Stat eq");
@@ -560,6 +618,9 @@ int main(int argc, char** argv) {
                     fmt::println("Final FS (dense)");
                     compute_nh0(state);
                     state.J = FP(0.0);
+                    if (config.store_J_on_cpu) {
+                        state.J_cpu = FP(0.0);
+                    }
                     yakl::fence();
                     for (
                         int la_start = 0;
@@ -567,7 +628,7 @@ int main(int argc, char** argv) {
                         la_start += state.c0_size.wave_batch
                     ) {
                         int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
-
+                        setup_wavelength_batch(state, la_start, la_end);
                         bool lambda_iterate = i < initial_lambda_iterations;
                         fs_fn(
                             state,
@@ -576,6 +637,7 @@ int main(int argc, char** argv) {
                             la_start,
                             la_end
                         );
+                        finalise_wavelength_batch(state, la_start, la_end);
                     }
                     yakl::fence();
                     state.config.sparse_calculation = true;
@@ -583,9 +645,13 @@ int main(int argc, char** argv) {
             } else {
                 state.J = FP(0.0);
                 compute_nh0(state);
+                if (config.store_J_on_cpu) {
+                    state.J_cpu = FP(0.0);
+                }
                 yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
+                    setup_wavelength_batch(state, la_start, la_end);
                     fmt::println(
                         "Computing wavelengths [{}, {}] ({}, {})",
                         la_start,
@@ -595,20 +661,36 @@ int main(int argc, char** argv) {
                     );
                     bool lambda_iterate = true;
                     fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
+                    finalise_wavelength_batch(state, la_start, la_end);
                 }
             }
-            save_results(
-                config,
-                state.J,
-                state.adata.wavelength,
-                casc_state.eta,
-                casc_state.chi,
-                state.pops,
-                casc_state.i_cascades[0],
-                state.alo,
-                state.atmos.ne,
-                state.atmos.nh_tot
-            );
+            if (config.store_J_on_cpu) {
+                save_results(
+                    config,
+                    state.J_cpu,
+                    state.adata.wavelength,
+                    casc_state.eta,
+                    casc_state.chi,
+                    state.pops,
+                    casc_state.i_cascades[0],
+                    state.alo,
+                    state.atmos.ne,
+                    state.atmos.nh_tot
+                );
+            } else {
+                save_results(
+                    config,
+                    state.J,
+                    state.adata.wavelength,
+                    casc_state.eta,
+                    casc_state.chi,
+                    state.pops,
+                    casc_state.i_cascades[0],
+                    state.alo,
+                    state.atmos.ne,
+                    state.atmos.nh_tot
+                );
+            }
         }
         finalize_state(&state);
     }

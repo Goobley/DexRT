@@ -14,6 +14,7 @@ class DexrtConfig(BaseModel):
     atmos_path: str = "dexrt_atmos.nc"
     output_path: str = "dexrt.nc"
     mode: Union[Literal["Lte"], Literal["NonLte"], Literal["GivenFs"]] = "NonLte"
+    store_J_on_cpu: bool = True
 
 class DexrtLteConfig(DexrtConfig):
     mode: Literal["Lte"] = "Lte"

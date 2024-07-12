@@ -34,3 +34,5 @@ tests/build/*
 *.npy
 *.nc
 *.code-workspace
+
+__pycache__

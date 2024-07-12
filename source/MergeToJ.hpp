@@ -18,6 +18,11 @@ inline FpConst3d merge_c0_to_J(
     const fp_t phi_weight = FP(1.0) / fp_t(c0_dirs_to_average<RcMode>());
     int wave_batch = la_end - la_start;
 
+    // NOTE(cmo): Handle case of J on the GPU only being a single plane (config.store_J_on_cpu)
+    if (c0_dims.wave_batch == J.extent(0)) {
+        la_start = 0;
+    }
+
     parallel_for(
         "final_cascade_to_J",
         SimpleBounds<5>(
