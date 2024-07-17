@@ -6,10 +6,17 @@
 #include "Collisions.hpp"
 #include "GammaMatrix.hpp"
 
+struct NrPostUpdateOptions {
+    /// When computing relative change, ignore the change in populations with a
+    /// starting fraction lower than this
+    fp_t ignore_change_below_ntot_frac = FP(0.0);
+};
+
 #ifdef DEXRT_USE_MAGMA
 template <typename T=fp_t>
-inline fp_t nr_post_update(State* state) {
+inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions()) {
     yakl::timer_start("Charge conservation");
+    JasUnpack(args, ignore_change_below_ntot_frac);
     constexpr bool print_debug = false;
     // NOTE(cmo): Here be big angry dragons. The implementation is disgusting and hard to follow. This needs to be redone.
     // TODO(cmo): There's too many fences in here!
@@ -275,11 +282,21 @@ inline fp_t nr_post_update(State* state) {
             ipiv_ptrs(k) = &ipivs(k, 0);
         }
     );
-    int print_idx = std::min(100 * state->pops.extent(1) + 536, F.extent(0)-1);
+    // z * Nx + x
+    int print_idx = std::min(323 * state->pops.extent(2) + 520, F.extent(0)-1);
     if (print_debug) {
         const auto dF_host = dF.createHostCopy();
         const auto dC_host = dC.createHostCopy();
         const auto F_host = F.createHostCopy();
+        const auto ne_host = ne_flat.createHostCopy();
+        const auto pops_host = pops.createHostCopy();
+
+        fmt::print("Before ");
+        for (int i = 0; i < num_level; ++i) {
+            fmt::print("{:e}, ", pops_host(i, print_idx));
+        }
+        fmt::print("{:e}, ", ne_host(print_idx));
+        fmt::print("\n");
 
         fmt::println("-------- dF ----------");
         for (int i = 0; i < dF_host.extent(2); ++i) {
@@ -366,6 +383,12 @@ inline fp_t nr_post_update(State* state) {
         }
         fmt::print("{:e}, ", ne_host(print_idx) + F_host(print_idx, num_eqn-1));
         fmt::print("\n");
+        fmt::print("Rel Change ");
+        for (int i = 0; i < num_level; ++i) {
+            fmt::print("{:e}, ", F_host(print_idx, i) / (pops_host(i, print_idx)));
+        }
+        fmt::print("{:e}, ", F_host(print_idx, num_eqn-1) / (ne_host(print_idx)));
+        fmt::print("\n");
     }
 
     Fp2d max_rel_change("max rel change", F.extent(0), F.extent(1));
@@ -399,7 +422,9 @@ inline fp_t nr_post_update(State* state) {
                 }
                 for (int i = 0; i < num_level; ++i) {
                     fp_t update = step_size * F(k, i);
-                    max_rel_change(k, i) = std::abs(update / (pops(i, k)));
+                    if (pops(i, k) > ignore_change_below_ntot_frac * nhtot(k)) {
+                        max_rel_change(k, i) = std::abs(update / (pops(i, k)));
+                    }
                     pops(i, k) += update;
                 }
                 fp_t ne_update = step_size * F(k, num_eqn-1);

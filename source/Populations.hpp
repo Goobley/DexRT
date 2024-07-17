@@ -959,10 +959,18 @@ inline void compute_lte_pops(const State* state, const Fp3d shared_pops) {
     }
 }
 
+struct StatEqOptions {
+    /// When computing relative change, ignore the change in populations with a
+    /// starting fraction lower than this
+    fp_t ignore_change_below_ntot_frac = FP(0.0);
+};
+
 #ifdef DEXRT_USE_MAGMA
 template <typename T=fp_t>
-inline fp_t stat_eq(State* state) {
+inline fp_t stat_eq(State* state, const StatEqOptions& args = StatEqOptions()) {
     yakl::timer_start("Stat eq");
+    constexpr bool debug_print = false;
+    JasUnpack(args, ignore_change_below_ntot_frac);
     fp_t global_max_change = FP(0.0);
     const auto& active = state->active.collapse();
     for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
@@ -1061,14 +1069,16 @@ inline fp_t stat_eq(State* state) {
         yakl::fence();
 
         const int print_idx = std::min(
-            int(128 * state->atmos.temperature.extent(1) + 128),
+            // z * Nx  + x
+            int(323 * state->atmos.temperature.extent(1) + 520),
             int(state->atmos.temperature.extent(0) * state->atmos.temperature.extent(1) - 1)
         );
-        if (false) {
+        if (debug_print) {
             auto GammaT_host = GammaT.createHostCopy();
             auto pops_host = pops.createHostCopy();
             auto ntotal_host = n_total.createHostCopy();
-            // const int print_idx = 452 * state->atmos.temperature.extent(1) + 519;
+            auto active_host = active.createHostCopy();
+            fmt::println("Active {}", active_host(print_idx));
             for (int i = 0; i < GammaT_host.extent(2); ++i) {
                 for (int j = 0; j < GammaT_host.extent(1); ++j) {
                     fmt::print("{:e}, ", GammaT_host(print_idx, j, i));
@@ -1163,7 +1173,11 @@ inline fp_t stat_eq(State* state) {
             YAKL_LAMBDA (int64_t k, int i) {
                 fp_t change = FP(0.0);
                 if (active(k)) {
-                    change = std::abs(FP(1.0) - pops(pops_start + i, k) / new_pops(k, i));
+                    if (pops(pops_start + i, k) < ignore_change_below_ntot_frac * n_total(k)) {
+                        change = FP(0.0);
+                    } else {
+                        change = std::abs(FP(1.0) - pops(pops_start + i, k) / new_pops(k, i));
+                    }
                 }
                 max_rel_change(k, i) = change;
             }
@@ -1179,7 +1193,8 @@ inline fp_t stat_eq(State* state) {
                 }
             }
         );
-        if (false) {
+        if (debug_print) {
+            yakl::fence();
             auto pops_host = pops.createHostCopy();
             fmt::print("pops post ");
             for (int i = 0; i < num_level; ++i) {
@@ -1215,7 +1230,7 @@ inline fp_t stat_eq(State* state) {
 }
 #else
 template <typename T=fp_t>
-inline fp_t stat_eq(State* state) { return FP(0.0); }
+inline fp_t stat_eq(State* state, const StatEqOptions& args = StatEqOptions()) { return FP(0.0); }
 #endif
 
 inline void compute_nh0(const State& state) {

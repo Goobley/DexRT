@@ -159,9 +159,9 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     st->given_state.opac = chi.createDeviceCopy();
 #else
     auto etad = eta.createDeviceCopy();
-    auto chid = eta.createDeviceCopy();
-    emis = Fp3d("eta", z_dim, x_dim, wave_dim);
-    opac = Fp3d("chi", z_dim, x_dim, wave_dim);
+    auto chid = chi.createDeviceCopy();
+    Fp3d emis("eta", z_dim, x_dim, wave_dim);
+    Fp3d opac("chi", z_dim, x_dim, wave_dim);
     yakl::fence();
     parallel_for(
         "Convert f32->f64",
@@ -169,14 +169,14 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
         YAKL_LAMBDA (int z, int x, int la) {
             emis(z, x, la) = etad(z, x, la);
         }
-    )
+    );
     parallel_for(
         "Convert f32->f64",
         SimpleBounds<3>(z_dim, x_dim, wave_dim),
         YAKL_LAMBDA (int z, int x, int la) {
             opac(z, x, la) = chid(z, x, la);
         }
-    )
+    );
     yakl::fence();
     st->given_state.emis = emis;
     st->given_state.opac = opac;
@@ -698,15 +698,26 @@ int main(int argc, char** argv) {
                     fmt::println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
-                    while ((lte_max_change > FP(1e-3) || lte_i < 5) && lte_i < max_iters) {
+                    while ((lte_max_change > FP(1e-3) || lte_i < 6) && lte_i < max_iters) {
                         lte_i += 1;
                         compute_nh0(state);
                         compute_collisions_to_gamma(&state);
-                        lte_max_change = stat_eq<f64>(&state);
+                        // NOTE(cmo): When dealing with just the collisional
+                        // rates, numerical precision can be a bit of a pain,
+                        // and get stuck in loops. Here we ignore changes to
+                        // populations below 1e-12 of the total species fraction
+                        // -- they are very unlikely overly important for charge
+                        // conservation stuff. This is just to get a starting
+                        // guess anyway.
+                        lte_max_change = stat_eq<f64>(&state, StatEqOptions{
+                            .ignore_change_below_ntot_frac=FP(1e-12)
+                        });
                         if (lte_i < 2) {
                             continue;
                         }
-                        fp_t nr_update = nr_post_update<f64>(&state);
+                        fp_t nr_update = nr_post_update<f64>(&state, NrPostUpdateOptions{
+                            .ignore_change_below_ntot_frac=FP(1e-12)
+                        });
                         lte_max_change = std::max(nr_update, lte_max_change);
                         if (actually_conserve_pressure) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
