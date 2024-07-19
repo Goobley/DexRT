@@ -8,7 +8,7 @@ class DexrtRaySystemConfig(BaseModel):
 class DexrtRayConfig(BaseModel):
     system: DexrtRaySystemConfig = Field(default_factory=DexrtRaySystemConfig)
     dexrt_config_path: str = "dexrt.yaml"
-    ray_output_path: str = "ray_output.yaml"
+    ray_output_path: str = "ray_output.nc"
     muz: List[float] = Field(default_factory=list)
     mux: List[float] = Field(default_factory=list)
     wavelength: List[float] = Field(default_factory=list)
