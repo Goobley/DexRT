@@ -38,9 +38,11 @@ constexpr bool LAST_CASCADE_TO_INFTY = true;
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
 
 constexpr bool PREAVERAGE = false;
-constexpr bool DIR_BY_DIR = true;
+constexpr bool DIR_BY_DIR = false;
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
 
+constexpr bool NORMALISE_CASCADE_J = false;
+static_assert (! (NORMALISE_CASCADE_J && DIR_BY_DIR), "Cannot use both NORMALISE_CASCADE_J and DIR_BY_DIR together");
 // constexpr bool BRANCH_RAYS = false;
 // constexpr bool BILINEAR_FIX = false;
 // constexpr bool USE_MIPMAPS = false;
@@ -53,7 +55,7 @@ constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 
-// #define FLATLAND
+#define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_INCL = 1;
 constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);

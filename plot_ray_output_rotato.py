@@ -15,7 +15,7 @@ delta_lambda = 0.017
 delta_lambda = 0.082
 # outdir = Path("SnowKHIRay")
 # outdir = Path("Valeriia_a0500")
-outdir = Path("Valeriia_a0500_1x")
+outdir = Path("mag4g_1x")
 outdir.mkdir(parents=True, exist_ok=True)
 
 # atom_name = "Ca II"
@@ -25,8 +25,8 @@ outdir.mkdir(parents=True, exist_ok=True)
 
 
 # atom_name = "H I"
-# # lambda0 = 121.56841096386113
-# # delta_lambda = 0.07
+# lambda0 = 121.56841096386113
+# delta_lambda = 0.07
 # lambda0 = 102.57334047695103
 # delta_lambda = 0.07
 # lambda0 = 656.4691622298104
@@ -64,7 +64,7 @@ def centres_to_edges(x):
     ])
 
 if __name__ == "__main__":
-    config_path = "dexrt_ray_valeriia_a0500_branch1_91.yaml"
+    config_path = "mag4g_1x_ray.yaml"
     with open(f"build/{config_path}", "r") as f:
         config = yaml.load(f, Loader=yaml.Loader)
 

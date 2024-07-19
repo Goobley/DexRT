@@ -27,7 +27,8 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     const CascadeRays& rays,
     const ProbeIndex& this_probe,
     RayProps ray,
-    const RaymarchParams<DynamicState>& params
+    const RaymarchParams<DynamicState>& params,
+    const Fp3d& J_Cn
 ) {
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
@@ -44,6 +45,16 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
             .dyn_state = params.dyn_state
         }
     );
+
+    if constexpr (NORMALISE_CASCADE_J) {
+        const fp_t phi_weight = FP(1.0) / fp_t(rays.num_flat_dirs);
+        if (J_Cn.initialized()) {
+            yakl::atomicAdd(
+                J_Cn(this_probe.coord(1), this_probe.coord(0), this_probe.wave),
+                phi_weight * params.incl_weight * ri.I
+            );
+        }
+    }
 
     constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
     // const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
@@ -164,6 +175,41 @@ void cascade_i_25d(
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
     constexpr int num_subsets = subset_tasks_per_cascade<RcMode>();
     assert(subset_idx < num_subsets);
+    Fp3d J_Cn_p;
+    Fp3d J_Cn;
+    if constexpr (NORMALISE_CASCADE_J) {
+        J_Cn = Fp3d("J_Cn", ray_set.num_probes(1), ray_set.num_probes(0), ray_set.wave_batch);
+        J_Cn = FP(0.0);
+        // NOTE(cmo): Compute J at each probe of Cn+1
+        if (lookup.ip != -1) {
+            CascadeRays ray_set_p = cascade_compute_size<RcMode>(state.c0_size, cascade_idx+1);
+            J_Cn_p = Fp3d("J_Cn_p", ray_set_p.num_probes(1), ray_set_p.num_probes(0), ray_set_p.wave_batch);
+            const fp_t phi_weight = FP(1.0) / fp_t(ray_set_p.num_flat_dirs);
+            parallel_for(
+                "J_Cn_p",
+                SimpleBounds<3>(J_Cn_p.extent(0), J_Cn_p.extent(1), J_Cn_p.extent(2)),
+                YAKL_LAMBDA (int z, int x, int wave) {
+                    J_Cn_p(z, x, wave) = FP(0.0);
+                    for (int phi_idx = 0; phi_idx < ray_set_p.num_flat_dirs; ++phi_idx) {
+                        for (int theta_idx = 0; theta_idx < ray_set_p.num_incl; ++theta_idx) {
+                            fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
+                            ivec2 coord;
+                            coord(0) = x;
+                            coord(1) = z;
+                            ProbeIndex idx{
+                                .coord=coord,
+                                .dir=phi_idx,
+                                .incl=theta_idx,
+                                .wave=wave
+                            };
+                            const fp_t sample = probe_fetch<RcMode>(i_cascade_ip, ray_set_p, idx);
+                            J_Cn_p(z, x, wave) += ray_weight * sample;
+                        }
+                    }
+                }
+            );
+        }
+    }
 
     constexpr int num_rays_per_texel = rays_per_stored_texel<RcMode>();
     int wave_batch = la_end - la_start;
@@ -259,8 +305,10 @@ void cascade_i_25d(
                 auto& casc_rays = ray_set;
 #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
                 const auto boundaries = boundaries_h;
+                const auto J_Cn_d = J_Cn;
 #else
                 const auto& boundaries = boundaries_h;
+                const auto& J_Cn_d = J_Cn;
 #endif
                 if constexpr (RcMode & RC_SAMPLE_BC) {
                     switch (boundaries.boundary) {
@@ -271,7 +319,8 @@ void cascade_i_25d(
                                 casc_rays,
                                 probe_idx,
                                 ray,
-                                params
+                                params,
+                                J_Cn_d
                             );
                         } break;
                         case BoundaryType::Promweaver: {
@@ -281,7 +330,8 @@ void cascade_i_25d(
                                 casc_rays,
                                 probe_idx,
                                 ray,
-                                params
+                                params,
+                                J_Cn_d
                             );
                         } break;
                         default: {
@@ -295,7 +345,8 @@ void cascade_i_25d(
                         casc_rays,
                         probe_idx,
                         ray,
-                        params
+                        params,
+                        J_Cn_d
                     );
                 }
                 average_ri.I += sample_weight * ri.I;
@@ -323,6 +374,82 @@ void cascade_i_25d(
         }
     );
     yakl::fence();
+    if constexpr (NORMALISE_CASCADE_J) {
+        if (lookup.ip != -1) {
+            fmt::println("Cascade {}", cascade_idx);
+            const fp_t phi_weight = FP(1.0) / fp_t(ray_set.num_flat_dirs);
+            parallel_for(
+                "J_Cn normalisation",
+                SimpleBounds<3>(
+                    ray_set.num_probes(1),
+                    ray_set.num_probes(0),
+                    wave_batch
+                ),
+                YAKL_LAMBDA (int v, int u, int wave) {
+                    fp_t J_merged = FP(0.0);
+                    ivec2 this_coord;
+                    this_coord(0) = u;
+                    this_coord(1) = v;
+                    for (int phi_idx = 0; phi_idx < ray_set.num_flat_dirs; ++phi_idx) {
+                        for (int theta_idx = 0; theta_idx < ray_set.num_incl; ++theta_idx) {
+                            fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
+                            int la = la_start + wave;
+                            ProbeIndex idx{
+                                .coord=this_coord,
+                                .dir=phi_idx,
+                                .incl=theta_idx,
+                                .wave=wave
+                            };
+                            const fp_t sample = probe_fetch<RcMode>(i_cascade_i, ray_set, idx);
+                            J_merged += ray_weight * sample;
+                        }
+                    }
+
+                    fp_t J_max = J_Cn(v, u, wave);
+                    CascadeRays upper_rays = cascade_compute_size(ray_set, 1);
+                    BilinearCorner base = bilinear_corner(this_coord);
+                    vec4 weights = bilinear_weights(base);
+                    fp_t J_n_p_interp = FP(0.0);
+                    for (int bilin = 0; bilin < 4; ++bilin) {
+                        ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+                        ivec2 coord = base.corner + bilin_offset;
+                        J_n_p_interp += weights(bilin) * J_Cn_p(coord(1), coord(0), wave);
+                    }
+                    J_max = std::max(J_max, J_n_p_interp);
+                    // J_max += J_n_p_interp;
+                    // for (int bilin = 0; bilin < 4; ++bilin) {
+                    //     ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+                    //     ivec2 coord = base.corner + bilin_offset;
+                    //     const fp_t sample = J_Cn_p(coord(1), coord(0), wave);
+                    //     J_max = std::max(J_max, sample);
+                    // }
+
+                    if (cascade_idx == 0 && v == 419 && u == 407 && wave == 2) {
+                        printf("%e, %e, %e, %e\n", J_Cn(v, u, wave), J_n_p_interp, J_max, J_merged);
+                    }
+                    if (J_merged > J_max) {
+                        const fp_t J_fac = J_max / J_merged;
+                        for (int phi_idx = 0; phi_idx < ray_set.num_flat_dirs; ++phi_idx) {
+                            for (int theta_idx = 0; theta_idx < ray_set.num_incl; ++theta_idx) {
+                                ProbeIndex idx{
+                                    .coord=this_coord,
+                                    .dir=phi_idx,
+                                    .incl=theta_idx,
+                                    .wave=wave
+                                };
+                                i64 lin_idx = probe_linear_index<RcMode>(ray_set, idx);
+                                fp_t sample = i_cascade_i(lin_idx);
+                                sample *= J_fac;
+                                i_cascade_i(lin_idx) = sample;
+                            }
+                        }
+                    }
+                }
+            );
+            yakl::fence();
+        }
+    }
+
     yakl::timer_stop(name.c_str());
 }
 
