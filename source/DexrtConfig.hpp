@@ -163,11 +163,13 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
         out.ne = false;
         out.nh_tot = false;
         out.pops = false;
+        out.lte_pops = false;
         out.active = false;
         out.alo = false;
     } else if (config.mode == DexrtMode::Lte) {
         out.ne = false;
         out.nh_tot = false;
+        out.lte_pops = false;
         out.alo = false;
         out.active = config.sparse_calculation;
     } else if (config.mode == DexrtMode::NonLte) {
