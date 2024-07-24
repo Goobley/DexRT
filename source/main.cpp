@@ -611,9 +611,10 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     for (int casc : out_cfg.cascades) {
         // NOTE(cmo): The validity of these + necessary warning were checked/output in the config parsing step
         std::string name = fmt::format("I_C{}", casc);
-        nc.write(casc_state.i_cascades[casc], name, {"casc_shape"});
+        std::string shape = fmt::format("casc_shape_{}", casc);
+        nc.write(casc_state.i_cascades[casc], name, {shape});
         name = fmt::format("tau_C{}", casc);
-        nc.write(casc_state.tau_cascades[casc], name, {"casc_shape"});
+        nc.write(casc_state.tau_cascades[casc], name, {shape});
     }
     nc.close();
 }

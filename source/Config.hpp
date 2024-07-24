@@ -27,7 +27,7 @@ typedef uint64_t u64;
 
 constexpr int DEXRT_WARP_SIZE = 32;
 
-constexpr fp_t PROBE0_LENGTH = FP(2.0);
+constexpr fp_t PROBE0_LENGTH = FP(1.5);
 constexpr int PROBE0_NUM_RAYS = 4;
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 
@@ -38,22 +38,32 @@ constexpr bool LAST_CASCADE_TO_INFTY = true;
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
 
 constexpr bool PREAVERAGE = false;
-constexpr bool DIR_BY_DIR = true;
+constexpr bool DIR_BY_DIR = false;
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
+
+enum class RcConfiguration {
+    Vanilla,
+    ParallaxFix,
+    ParallaxFixInner,
+    BilinearFix,
+};
+constexpr RcConfiguration RC_CONFIG = RcConfiguration::ParallaxFixInner;
+constexpr int PARALLAX_MERGE_ABOVE_CASCADE = -1;
+static_assert(RC_CONFIG != RcConfiguration::BilinearFix, "BilinearFix not implemented");
 
 // constexpr bool BRANCH_RAYS = false;
 // constexpr bool BILINEAR_FIX = false;
 // constexpr bool USE_MIPMAPS = false;
 // constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
 
-constexpr bool PINGPONG_BUFFERS = true;
+constexpr bool PINGPONG_BUFFERS = false;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 // constexpr bool USE_BC = true;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 
-// #define FLATLAND
+#define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_INCL = 1;
 constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);

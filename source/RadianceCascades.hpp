@@ -71,11 +71,516 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                     .wave = this_probe.wave
                 };
                 interp.I += ray_weight * weights(bilin) * probe_fetch<RcMode>(upper_I, upper_rays, upper_probe);
+                // interp.tau += ray_weight * weights(bilin) * std::exp(-probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe));
+                interp.tau += ray_weight * weights(bilin) * probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe);
+            }
+        }
+        // interp.tau = -std::log(interp.tau);
+    }
+    return merge_intervals(ri, interp);
+}
+
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
+    const CascadeStateAndBc<Bc>& casc_state,
+    const CascadeRays& rays,
+    const ProbeIndex& this_probe,
+    RayProps ray,
+    const RaymarchParams<DynamicState>& params
+) {
+    ray = invert_direction(ray);
+    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
+        Raymarch2dArgs<Bc, DynamicState>{
+            .casc_state_bc = casc_state,
+            .ray = ray,
+            .distance_scale = params.distance_scale,
+            .incl = params.incl,
+            .incl_weight = params.incl_weight,
+            .wave = this_probe.wave,
+            .la = params.la,
+            .offset = params.offset,
+            .active = params.active,
+            .dyn_state = params.dyn_state
+        }
+    );
+
+    constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
+    // const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
+    const int upper_ray_start_idx = this_probe.dir * (1 << CASCADE_BRANCHING_FACTOR);
+    const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
+
+    RadianceInterval<Alo> interp{};
+    if (casc_state.state.upper_I.initialized()) {
+        BilinearCorner base = bilinear_corner(this_probe.coord);
+        vec4 weights = bilinear_weights(base);
+        JasUnpack(casc_state.state, upper_I, upper_tau);
+        // NOTE(cmo): The cascade_compute_size function works with any cascade and a relative level offset for n.
+        CascadeRays upper_rays = cascade_compute_size(rays, 1);
+        for (int bilin = 0; bilin < 4; ++bilin) {
+            ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+            for (
+                int upper_ray_idx = upper_ray_start_idx;
+                upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
+                ++upper_ray_idx
+            ) {
+                ProbeIndex upper_probe{
+                    .coord = base.corner + bilin_offset,
+                    .dir = upper_ray_idx,
+                    .incl = this_probe.incl,
+                    .wave = this_probe.wave
+                };
+                interp.I += ray_weight * weights(bilin) * probe_fetch<RcMode>(upper_I, upper_rays, upper_probe);
                 interp.tau += ray_weight * weights(bilin) * probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe);
             }
         }
     }
     return merge_intervals(ri, interp);
+}
+
+template <
+    int RcMode=0
+>
+YAKL_INLINE RadianceInterval<DexEmpty> interp_probe_dir(
+    const DeviceCascadeState& casc_state,
+    const CascadeRays& rays,
+    const ProbeIndex& probe_idx,
+    fp_t dir_frac_idx,
+    bool upper
+) {
+    ProbeIndex upper_probe_0(probe_idx);
+    upper_probe_0.dir = int(dir_frac_idx);
+    i64 idx_0 = probe_linear_index<RcMode>(rays, upper_probe_0);
+
+    ProbeIndex upper_probe_1(probe_idx);
+    // TODO(cmo): How does this interact with dir_by_dir? Clamp?
+    upper_probe_1.dir = (int(dir_frac_idx) + 1) % rays.num_flat_dirs;
+    i64 idx_1 = probe_linear_index<RcMode>(rays, upper_probe_1);
+    fp_t w1 = dir_frac_idx - int(dir_frac_idx);
+    fp_t w0 = FP(1.0) - w1;
+
+    RadianceInterval<DexEmpty> ri{};
+    if (upper) {
+        ri.I += w0 * casc_state.upper_I(idx_0);
+        ri.tau += w0 * std::exp(-casc_state.upper_tau(idx_0));
+        ri.I += w1 * casc_state.upper_I(idx_1);
+        ri.tau += w1 * std::exp(-casc_state.upper_tau(idx_1));
+    } else {
+        ri.I += w0 * casc_state.cascade_I(idx_0);
+        ri.tau += w0 * std::exp(-casc_state.cascade_tau(idx_0));
+        ri.I += w1 * casc_state.cascade_I(idx_1);
+        ri.tau += w1 * std::exp(-casc_state.cascade_tau(idx_1));
+    }
+    ri.tau = -std::log(ri.tau);
+
+    // NOTE(cmo): Can ignore the alo, as it's never merged (comes from C0 only).
+    return ri;
+}
+
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
+    const CascadeStateAndBc<Bc>& casc_state,
+    const CascadeRays& rays,
+    const ProbeIndex& this_probe,
+    RayProps ray,
+    const RaymarchParams<DynamicState>& params
+) {
+    ray = invert_direction(ray);
+    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
+        Raymarch2dArgs<Bc, DynamicState>{
+            .casc_state_bc = casc_state,
+            .ray = ray,
+            .distance_scale = params.distance_scale,
+            .incl = params.incl,
+            .incl_weight = params.incl_weight,
+            .wave = this_probe.wave,
+            .la = params.la,
+            .offset = params.offset,
+            .active = params.active,
+            .dyn_state = params.dyn_state
+        }
+    );
+
+    constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
+    const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
+
+    RadianceInterval<Alo> interp{};
+    if (casc_state.state.upper_I.initialized()) {
+        BilinearCorner base = bilinear_corner(this_probe.coord);
+        vec4 weights = bilinear_weights(base);
+        JasUnpack(casc_state.state, upper_I, upper_tau);
+        // NOTE(cmo): The cascade_compute_size function works with any cascade and a relative level offset for n.
+        ProbeIndex prev_probe(this_probe);
+        prev_probe.dir -= 1;
+        if (prev_probe.dir < 0) {
+            prev_probe.dir = rays.num_flat_dirs - 1;
+        }
+        RayProps prev_ray = ray_props(
+            rays,
+            casc_state.state.num_cascades,
+            casc_state.state.n,
+            prev_probe
+        );
+
+        ProbeIndex next_probe(this_probe);
+        next_probe.dir += 1;
+        if (next_probe.dir >= rays.num_flat_dirs) {
+            next_probe.dir = 0;
+        }
+        RayProps next_ray = ray_props(
+            rays,
+            casc_state.state.num_cascades,
+            casc_state.state.n,
+            next_probe
+        );
+        // NOTE(cmo): These new rays haven't been inverted, so we use .end...
+        vec2 cone_start_pos = ray.start + FP(0.5) * (prev_ray.end - ray.start);
+        vec2 cone_end_pos = ray.start + FP(0.5) * (next_ray.end - ray.start);
+
+        CascadeRays upper_rays = cascade_compute_size(rays, 1);
+        for (int bilin = 0; bilin < 4; ++bilin) {
+            ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+            ProbeIndex upper_probe{
+                .coord = base.corner + bilin_offset,
+                .dir = 0,
+                .incl = this_probe.incl,
+                .wave = this_probe.wave
+            };
+            vec2 upper_probe_pos = probe_pos(upper_probe.coord, casc_state.state.n+1);
+
+            for (
+                int upper_ray_idx = 0;
+                upper_ray_idx < num_rays_per_ray;
+                ++upper_ray_idx
+            ) {
+                vec2 upper_ray_start = (upper_ray_idx + FP(0.5)) * (cone_end_pos - cone_start_pos) * ray_weight + cone_start_pos;
+                vec2 parallax_dir = upper_ray_start - upper_probe_pos;
+                fp_t frac_idx = probe_frac_dir_idx(upper_rays, parallax_dir);
+
+                RadianceInterval<DexEmpty> upper_ri = interp_probe_dir(
+                    casc_state.state,
+                    upper_rays,
+                    upper_probe,
+                    frac_idx,
+                    true
+                );
+                interp.I += ray_weight * weights(bilin) * upper_ri.I;
+                interp.tau += ray_weight * weights(bilin) * upper_ri.tau;
+            }
+        }
+    }
+    return merge_intervals(ri, interp);
+}
+
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo> march_parallax_fix_inner(
+    const CascadeStateAndBc<Bc>& casc_state,
+    const CascadeRays& rays,
+    const ProbeIndex& this_probe,
+    RayProps ray,
+    const RaymarchParams<DynamicState>& params
+) {
+    ray = invert_direction(ray);
+    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
+        Raymarch2dArgs<Bc, DynamicState>{
+            .casc_state_bc = casc_state,
+            .ray = ray,
+            .distance_scale = params.distance_scale,
+            .incl = params.incl,
+            .incl_weight = params.incl_weight,
+            .wave = this_probe.wave,
+            .la = params.la,
+            .offset = params.offset,
+            .active = params.active,
+            .dyn_state = params.dyn_state
+        }
+    );
+
+    // NOTE(cmo): Can't merge in-place with this fix.
+    return ri;
+}
+
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo> march_and_merge_dispatch(
+    const CascadeStateAndBc<Bc>& casc_state,
+    const CascadeRays& rays,
+    const ProbeIndex& this_probe,
+    RayProps ray,
+    const RaymarchParams<DynamicState>& params
+) {
+    if constexpr (RC_CONFIG == RcConfiguration::Vanilla) {
+        return march_and_merge_average_interval<RcMode>(
+            casc_state,
+            rays,
+            this_probe,
+            ray,
+            params
+        );
+    } else if constexpr (RC_CONFIG == RcConfiguration::BilinearFix) {
+        return march_and_merge_bilinear_fix<RcMode>(
+            casc_state,
+            rays,
+            this_probe,
+            ray,
+            params
+        );
+    } else if constexpr (RC_CONFIG == RcConfiguration::ParallaxFix) {
+        if (casc_state.state.n <= PARALLAX_MERGE_ABOVE_CASCADE) {
+            return march_and_merge_average_interval<RcMode>(
+                casc_state,
+                rays,
+                this_probe,
+                ray,
+                params
+            );
+        }
+        return march_and_merge_parallax_fix<RcMode>(
+            casc_state,
+            rays,
+            this_probe,
+            ray,
+            params
+        );
+    } else if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
+        if (casc_state.state.n <= PARALLAX_MERGE_ABOVE_CASCADE) {
+            return march_and_merge_average_interval<RcMode>(
+                casc_state,
+                rays,
+                this_probe,
+                ray,
+                params
+            );
+        }
+        return march_parallax_fix_inner<RcMode>(
+            casc_state,
+            rays,
+            this_probe,
+            ray,
+            params
+        );
+    } else {
+        []<bool f=false> () {
+            static_assert(f, "Unknown RcConfiguration in dispatch function");
+        }();
+    }
+}
+
+template <
+    int RcMode=0
+>
+inline void parallax_fix_inner_merge(
+    const State& state,
+    const DeviceCascadeState& dev_casc_state,
+    const yakl::Array<i32, 2, yakl::memDevice>& probe_space_lookup,
+    const CascadeRays& rays,
+    const CascadeCalcSubset& subset
+) {
+    JasUnpack(subset, la_start, la_end, subset_idx);
+    const int cascade_idx = dev_casc_state.n;
+    CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(rays, subset_idx);
+    assert(ray_subset.start_probes(0) == 0 && ray_subset.start_probes(1) == 0 && "Subset splitting probes is not handled");
+    i64 spatial_bounds = ray_subset.num_probes(1) * ray_subset.num_probes(0);
+    constexpr int num_rays_per_texel = rays_per_stored_texel<RcMode>();
+    int wave_batch = la_end - la_start;
+
+    CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
+    const bool sparse_calc = state.config.sparse_calculation;
+    if (sparse_calc) {
+        spatial_bounds = probe_space_lookup.extent(0);
+    }
+
+    // TODO(cmo): Pre-allocate these somewhere.
+    Fp1d I_temp = dev_casc_state.cascade_I.createDeviceObject();
+    Fp1d tau_temp = dev_casc_state.cascade_tau.createDeviceObject();
+    parallel_for(
+        "RC Separate Merge Loop",
+        SimpleBounds<4>(
+            spatial_bounds,
+            ray_subset.num_flat_dirs / num_rays_per_texel,
+            wave_batch,
+            ray_subset.num_incl
+        ),
+        YAKL_LAMBDA (i64 k, /* int v, int u, */ int phi_idx, int wave, int theta_idx) {
+            int u, v;
+            if (sparse_calc) {
+                u = probe_space_lookup(k, 0);
+                v = probe_space_lookup(k, 1);
+            } else {
+                // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
+                // fast-running), but index as [u, v], i.e. dims.num_probes(0) =
+                // dim(u). Typical definition of k = u * Nv + v, but here we do
+                // loop index k = v * Nu + u where Nu = dims.num_probes(0). This
+                // preserves our iteration ordering
+                u = k % dims.num_probes(0);
+                v = k / dims.num_probes(0);
+            }
+            ivec2 probe_coord;
+            probe_coord(0) = u;
+            probe_coord(1) = v;
+            phi_idx += ray_subset.start_flat_dirs;
+            theta_idx += ray_subset.start_incl;
+
+            constexpr bool debug = false;
+            constexpr int uu = 123;
+            constexpr int vv = 115;
+            constexpr int pphi = 0;
+            constexpr int casc_idx = 2;
+            const bool print_debug = debug && (uu == u && vv == v && pphi == phi_idx && casc_idx == cascade_idx && wave == 0);
+
+            RadianceInterval<DexEmpty> average_ri{};
+            const fp_t sample_weight = FP(1.0) / fp_t(num_rays_per_texel);
+            for (int i = 0; i < num_rays_per_texel; ++i) {
+                ProbeIndex probe_idx{
+                    .coord=probe_coord,
+                    // NOTE(cmo): Handles preaveraging case
+                    .dir=phi_idx * num_rays_per_texel + i,
+                    .incl=theta_idx,
+                    .wave=wave
+                };
+                RayProps this_ray = ray_props(rays, dev_casc_state.num_cascades, dev_casc_state.n, probe_idx);
+                const i64 lin_idx = probe_linear_index<RcMode>(rays, probe_idx);
+                const fp_t base_I = dev_casc_state.cascade_I(lin_idx);
+
+                constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
+                const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
+
+                RadianceInterval<DexEmpty> ri{};
+                BilinearCorner base = bilinear_corner(probe_idx.coord);
+                vec4 weights = bilinear_weights(base);
+                JasUnpack(dev_casc_state, upper_I, upper_tau);
+                // NOTE(cmo): The cascade_compute_size function works with any cascade and a relative level offset for n.
+                CascadeRays upper_rays = cascade_compute_size(rays, 1);
+                const int upper_ray_start_idx = probe_idx.dir * (1 << CASCADE_BRANCHING_FACTOR);
+                const int upper_ray_mid_idx = upper_ray_start_idx + num_rays_per_ray / 2;
+
+                for (int bilin = 0; bilin < 4; ++bilin) {
+                    ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+                    ProbeIndex upper_probe{
+                        .coord = base.corner + bilin_offset,
+                        .dir = upper_ray_mid_idx,
+                        .incl = probe_idx.incl,
+                        .wave = probe_idx.wave
+                    };
+                    vec2 this_probe_pos = probe_pos(probe_idx.coord, dev_casc_state.n);
+                    RayProps upper_central_ray = ray_props(
+                        upper_rays,
+                        dev_casc_state.num_cascades,
+                        dev_casc_state.n+1,
+                        upper_probe
+                    );
+                    vec2 lower_parallax_dir = upper_central_ray.start - this_probe_pos;
+                    // NOTE(cmo): Adds ringing.
+                    // vec2 lower_parallax_dir = upper_central_ray.end - this_ray.start;
+                    fp_t frac_idx = probe_frac_dir_idx(rays, lower_parallax_dir);
+                    RadianceInterval<DexEmpty> lower_ri_sample = interp_probe_dir<RcMode>(
+                        dev_casc_state,
+                        rays,
+                        probe_idx,
+                        frac_idx,
+                        false
+                    );
+
+                    RadianceInterval<DexEmpty> interp{};
+                    for (
+                        int upper_ray_idx = upper_ray_start_idx;
+                        upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
+                        ++upper_ray_idx
+                    ) {
+                        ProbeIndex upper_probe{
+                            .coord = base.corner + bilin_offset,
+                            .dir = upper_ray_idx,
+                            .incl = probe_idx.incl,
+                            .wave = probe_idx.wave
+                        };
+                        if (print_debug) {
+                            printf("-- Interp I: %f, Interp tau: %f, frac_idx: %f\n", lower_ri_sample.I,  lower_ri_sample.tau, frac_idx);
+                        }
+                        RadianceInterval<DexEmpty> upper_sample{};
+                        upper_sample.I = probe_fetch<RcMode>(upper_I, upper_rays, upper_probe);
+                        upper_sample.tau = probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe);
+                        RadianceInterval<DexEmpty> merged = merge_intervals(lower_ri_sample, upper_sample);
+                        interp.I += ray_weight * merged.I;
+                        interp.tau += ray_weight * merged.tau;
+                        if (print_debug) {
+                            printf("--- Upper I: %f, Merged I: %f\n", upper_sample.I, merged.I);
+                        }
+                    }
+                    ri.I += weights(bilin) * interp.I;
+                    ri.tau += weights(bilin) * interp.tau;
+                    if (print_debug) {
+                        printf("---- Final I: %f\n", ri.I);
+                    }
+                }
+
+                average_ri.I += sample_weight * ri.I;
+                average_ri.tau += sample_weight * ri.tau;
+            }
+            ProbeIndex probe_idx{
+                .coord=probe_coord,
+                // NOTE(cmo): Access the "first" entry stored in a texel, if we
+                // have more than one ray per texel
+                .dir=phi_idx * num_rays_per_texel,
+                .incl=theta_idx,
+                .wave=wave
+            };
+            i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
+            I_temp(lin_idx) = average_ri.I;
+            tau_temp(lin_idx) = average_ri.tau;
+        }
+    );
+    yakl::fence();
+
+    parallel_for(
+        "RC Post-Merge Copy",
+        SimpleBounds<4>(
+            spatial_bounds,
+            ray_subset.num_flat_dirs / num_rays_per_texel,
+            wave_batch,
+            ray_subset.num_incl
+        ),
+        YAKL_LAMBDA (i64 k, /* int v, int u, */ int phi_idx, int wave, int theta_idx) {
+            int u, v;
+            if (sparse_calc) {
+                u = probe_space_lookup(k, 0);
+                v = probe_space_lookup(k, 1);
+            } else {
+                u = k % dims.num_probes(0);
+                v = k / dims.num_probes(0);
+            }
+            ivec2 probe_coord;
+            probe_coord(0) = u;
+            probe_coord(1) = v;
+            phi_idx += ray_subset.start_flat_dirs;
+            theta_idx += ray_subset.start_incl;
+            ProbeIndex probe_idx{
+                .coord=probe_coord,
+                // NOTE(cmo): Access the "first" entry stored in a texel, if we
+                // have more than one ray per texel
+                .dir=phi_idx * num_rays_per_texel,
+                .incl=theta_idx,
+                .wave=wave
+            };
+            i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
+            dev_casc_state.cascade_I(lin_idx) = I_temp(lin_idx);
+            dev_casc_state.cascade_tau(lin_idx) = tau_temp(lin_idx);
+        }
+    );
+    yakl::fence();
 }
 
 template <typename DynamicState>
@@ -266,7 +771,7 @@ void cascade_i_25d(
                     switch (boundaries.boundary) {
                         case BoundaryType::Zero: {
                             auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
-                            ri = march_and_merge_average_interval<RcMode>(
+                            ri = march_and_merge_dispatch<RcMode>(
                                 casc_and_bc,
                                 casc_rays,
                                 probe_idx,
@@ -276,7 +781,7 @@ void cascade_i_25d(
                         } break;
                         case BoundaryType::Promweaver: {
                             auto casc_and_bc = get_bc<PwBc<>>(dev_casc_state, boundaries);
-                            ri = march_and_merge_average_interval<RcMode>(
+                            ri = march_and_merge_dispatch<RcMode>(
                                 casc_and_bc,
                                 casc_rays,
                                 probe_idx,
@@ -290,7 +795,7 @@ void cascade_i_25d(
                     }
                 } else {
                     auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
-                    ri = march_and_merge_average_interval<RcMode>(
+                    ri = march_and_merge_dispatch<RcMode>(
                         casc_and_bc,
                         casc_rays,
                         probe_idx,
@@ -323,6 +828,12 @@ void cascade_i_25d(
         }
     );
     yakl::fence();
+    if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
+        if (cascade_idx > PARALLAX_MERGE_ABOVE_CASCADE && dev_casc_state.upper_I.initialized()) {
+            parallax_fix_inner_merge<RcMode>(state, dev_casc_state, probe_space_lookup, ray_set, subset);
+        }
+    }
+
     yakl::timer_stop(name.c_str());
 }
 
