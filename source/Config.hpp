@@ -38,8 +38,9 @@ constexpr bool LAST_CASCADE_TO_INFTY = true;
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
 
 constexpr bool PREAVERAGE = false;
-constexpr bool DIR_BY_DIR = false;
+constexpr bool DIR_BY_DIR = true;
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
+static_assert(!PREAVERAGE, "Don't use preaveraging for DexRT unless you know what you're doing! (Then disable me)");
 
 enum class RcConfiguration {
     Vanilla,
@@ -47,23 +48,39 @@ enum class RcConfiguration {
     ParallaxFixInner,
     BilinearFix,
 };
+constexpr const char* RcConfigurationNames[4] = {
+    "Vanilla",
+    "ParallaxFix",
+    "ParallaxFixInner",
+    "BilinearFix"
+};
+constexpr RcConfiguration RC_CONFIG = RcConfiguration::Vanilla;
 constexpr int PARALLAX_MERGE_ABOVE_CASCADE = 1;
 constexpr int INNER_PARALLAX_MERGE_ABOVE_CASCADE = -1;
-constexpr RcConfiguration RC_CONFIG = RcConfiguration::BilinearFix;
+static_assert(
+    !(
+        (DIR_BY_DIR)
+        && (
+            RC_CONFIG == RcConfiguration::ParallaxFix
+            || RC_CONFIG == RcConfiguration::ParallaxFixInner
+        )
+    ),
+    "Parallax (reprojection) methods cannot be used with DIR_BY_DIR"
+);
 
 // constexpr bool BRANCH_RAYS = false;
 // constexpr bool BILINEAR_FIX = false;
 // constexpr bool USE_MIPMAPS = false;
 // constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
 
-constexpr bool PINGPONG_BUFFERS = false;
+constexpr bool PINGPONG_BUFFERS = true;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 // constexpr bool USE_BC = true;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 
-#define FLATLAND
+// #define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_INCL = 1;
 constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);

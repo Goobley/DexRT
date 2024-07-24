@@ -433,6 +433,27 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_text(ncid, NC_GLOBAL, "precision", precision.size(), precision.c_str()),
         __LINE__
     );
+    std::string method(RcConfigurationNames[int(RC_CONFIG)]);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "RC_method", method.size(), method.c_str()),
+        __LINE__
+    );
+
+    if (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
+        i32 inner_parallax_merge_lim = INNER_PARALLAX_MERGE_ABOVE_CASCADE;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "inner_parallax_merge_above_cascade", NC_INT, 1, &inner_parallax_merge_lim),
+            __LINE__
+        );
+    }
+    if (RC_CONFIG == RcConfiguration::ParallaxFix) {
+        i32 parallax_merge_lim = PARALLAX_MERGE_ABOVE_CASCADE;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "parallax_merge_above_cascade", NC_INT, 1, &parallax_merge_lim),
+            __LINE__
+        );
+    }
+
     f64 probe0_length = PROBE0_LENGTH;
     ncwrap(
         nc_put_att_double(ncid, NC_GLOBAL, "probe0_length", NC_DOUBLE, 1, &probe0_length),
