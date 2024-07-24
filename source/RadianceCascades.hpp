@@ -93,20 +93,6 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
     const RaymarchParams<DynamicState>& params
 ) {
     ray = invert_direction(ray);
-    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
-        Raymarch2dArgs<Bc, DynamicState>{
-            .casc_state_bc = casc_state,
-            .ray = ray,
-            .distance_scale = params.distance_scale,
-            .incl = params.incl,
-            .incl_weight = params.incl_weight,
-            .wave = this_probe.wave,
-            .la = params.la,
-            .offset = params.offset,
-            .active = params.active,
-            .dyn_state = params.dyn_state
-        }
-    );
 
     constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
     // const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
@@ -122,6 +108,38 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
         CascadeRays upper_rays = cascade_compute_size(rays, 1);
         for (int bilin = 0; bilin < 4; ++bilin) {
             ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+            ProbeIndex upper_centre_probe{
+                .coord = base.corner + bilin_offset,
+                .dir = upper_ray_start_idx + num_rays_per_ray / 2,
+                .incl = this_probe.incl,
+                .wave = this_probe.wave
+            };
+            RayProps central_ray = ray_props(
+                upper_rays,
+                casc_state.state.num_cascades,
+                casc_state.state.n+1,
+                upper_centre_probe
+            );
+            ray.start = central_ray.start;
+            ray.dir = ray.end - ray.start;
+            const fp_t dir_len = std::sqrt(square(ray.dir(0)) + square(ray.dir(1)));
+            ray.dir(0) /= dir_len;
+            ray.dir(1) /= dir_len;
+            RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
+                Raymarch2dArgs<Bc, DynamicState>{
+                    .casc_state_bc = casc_state,
+                    .ray = ray,
+                    .distance_scale = params.distance_scale,
+                    .incl = params.incl,
+                    .incl_weight = params.incl_weight,
+                    .wave = this_probe.wave,
+                    .la = params.la,
+                    .offset = params.offset,
+                    .active = params.active,
+                    .dyn_state = params.dyn_state
+                }
+            );
+            RadianceInterval<Alo> upper_interp{};
             for (
                 int upper_ray_idx = upper_ray_start_idx;
                 upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
@@ -133,12 +151,31 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
                     .incl = this_probe.incl,
                     .wave = this_probe.wave
                 };
-                interp.I += ray_weight * weights(bilin) * probe_fetch<RcMode>(upper_I, upper_rays, upper_probe);
-                interp.tau += ray_weight * weights(bilin) * probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe);
+
+                upper_interp.I += ray_weight * probe_fetch<RcMode>(upper_I, upper_rays, upper_probe);
+                upper_interp.tau += ray_weight * probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe);
             }
+            RadianceInterval<Alo> merged = merge_intervals(ri, upper_interp);
+            interp.I += weights(bilin) * merged.I;
+            interp.tau += weights(bilin) * merged.tau;
         }
+    } else {
+        interp = dda_raymarch_2d<RcMode, Bc>(
+            Raymarch2dArgs<Bc, DynamicState>{
+                .casc_state_bc = casc_state,
+                .ray = ray,
+                .distance_scale = params.distance_scale,
+                .incl = params.incl,
+                .incl_weight = params.incl_weight,
+                .wave = this_probe.wave,
+                .la = params.la,
+                .offset = params.offset,
+                .active = params.active,
+                .dyn_state = params.dyn_state
+            }
+        );
     }
-    return merge_intervals(ri, interp);
+    return interp;
 }
 
 template <
@@ -175,6 +212,7 @@ YAKL_INLINE RadianceInterval<DexEmpty> interp_probe_dir(
         ri.tau += w1 * std::exp(-casc_state.cascade_tau(idx_1));
     }
     ri.tau = -std::log(ri.tau);
+    ri.tau = std::min(ri.tau, FP(1e4));
 
     // NOTE(cmo): Can ignore the alo, as it's never merged (comes from C0 only).
     return ri;
@@ -357,7 +395,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_dispatch(
             params
         );
     } else if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
-        if (casc_state.state.n <= PARALLAX_MERGE_ABOVE_CASCADE) {
+        if (casc_state.state.n <= INNER_PARALLAX_MERGE_ABOVE_CASCADE) {
             return march_and_merge_average_interval<RcMode>(
                 casc_state,
                 rays,
@@ -485,7 +523,7 @@ inline void parallax_fix_inner_merge(
                     );
                     vec2 lower_parallax_dir = upper_central_ray.start - this_probe_pos;
                     // NOTE(cmo): Adds ringing.
-                    // vec2 lower_parallax_dir = upper_central_ray.end - this_ray.start;
+                    // vec2 lower_parallax_dir = upper_central_ray.start - this_ray.start;
                     fp_t frac_idx = probe_frac_dir_idx(rays, lower_parallax_dir);
                     RadianceInterval<DexEmpty> lower_ri_sample = interp_probe_dir<RcMode>(
                         dev_casc_state,
@@ -513,15 +551,20 @@ inline void parallax_fix_inner_merge(
                         RadianceInterval<DexEmpty> upper_sample{};
                         upper_sample.I = probe_fetch<RcMode>(upper_I, upper_rays, upper_probe);
                         upper_sample.tau = probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe);
-                        RadianceInterval<DexEmpty> merged = merge_intervals(lower_ri_sample, upper_sample);
-                        interp.I += ray_weight * merged.I;
-                        interp.tau += ray_weight * merged.tau;
-                        if (print_debug) {
-                            printf("--- Upper I: %f, Merged I: %f\n", upper_sample.I, merged.I);
-                        }
+                        interp.I += ray_weight * upper_sample.I;
+                        interp.tau += ray_weight * upper_sample.tau;
+                        // RadianceInterval<DexEmpty> merged = merge_intervals(lower_ri_sample, upper_sample);
+                        // interp.I += ray_weight * merged.I;
+                        // interp.tau += ray_weight * merged.tau;
+                        // if (print_debug) {
+                        //     printf("--- Upper I: %f, Merged I: %f\n", upper_sample.I, merged.I);
+                        // }
                     }
-                    ri.I += weights(bilin) * interp.I;
-                    ri.tau += weights(bilin) * interp.tau;
+                    RadianceInterval<DexEmpty> merged = merge_intervals(lower_ri_sample, interp);
+                    ri.I += weights(bilin) * merged.I;
+                    ri.tau += weights(bilin) * merged.tau;
+                    // ri.I += weights(bilin) * interp.I;
+                    // ri.tau += weights(bilin) * interp.tau;
                     if (print_debug) {
                         printf("---- Final I: %f\n", ri.I);
                     }
@@ -829,7 +872,7 @@ void cascade_i_25d(
     );
     yakl::fence();
     if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
-        if (cascade_idx > PARALLAX_MERGE_ABOVE_CASCADE && dev_casc_state.upper_I.initialized()) {
+        if (cascade_idx > INNER_PARALLAX_MERGE_ABOVE_CASCADE && dev_casc_state.upper_I.initialized()) {
             parallax_fix_inner_merge<RcMode>(state, dev_casc_state, probe_space_lookup, ray_set, subset);
         }
     }

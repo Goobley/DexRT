@@ -10,8 +10,8 @@ if __name__ == "__main__":
     # ds = netCDF4.Dataset("../../../build/circle_test_out_para.nc")
     # ds = netCDF4.Dataset("../../../build/circle_test_out.nc")
     # ds = netCDF4.Dataset("../../../build/circle_test_out_para_inner.nc")
-    ds = netCDF4.Dataset("../../../build/circle_test_out_pp.nc")
-    figname = "PParaInner_NoMips"
+    ds = netCDF4.Dataset("../../../build/circle_test_out_bilin.nc")
+    figname = "Bilin_NoMips"
     im = np.array(ds["J"][...])
     im = np.swapaxes(im, 0, 2)
 

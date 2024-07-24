@@ -47,9 +47,9 @@ enum class RcConfiguration {
     ParallaxFixInner,
     BilinearFix,
 };
-constexpr RcConfiguration RC_CONFIG = RcConfiguration::ParallaxFixInner;
-constexpr int PARALLAX_MERGE_ABOVE_CASCADE = -1;
-static_assert(RC_CONFIG != RcConfiguration::BilinearFix, "BilinearFix not implemented");
+constexpr int PARALLAX_MERGE_ABOVE_CASCADE = 1;
+constexpr int INNER_PARALLAX_MERGE_ABOVE_CASCADE = -1;
+constexpr RcConfiguration RC_CONFIG = RcConfiguration::BilinearFix;
 
 // constexpr bool BRANCH_RAYS = false;
 // constexpr bool BILINEAR_FIX = false;

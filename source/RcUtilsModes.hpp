@@ -200,8 +200,18 @@ YAKL_INLINE BilinearCorner bilinear_corner(ivec2 probe_coord) {
     result.corner(0) = std::max(int((probe_coord(0) - 1) / 2), 0);
     result.corner(1) = std::max(int((probe_coord(1) - 1) / 2), 0);
     // NOTE(cmo): Weights for this corner
-    result.frac(0) = FP(0.25) + FP(0.5) * (probe_coord(0) % 2);
-    result.frac(1) = FP(0.25) + FP(0.5) * (probe_coord(1) % 2);
+    if (probe_coord(0) == 0) {
+        // NOTE(cmo): Clamp first row
+        result.frac(0) = FP(1.0);
+    } else {
+        result.frac(0) = FP(0.25) + FP(0.5) * (probe_coord(0) % 2);
+    }
+    if (probe_coord(1) == 0) {
+        // NOTE(cmo): Clamp first col
+        result.frac(1) = FP(1.0);
+    } else {
+        result.frac(1) = FP(0.25) + FP(0.5) * (probe_coord(1) % 2);
+    }
     return result;
 }
 
@@ -223,11 +233,13 @@ YAKL_INLINE ivec2 bilinear_offset() {
 };
 
 YAKL_INLINE ivec2 bilinear_offset(const BilinearCorner& bilin, const ivec2& num_probes, int sample) {
-    const bool u0 = bilin.corner(0) == 0;
+    // const bool u0 = bilin.corner(0) == 0;
+    const bool u0 = false; // NOTE(cmo): Handled by initial weight
     const bool u_max = bilin.corner(0) == (num_probes(0) - 1);
     const bool u_clamp = (u0 || u_max);
 
-    const bool v0 = bilin.corner(1) == 0;
+    // const bool v0 = bilin.corner(1) == 0;
+    const bool v0 = false; // NOTE(cmo): Handled by initial weight
     const bool v_max = bilin.corner(1) == (num_probes(1) - 1);
     const bool v_clamp = (v0 || v_max);
     switch (sample) {
