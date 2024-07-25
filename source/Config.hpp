@@ -32,7 +32,7 @@ constexpr int PROBE0_NUM_RAYS = 4;
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 
 constexpr int CASCADE_BRANCHING_FACTOR = 2;
-constexpr int MAX_CASCADE = 4;
+constexpr int MAX_CASCADE = 5;
 
 constexpr bool LAST_CASCADE_TO_INFTY = true;
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);

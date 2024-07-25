@@ -490,18 +490,21 @@ YAKL_INLINE RayProps invert_direction(RayProps props) {
     return invert;
 }
 
+/// Returns the fractional index associated with a direction. Note that this is
+/// in the range [-num_flat_dirs/2, num_flat_dirs/2] and needs to be remapped
+/// accordingly.
 YAKL_INLINE fp_t probe_frac_dir_idx(const CascadeRays& dims, vec2 dir) {
     // NOTE(cmo): If this index-generation code is adjusted, also adjust ray_props
     using ConstantsFP::pi;
     fp_t angle = std::atan2(dir(1), dir(0));
-    if (angle < FP(0.0)) {
-        angle += FP(2.0) * pi;
-    }
+    // if (angle < FP(0.0)) {
+    //     angle += FP(2.0) * pi;
+    // }
     fp_t angle_ratio = angle / (FP(2.0) * pi);
     fp_t frac_idx = angle_ratio * fp_t(dims.num_flat_dirs) - FP(0.5);
-    if (frac_idx < FP(0.0)) {
-        frac_idx += dims.num_flat_dirs;
-    }
+    // if (frac_idx < FP(0.0)) {
+    //     frac_idx += dims.num_flat_dirs;
+    // }
     return frac_idx;
 }
 

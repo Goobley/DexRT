@@ -188,15 +188,16 @@ YAKL_INLINE RadianceInterval<DexEmpty> interp_probe_dir(
     fp_t dir_frac_idx,
     bool upper
 ) {
-    ProbeIndex upper_probe_0(probe_idx);
-    upper_probe_0.dir = int(dir_frac_idx);
-    i64 idx_0 = probe_linear_index<RcMode>(rays, upper_probe_0);
+    ProbeIndex probe_0(probe_idx);
+    const int base_idx = int(std::floor(dir_frac_idx));
+    probe_0.dir = (base_idx + rays.num_flat_dirs) % rays.num_flat_dirs;
+    i64 idx_0 = probe_linear_index<RcMode>(rays, probe_0);
 
-    ProbeIndex upper_probe_1(probe_idx);
+    ProbeIndex probe_1(probe_idx);
     // TODO(cmo): How does this interact with dir_by_dir? Clamp?
-    upper_probe_1.dir = (int(dir_frac_idx) + 1) % rays.num_flat_dirs;
-    i64 idx_1 = probe_linear_index<RcMode>(rays, upper_probe_1);
-    fp_t w1 = dir_frac_idx - int(dir_frac_idx);
+    probe_1.dir = (base_idx + 1 + rays.num_flat_dirs) % rays.num_flat_dirs;
+    i64 idx_1 = probe_linear_index<RcMode>(rays, probe_1);
+    fp_t w1 = dir_frac_idx - base_idx;
     fp_t w0 = FP(1.0) - w1;
 
     RadianceInterval<DexEmpty> ri{};
