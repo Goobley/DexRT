@@ -9,7 +9,7 @@ except:
 
 mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.get_cmap("Set2").colors)
 
-CENTRED = False
+CENTRED = True
 
 def gamma_centred(w, d):
     v = -w/2
@@ -27,7 +27,7 @@ if __name__ == "__main__":
     CANVAS_SIZE = (4.0, 4.0)
     ax.set_xlim(0.0, CANVAS_SIZE[0])
     ax.set_ylim(0.0, CANVAS_SIZE[1]+0.01)
-    source_size = 2.0
+    source_size = 0.8
     blocker_perp_dist = 1.0
     blocker_y = CANVAS_SIZE[1] - blocker_perp_dist
     source_offset = 0.0
@@ -55,3 +55,20 @@ if __name__ == "__main__":
 
     plt.plot([source_start, source_start + t1_max * line1_dir[0]], [CANVAS_SIZE[1], CANVAS_SIZE[1] + t1_max * line1_dir[1]], '--')
     plt.plot([source_end, source_end + t2_max * line2_dir[0]], [CANVAS_SIZE[1], CANVAS_SIZE[1] + t2_max * line2_dir[1]], '--')
+
+    resolution = 400
+    x_grid = np.linspace(0.0, CANVAS_SIZE[0], resolution+1)
+    x_grid = 0.5 * (x_grid[1:] + x_grid[:-1])
+    y_grid = np.linspace(0.0, CANVAS_SIZE[1], resolution+1)
+    y_grid = 0.5 * (y_grid[1:] + y_grid[:-1])
+    xx, yy  = np.meshgrid(x_grid, y_grid)
+    im = np.ones((resolution, resolution))
+    dark = 0.0
+    full_light = 1.0
+    im[yy < blocker_y] = dark
+    t1 = (yy - CANVAS_SIZE[1]) / line1_dir[1]
+    t2 = (yy - CANVAS_SIZE[1]) / line2_dir[1]
+    im[(yy < blocker_y) & (xx > (source_start + t1 * line1_dir[0]))] = full_light
+    mask = (yy < blocker_y) & (xx <= (source_start + t1 * line1_dir[0])) & (xx >= (source_end + t2 * line2_dir[0]))
+    im[mask] = ((xx - (source_end + t2 * line2_dir[0])) / ((source_start + t1 * line1_dir[0]) - (source_end + t2 * line2_dir[0])))[mask]**1.4
+    plt.imshow(im, extent=[0.0, CANVAS_SIZE[0], CANVAS_SIZE[1], 0.0], cmap='Purples_r', vmax=1.2)
