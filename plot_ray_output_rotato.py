@@ -15,20 +15,24 @@ delta_lambda = 0.017
 delta_lambda = 0.082
 # outdir = Path("SnowKHIRay")
 # outdir = Path("Valeriia_a0500")
-outdir = Path("Valeriia_a0500_1x")
+outdir = Path("JackHighRes/Frames")
 outdir.mkdir(parents=True, exist_ok=True)
+
+# prefix = "build"
+prefix = "JackHighRes"
+config_file = f"jk20200550_ray.yaml"
 
 # atom_name = "Ca II"
 # lambda0 = 854.4437912696352
-# delta_lambda = 0.017
+# # delta_lambda = 0.017
 # delta_lambda = 0.11
 
 
-# atom_name = "H I"
-# # lambda0 = 121.56841096386113
-# # delta_lambda = 0.07
-# lambda0 = 102.57334047695103
+atom_name = "H I"
+# lambda0 = 121.56841096386113
 # delta_lambda = 0.07
+lambda0 = 102.57334047695103
+delta_lambda = 0.07
 # lambda0 = 656.4691622298104
 # delta_lambda = 0.17
 
@@ -64,17 +68,16 @@ def centres_to_edges(x):
     ])
 
 if __name__ == "__main__":
-    config_path = "dexrt_ray_valeriia_a0500_branch1_91.yaml"
-    with open(f"build/{config_path}", "r") as f:
+    with open(f"{prefix}/{config_file}", "r") as f:
         config = yaml.load(f, Loader=yaml.Loader)
 
-    ray_data = netCDF4.Dataset("build/" + config["ray_output_path"], "r")
-    dexrt_config_path = "build/" + config["dexrt_config_path"]
+    ray_data = netCDF4.Dataset(f"{prefix}/" + config["ray_output_path"], "r")
+    dexrt_config_path = f"{prefix}/" + config["dexrt_config_path"]
 
     with open(dexrt_config_path, "r") as f:
         dexrt_config = yaml.load(f, Loader=yaml.Loader)
-    atmos = netCDF4.Dataset("build/" + dexrt_config["atmos_path"], "r")
-    dex_output = netCDF4.Dataset("build/" + dexrt_config["output_path"], "r")
+    atmos = netCDF4.Dataset(f"{prefix}/" + dexrt_config["atmos_path"], "r")
+    dex_output = netCDF4.Dataset(f"{prefix}/" + dexrt_config["output_path"], "r")
 
 
     voxel_scale = atmos["voxel_scale"][...] / 1e6
