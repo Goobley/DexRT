@@ -80,9 +80,6 @@ if __name__ == "__main__":
     prom_dop_shift = -np.array(atmos["vx"][...]) / (lambda0 * 1e-9)
     # We go from -z to +z
     fil_dop_shift = np.array(atmos["vz"][...]) / (lambda0 * 1e-9)
-    # phi_prom = 1.0 / (np.sqrt(np.pi) * delta_nuD[:, :, None]) * np.exp(-((delta_nu[None, None, :] + prom_dop_shift[:, :, None]) / delta_nuD[:, :, None])**2)
-    # phi_fil = 1.0 / (np.sqrt(np.pi) * delta_nuD[:, :, None]) * np.exp(-((delta_nu[None, None, :] - fil_dop_shift[:, :, None]) / delta_nuD[:, :, None])**2)
-
 
     # TODO(cmo): This is fixed at 10 Mm
     # W = 0.5 * (1.0 - np.sqrt(1.0 - const.R_sun.value**2 / (const.R_sun.value**2 + 10e6**2)))
@@ -97,23 +94,28 @@ if __name__ == "__main__":
     @njit
     def integrate_ray(source_fn, kappa, voxel_scale, background=0.0):
         intens = np.ones(kappa.shape[1]) * background
+        tau_tot = np.zeros(kappa.shape[1])
         for k in range(kappa.shape[0], -1, -1):
             if np.isnan(kappa[k, 0]):
                 continue
             dtau = kappa[k] * voxel_scale
+            tau_tot += dtau
             edt = np.exp(-dtau)
             intens *= edt
             intens += source_fn * (1.0 - edt)
-        return intens
+        return intens, tau_tot
 
     # prom proj
     intens_prom = np.zeros((temperature.shape[0], delta_nu.shape[0]))
+    tau_prom = np.zeros((temperature.shape[0], delta_nu.shape[0]))
     for la in tqdm(range(delta_nu.shape[0])):
         phi_plane = 1.0 / (np.sqrt(np.pi) * delta_nuD[:, :, None]) * np.exp(-((delta_nu[None, None, la] + prom_dop_shift[:, :, None]) / delta_nuD[:, :, None])**2)
         kappa_cgs = 1.7e-2 * n2_cm[:, :, None] * phi_plane
         kappa = kappa_cgs * 100
         for row in range(temperature.shape[0]):
-            intens_prom[row, la] = integrate_ray(source_fn, kappa[row, :, :], voxel_scale, background=0.0)[0]
+            i_sample, tau_sample = integrate_ray(source_fn, kappa[row, :, :], voxel_scale, background=0.0)
+            intens_prom[row, la] = i_sample[0]
+            tau_prom[row, la] = tau_sample[0]
 
     bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"])
     background_intens = bc_ctx.compute_rays(wavelengths=(lambda0+delta_lambda), mus=1.0)
@@ -121,23 +123,27 @@ if __name__ == "__main__":
 
     # fil proj
     intens_fil = np.zeros((temperature.shape[1], delta_nu.shape[0]))
+    tau_fil = np.zeros((temperature.shape[1], delta_nu.shape[0]))
     for la in tqdm(range(delta_nu.shape[0])):
         phi_plane = 1.0 / (np.sqrt(np.pi) * delta_nuD[:, :, None]) * np.exp(-((delta_nu[None, None, la] + fil_dop_shift[:, :, None]) / delta_nuD[:, :, None])**2)
         kappa_cgs = 1.7e-2 * n2_cm[:, :, None] * phi_plane
         kappa = kappa_cgs * 100
         for col in range(temperature.shape[1]):
-            intens_fil[col, la] = integrate_ray(
+            i_sample, tau_sample = integrate_ray(
                 source_fn,
                 np.ascontiguousarray(kappa[::-1, col, :]),
                 voxel_scale,
                 background=background_intens[la],
-            )[0]
-
+            )
+            intens_fil[col, la] = i_sample[0]
+            tau_fil[col, la] = tau_sample[0]
 
     dataset = xr.Dataset(
         {
             "intens_prom": (("z", "wavelength"), intens_prom),
+            "tau_prom": (("z", "wavelength"), tau_prom),
             "intens_fil": (("x", "wavelength"), intens_fil),
+            "tau_fil": (("x", "wavelength"), tau_fil),
         },
         coords={
             "wavelength": lambda0 + delta_lambda
