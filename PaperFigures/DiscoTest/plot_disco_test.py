@@ -12,7 +12,7 @@ mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.get_cmap("Set2").colors)
 
 # NOTE(cmo): This tonemapping function takes colour channel as the first axis,
 # so the output needs swapping before display in matplotlib
-def tonemap(c, mode='aces', Gamma=2.2):
+def tonemap(c, mode='aces', Gamma=2.2, bias=None):
     # http://filmicworlds.com/blog/filmic-tonemapping-operators/
     if mode == 'reinhard':
         c = c / (1.0 + c)
@@ -25,7 +25,8 @@ def tonemap(c, mode='aces', Gamma=2.2):
         E = 0.02
         F = 0.30
         W = 11.2
-        bias = 2.0
+        if bias is None:
+            bias = 2.0
         mapper = lambda c: ((c*(A*c+C*B)+D*E)/(c*(A*c+B)+D*F))-E/F
         curr = mapper(c * bias)
         whiteScale = 1.0 / mapper(W)
@@ -40,7 +41,8 @@ def tonemap(c, mode='aces', Gamma=2.2):
         acesOut = np.array([[1.60475, -0.53108, -0.07367],
                             [-0.10208,  1.10813, -0.00605],
                             [-0.00327, -0.07276,  1.07602]])
-        bias = 0.8
+        if bias is None:
+            bias = 0.8
 
         def RRTAndODTFit(v):
             # RRT: Reference rendering transform
@@ -73,9 +75,11 @@ def tonemap(c, mode='aces', Gamma=2.2):
         raise NotImplementedError()
 
 TONEMAP_MODE = "aces"
+TONEMAP_GAMMA = 2.2
+TONEMAP_BIAS = 1.0
 if __name__ == "__main__":
     J_lw = np.swapaxes(np.load("J_10th.npy"), 0, 2)
-    J_lw = tonemap(J_lw, mode=TONEMAP_MODE)
+    J_lw = tonemap(J_lw, mode=TONEMAP_MODE, Gamma=TONEMAP_GAMMA, bias=TONEMAP_BIAS)
     J_lw = np.swapaxes(J_lw, 0, 2)
     fig, ax = plt.subplots(1, 3, figsize=(9, 3), layout="constrained")
     for a in ax:
@@ -85,9 +89,9 @@ if __name__ == "__main__":
 
     dex = xr.open_dataset("disco_test_out.nc")
     dex_bilin = xr.open_dataset("disco_test_out_bilin.nc")
-    dex_J = tonemap(np.array(dex.J), mode=TONEMAP_MODE)
+    dex_J = tonemap(np.array(dex.J), mode=TONEMAP_MODE, Gamma=TONEMAP_GAMMA, bias=TONEMAP_BIAS)
     dex_J = np.swapaxes(dex_J, 0, 2)
-    dex_bilin_J = tonemap(np.array(dex_bilin.J), mode=TONEMAP_MODE)
+    dex_bilin_J = tonemap(np.array(dex_bilin.J), mode=TONEMAP_MODE, Gamma=TONEMAP_GAMMA, bias=TONEMAP_BIAS)
     dex_bilin_J = np.swapaxes(dex_bilin_J, 0, 2)
     ax[1].imshow(dex_J, origin="lower", interpolation="nearest", rasterized=True)
     ax[1].set_title("Radiance Cascades")

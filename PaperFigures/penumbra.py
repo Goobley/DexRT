@@ -71,7 +71,7 @@ if __name__ == "__main__":
     plt.plot([source_start, source_start + t1_max * line1_dir[0]], [CANVAS_SIZE[1], CANVAS_SIZE[1] + t1_max * line1_dir[1]], '--', c=my_grey)
     plt.plot([source_end, source_end + t2_max * line2_dir[0]], [CANVAS_SIZE[1], CANVAS_SIZE[1] + t2_max * line2_dir[1]], '--', c=my_grey)
 
-    resolution = 400
+    resolution = 800
     x_grid = np.linspace(0.0, CANVAS_SIZE[0], resolution+1)
     x_grid = 0.5 * (x_grid[1:] + x_grid[:-1])
     y_grid = np.linspace(0.0, CANVAS_SIZE[1], resolution+1)
@@ -122,6 +122,7 @@ if __name__ == "__main__":
             [A_PLANE_Y, A_PLANE_Y],
             'o',
             c='C3',
+            zorder=10,
         )
         arc_centre = (source_start + t1 * line1_dir[0], A_PLANE_Y)
         angle0 = np.rad2deg(np.arctan2(CANVAS_SIZE[1] - arc_centre[1], source_end - arc_centre[0]))
@@ -194,3 +195,6 @@ if __name__ == "__main__":
         print(f"alpha/beta: {alpha / beta:.3f}")
     except:
         pass
+
+    fig.savefig("PenumbraCriterion.png", dpi=300)
+    fig.savefig("PenumbraCriterion.pdf", dpi=300)
