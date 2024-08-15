@@ -91,7 +91,17 @@ def tonemap(c, mode='aces', Gamma=2.2, bias=None):
     else:
         raise NotImplementedError()
 
-def coco_plot(ax, arr, filt, thresh=None, log=False, max_pre_tonemap=4.0, edges=None, **kwargs):
+def coco_plot(
+    ax,
+    arr,
+    filt,
+    thresh=None,
+    log=False,
+    max_pre_tonemap=4.0,
+    edges=None,
+    normalise_channels_individually=True,
+    **kwargs
+):
     cococfn = np.tensordot(filt, arr, axes=(0, 0))
     # coco_thresh = 1e-7
     # coco_thresh = 1e-5
@@ -103,7 +113,14 @@ def coco_plot(ax, arr, filt, thresh=None, log=False, max_pre_tonemap=4.0, edges=
         cococfn[cococfn > 0.0] = np.log10(cococfn[cococfn > 0.0])
 
     for chan in range(cococfn.shape[0]):
-        cococfn[chan] = (cococfn[chan] - np.nanmin(cococfn[chan])) / (np.nanmax(cococfn[chan]) - np.nanmin(cococfn[chan])) * max_pre_tonemap
+        if normalise_channels_individually:
+            max_val = np.nanmax(cococfn[chan])
+            min_val = np.nanmin(cococfn[chan])
+        else:
+            max_val = np.nanmax(cococfn)
+            min_val = np.nanmin(cococfn)
+
+        cococfn[chan] = (cococfn[chan] - min_val) / (max_val - min_val) * max_pre_tonemap
 
     if not "bias" in kwargs:
         kwargs["bias"] = 1.0
@@ -150,6 +167,17 @@ if __name__ == "__main__":
                 np.ascontiguousarray(z_pos_cen[::-1]),
             )
     tau1_lines /= 1e6
+    del coco_tau
+
+    J_offsets = [-0.025, 0.0, 0.025]
+    dex_means = np.array([lambda0+offset for offset in J_offsets])
+    dex_stds = np.array([0.01, 0.01, 0.01])
+    dex_wave = np.array(dex.wavelength)
+    start_idx = np.searchsorted(dex_wave, lambda0 + 3 * offsets[0])
+    end_idx = np.searchsorted(dex_wave, lambda0 + 3 * offsets[-1])
+    dex_wave = dex_wave[start_idx:end_idx]
+    dex_filt = np.exp(-0.5 * ((dex_wave[:, None] - dex_means[None, :]) / dex_stds[None, :])**2)
+    dex_filt /= dex_filt.sum(axis=0)
 
     fig, ax = plt.subplot_mosaic(
         """
@@ -162,16 +190,22 @@ if __name__ == "__main__":
         C
         C
         C
+        D
+        D
+        D
+        D
+        D
         """,
         layout="constrained",
         sharex=True,
-        figsize=(4, 8)
+        figsize=(4, 10)
     )
     line_emission = np.array(cfn_ds.I_0[:, 1:-1])
     ax["A"].pcolormesh(slit_pos_edges, delta_lambda_edges, line_emission, cmap="inferno", rasterized=True)
     line = line_emission.reshape(101, 1, 2048)
     coco_plot(ax["B"], line, filt, edges=(slit_pos_edges, [0.0, 1.0]))
     coco_plot(ax["C"], full_cfn, filt, thresh=0.8e-10, log=True, edges=(slit_pos_edges, z_pos_edges))
+    coco_plot(ax["D"], dex.J[start_idx:end_idx], dex_filt, edges=(slit_pos_edges, z_pos_edges[::-1]), thresh=1e-3)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[0, :], 'r', lw=0.5, alpha=0.8)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[2, :], 'b', lw=0.5, alpha=0.8)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[1, :], 'w', lw=0.5, alpha=0.8)
@@ -189,7 +223,10 @@ if __name__ == "__main__":
         left=False,
     )
     ax["C"].set_ylabel(r"$z$ [Mm]")
-    ax["C"].set_ylabel(r"Slit position [Mm]")
+    ax["C"].text(1.11, 27, r"$C_I$", c="#dddddd", verticalalignment="top")
+    ax["D"].set_ylabel(r"$z$ [Mm]")
+    ax["D"].set_ylabel(r"Slit position [Mm]")
+    ax["D"].text(1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
 
     fig.savefig("cocoplot_lyb.png", dpi=400)
     fig.savefig("cocoplot_lyb.pdf", dpi=400)
