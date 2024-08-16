@@ -138,7 +138,7 @@ def coco_plot(
     else:
         ax.pcolormesh(*edges, np.moveaxis(cococfn_tm, 0, 2), rasterized=True)
 
-
+    return np.moveaxis(cococfn_tm, 0, 2)
 
 
 if __name__ == "__main__":
@@ -212,8 +212,8 @@ if __name__ == "__main__":
     ax["A"].pcolormesh(slit_pos_edges, delta_lambda_edges, line_emission, cmap="inferno", rasterized=True)
     line = line_emission.reshape(101, 1, 2048)
     coco_plot(ax["B"], line, filt, edges=(slit_pos_edges, [0.0, 1.0]))
-    coco_plot(ax["C"], full_cfn, filt, thresh=0.8e-10, log=True, edges=(slit_pos_edges, z_pos_edges))
-    coco_plot(ax["D"], dex.J[start_idx:end_idx], dex_filt, edges=(slit_pos_edges, z_pos_edges[::-1]), thresh=1e-3)
+    coco_cfn = coco_plot(ax["C"], full_cfn, filt, thresh=0.8e-10, log=True, edges=(slit_pos_edges, z_pos_edges))
+    coco_J = coco_plot(ax["D"], dex.J[start_idx:end_idx], dex_filt, edges=(slit_pos_edges, z_pos_edges[::-1]), thresh=1e-3)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[0, :], 'r', lw=0.5, alpha=0.8)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[2, :], 'b', lw=0.5, alpha=0.8)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[1, :], 'w', lw=0.5, alpha=0.8)
@@ -238,3 +238,25 @@ if __name__ == "__main__":
 
     fig.savefig("cocoplot_lyb.png", dpi=400)
     fig.savefig("cocoplot_lyb.pdf", dpi=400)
+
+    fig, ax = plt.subplots(2, 3, layout="constrained", sharex=True, sharey=True, figsize=(9, 6))
+    ax[0, 0].pcolormesh(slit_pos_edges, z_pos_edges, coco_cfn[:, :, 0], cmap="plasma", rasterized=True)
+    ax[0, 1].pcolormesh(slit_pos_edges, z_pos_edges, coco_cfn[:, :, 1], cmap="plasma", rasterized=True)
+    ax[0, 2].pcolormesh(slit_pos_edges, z_pos_edges, coco_cfn[:, :, 2], cmap="plasma", rasterized=True)
+    ax[1, 0].pcolormesh(slit_pos_edges, z_pos_edges[::-1], coco_J[:, :, 0], cmap="cividis", rasterized=True)
+    ax[1, 1].pcolormesh(slit_pos_edges, z_pos_edges[::-1], coco_J[:, :, 1], cmap="cividis", rasterized=True)
+    ax[1, 2].pcolormesh(slit_pos_edges, z_pos_edges[::-1], coco_J[:, :, 2], cmap="cividis", rasterized=True)
+
+    ax[0, 0].set_title("Red Channel")
+    ax[0, 1].set_title("Green Channel")
+    ax[0, 2].set_title("Blue Channel")
+    ax[0, 0].set_ylabel("z [Mm]")
+    ax[1, 0].set_ylabel("z [Mm]")
+    ax[1, 0].set_xlabel("Slit position [Mm]")
+    ax[1, 1].set_xlabel("Slit position [Mm]")
+    ax[1, 2].set_xlabel("Slit position [Mm]")
+    ax[0, 0].text(1.11, 27, r"$C_I$", c="#dddddd", verticalalignment="top")
+    ax[1, 0].text(1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
+    fig.savefig("cocoplot_lyb_colourblind_panels.png", dpi=400)
+    fig.savefig("cocoplot_lyb_colourblind_panels.pdf", dpi=400)
+
