@@ -7,7 +7,14 @@ try:
 except:
     plt.ion()
 
-mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.get_cmap("Set2").colors)
+try:
+    import seaborn as sns
+    colors = sns.color_palette("muted")
+except:
+    colors = plt.get_cmap("Set2").colors
+
+mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=colors)
+
 CANVAS_X = 512
 CANVAS_Y = 512
 PROBE0_LENGTH = 8
@@ -44,7 +51,8 @@ if __name__ == "__main__":
                             centre_y + prev_radius * np.sin(angle),
                             centre_y + radius * np.sin(angle),
                         ],
-                        c=f'C{l}'
+                        c=f'C{l}',
+                        lw=0.7,
                     )
 
         prev_radius = radius

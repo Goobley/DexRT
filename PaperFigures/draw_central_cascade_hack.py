@@ -7,7 +7,13 @@ try:
 except:
     plt.ion()
 
-mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.get_cmap("Set2").colors)
+try:
+    import seaborn as sns
+    colors = sns.color_palette("muted")
+except:
+    colors = plt.get_cmap("Set2").colors
+
+mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=colors)
 
 CANVAS_X = 128
 CANVAS_Y = 128
@@ -19,7 +25,7 @@ BRANCH_RAYS = False
 SPLIT_QUADRANTS = True
 
 highlight_path = [0, 0, 0, 0]
-highlight_colour = "C5"
+highlight_colour = "C6"
 highlight_ls = "--"
 highlight_entries = []
 
@@ -67,7 +73,9 @@ def do_the_draw():
                         centre_y + radius * np.sin(angle),
                     ],
                     c=colour,
-                    ls=ls
+                    ls=ls,
+                    alpha=0.9,
+                    lw=1.2,
                 )
 
         prev_radius = radius
@@ -134,6 +142,7 @@ if __name__ == "__main__":
                 ],
                 c=colour,
                 ls=ls,
+                lw=0.7,
             )
 
         prev_radius = radius
@@ -184,8 +193,8 @@ if __name__ == "__main__":
 
 
     if SPLIT_QUADRANTS:
-        plt.axhline(centre_y, c="#888888", ls="--")
-        plt.axvline(centre_x, c="#888888", ls="--")
+        plt.axhline(centre_y, c="#cccccc", ls="--", lw=0.9)
+        plt.axvline(centre_x, c="#cccccc", ls="--", lw=0.9)
 
     # plt.gca().tick_params(which="both", )
     # plt.gca().set_xticklabels([])

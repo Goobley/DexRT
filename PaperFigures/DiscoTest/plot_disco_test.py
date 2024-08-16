@@ -8,8 +8,6 @@ try:
 except:
     plt.ion()
 
-mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.get_cmap("Set2").colors)
-
 # NOTE(cmo): This tonemapping function takes colour channel as the first axis,
 # so the output needs swapping before display in matplotlib
 def tonemap(c, mode='aces', Gamma=2.2, bias=None):

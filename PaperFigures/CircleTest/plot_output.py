@@ -11,7 +11,13 @@ try:
 except:
     plt.ion()
 
-mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.get_cmap("Set2").colors)
+try:
+    import seaborn as sns
+    colors = sns.color_palette("muted")
+except:
+    colors = plt.get_cmap("Set2").colors
+
+mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=colors)
 
 # NOTE(cmo): This tonemapping function takes colour channel as the first axis,
 # so the output needs swapping before display in matplotlib
@@ -88,7 +94,7 @@ def tonemap(c, mode='aces', Gamma=2.2, bias=None):
 
 
 if __name__ == "__main__":
-    def plot_grid_for_im(ax, im, image_label=None):
+    def plot_grid_for_im(ax, im, image_label=None, legend=True):
         prebias = 1.0
         imm = prebias * np.swapaxes(im, 0, 2)
         im_tm = np.swapaxes(tonemap(imm, bias=1.0), 0, 2)
@@ -115,7 +121,7 @@ if __name__ == "__main__":
         ax["B"].plot(line1[:, 0], label=r"0$\degree$")
         ax["B"].plot(line2[:, 0], label=r"90$\degree$")
         ax["B"].plot(line3[:, 0], label=r"45$\degree$")
-        ax["B"].plot(line4[:, 0], label=r"30$\degree$")
+        ax["B"].plot(line4[:, 0], label=r"30$\degree$", c="C4")
         # ax["B"].set_title("Intensity Slices")
 
         # coord = np.arange(512, dtype=np.float64) + 0.5
@@ -136,7 +142,8 @@ if __name__ == "__main__":
         ax["B"].plot(coord, theory_solid, 'k-.', label="Theory")
         ax["B"].set_ylabel("Intensity")
         ax["B"].set_yscale('log')
-        ax["B"].legend(frameon=False, labelspacing=0.25)
+        if legend:
+            ax["B"].legend(frameon=False, labelspacing=0.25)
         # ax["B"].legend()
 
         error1 = (line1[:, 0] - theory_solid) / theory_solid
@@ -146,7 +153,7 @@ if __name__ == "__main__":
         ax["C"].plot(coord, error1, label="horizontal")
         ax["C"].plot(coord, error2, label="vertical")
         ax["C"].plot(coord, error3, label="45 deg")
-        ax["C"].plot(coord, error4, label="30 deg")
+        ax["C"].plot(coord, error4, label="30 deg", c="C4")
         ax["C"].set_yscale("symlog", linthresh=1e-1)
         ax["C"].set_yticks([1.0, 0.1, 0.01, 0.0])
         ax["C"].set_ylim(-5e-3, 1.0)
@@ -186,7 +193,7 @@ if __name__ == "__main__":
         "B": ax["E"],
         "C": ax["F"],
     }
-    plot_grid_for_im(ax2, im_bilin, image_label="Bilinear Fix")
+    plot_grid_for_im(ax2, im_bilin, image_label="Bilinear Fix", legend=False)
     ax["F"].tick_params(axis="x", labelbottom=True, bottom=True)
     ax["F"].set_xlabel("Pixels From Centre")
 

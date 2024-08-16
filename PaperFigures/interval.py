@@ -9,7 +9,13 @@ try:
 except:
     plt.ion()
 
-mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.get_cmap("Set2").colors)
+try:
+    import seaborn as sns
+    colors = sns.color_palette("pastel")
+except:
+    colors = plt.get_cmap("Set2").colors
+
+mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=colors)
 
 PROBE_CENTER = (1.3, 0.6)
 PROBE_RADIUS = 0.6
