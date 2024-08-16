@@ -15,7 +15,7 @@ prefix = "jk20200550"
 atmos_file = "JackHighRes/jk20200550_dex.nc"
 synth_file = "JackHighRes/jk20200550_synth.nc"
 ray_file = "JackHighRes/jk20200550_ray.nc"
-lw_prom_file = "JackHighRes/LwModels/jk20200550_prom_synth.nc"
+lw_prom_file = "JackHighRes/LwModels/jk20200550_prom_flip_synth.nc"
 lw_fil_file = "JackHighRes/LwModels/jk20200550_fil_synth.nc"
 lambda0_idxs = [1, 11, 4]
 wave_ranges = [0.045, 0.07, 0.12]
@@ -108,7 +108,7 @@ if __name__ == "__main__":
         lw_delta_lambda_centres = lw_wave[lw_start_idx:lw_end_idx]
         lw_delta_lambda_edges = centres_to_edges(lw_delta_lambda_centres) - lambda0
 
-        lw_I = np.array(lw_prom.I[0, :, 1, lw_start_idx:lw_end_idx])
+        lw_I = np.array(lw_prom.I[0, :, 0, lw_start_idx:lw_end_idx])
         lw_I = (
             lw_I << u.Unit("W / (m2 Hz sr)")
         ).to(
@@ -138,6 +138,8 @@ if __name__ == "__main__":
             vmin=vmin,
             vmax=vmax,
         )
+
+        density_plot(ax[plot_idx, 2], lw_I.T.flatten(), r_I[:, ::16].flatten())
 
         ax[plot_idx, 0].text(
             27,

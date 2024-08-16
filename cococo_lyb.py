@@ -225,7 +225,7 @@ if __name__ == "__main__":
     ax["C"].set_ylabel(r"$z$ [Mm]")
     ax["C"].text(1.11, 27, r"$C_I$", c="#dddddd", verticalalignment="top")
     ax["D"].set_ylabel(r"$z$ [Mm]")
-    ax["D"].set_ylabel(r"Slit position [Mm]")
+    ax["D"].set_xlabel(r"Slit position [Mm]")
     ax["D"].text(1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
 
     fig.savefig("cocoplot_lyb.png", dpi=400)
