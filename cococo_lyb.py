@@ -219,7 +219,7 @@ if __name__ == "__main__":
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[1, :], 'w', lw=0.5, alpha=0.8)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[1, :], 'k', lw=0.5, alpha=0.8, ls='--')
 
-    fig.suptitle("Ly β Spectrum & Formation")
+    ax["A"].set_title("Ly β Spectrum & Formation")
     ax["A"].set_ylabel(r"$\Delta\lambda$ [nm]")
     ax["A"].set_ylim(-0.05, 0.05)
     ax["A"].set_xlim(0.65, 10.99)
