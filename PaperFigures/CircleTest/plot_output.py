@@ -175,7 +175,7 @@ if __name__ == "__main__":
     im_bilin = np.swapaxes(im_bilin, 0, 2)
 
 
-    fig = plt.figure(layout="constrained", figsize=(10, 6))
+    fig = plt.figure(layout="tight", figsize=(10, 6))
     ax = fig.subplot_mosaic(
         """
         AABBB
@@ -186,7 +186,9 @@ if __name__ == "__main__":
     )
     ax["C"].sharex(ax["B"])
     ax["E"].sharex(ax["B"])
-    ax["F"].sharex(ax["F"])
+    ax["F"].sharex(ax["B"])
+    ax["A"].sharex(ax["D"])
+    ax["A"].sharey(ax["D"])
     plot_grid_for_im(ax, im, image_label="Radiance Cascades")
     ax2 = {
         "A": ax["D"],
