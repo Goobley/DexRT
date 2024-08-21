@@ -159,7 +159,8 @@ if __name__ == "__main__":
     delta_lambda_grid = wave - lambda0
     delta_lambda_edges = centres_to_edges(delta_lambda_grid)
 
-    offsets = [-0.025, 0.0, 0.025]
+    # offsets = [-0.025, 0.0, 0.025]
+    offsets = [0.025, 0.0, -0.025]
     means = np.array([lambda0+offset for offset in offsets])
     stds = np.array([0.01, 0.01, 0.01])
     filt = np.exp(-0.5 * ((wave[:, None] - means[None, :]) / stds[None, :])**2)
@@ -177,12 +178,13 @@ if __name__ == "__main__":
     tau1_lines /= 1e6
     del coco_tau
 
-    J_offsets = [-0.025, 0.0, 0.025]
+    # J_offsets = [-0.025, 0.0, 0.025]
+    J_offsets = [0.025, 0.0, -0.025] # blue is the third triplet but should be the blue side of the line
     dex_means = np.array([lambda0+offset for offset in J_offsets])
     dex_stds = np.array([0.01, 0.01, 0.01])
     dex_wave = np.array(dex.wavelength)
-    start_idx = np.searchsorted(dex_wave, lambda0 + 3 * offsets[0])
-    end_idx = np.searchsorted(dex_wave, lambda0 + 3 * offsets[-1])
+    start_idx = np.searchsorted(dex_wave, lambda0 + 3 * min(offsets))
+    end_idx = np.searchsorted(dex_wave, lambda0 + 3 * max(offsets))
     dex_wave = dex_wave[start_idx:end_idx]
     dex_filt = np.exp(-0.5 * ((dex_wave[:, None] - dex_means[None, :]) / dex_stds[None, :])**2)
     dex_filt /= dex_filt.sum(axis=0)
