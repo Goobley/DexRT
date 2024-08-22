@@ -152,7 +152,8 @@ if __name__ == "__main__":
     # full_cfn = np.exp(-cfn_ds.rays_0_tau[:, :, 1:-1]) * cfn_ds.rays_0_tau[:, :, 1:-1]
     voxel_scale = float(atmos.voxel_scale)
     z_offset = float(atmos.offset_z)
-    slit_pos_cen = np.array(cfn_ds.ray_start_0[1:-1, 0]) * voxel_scale
+    x_offset = float(atmos.offset_x)
+    slit_pos_cen = np.array(cfn_ds.ray_start_0[1:-1, 0]) * voxel_scale + x_offset
     slit_pos_edges = centres_to_edges(slit_pos_cen) / 1e6
     z_pos_cen = np.ascontiguousarray((z_offset + (np.arange(cfn_ds.num_steps_0.shape[0]) + 0.5) * voxel_scale)[::-1])
     z_pos_edges = centres_to_edges(z_pos_cen) / 1e6
@@ -224,7 +225,7 @@ if __name__ == "__main__":
     ax["A"].set_title("Ly β Spectrum & Formation")
     ax["A"].set_ylabel(r"$\Delta\lambda$ [nm]")
     ax["A"].set_ylim(-0.05, 0.05)
-    ax["A"].set_xlim(0.65, 10.99)
+    ax["A"].set_xlim(slit_pos_edges[0] + 0.65, slit_pos_edges[-1] - 0.65)
 
     ax["B"].set_ylabel("COCO\nSpectrum")
     ax["B"].tick_params(
@@ -233,10 +234,10 @@ if __name__ == "__main__":
         left=False,
     )
     ax["C"].set_ylabel(r"$z$ [Mm]")
-    ax["C"].text(1.11, 27, r"$C_I$", c="#dddddd", verticalalignment="top")
+    ax["C"].text(slit_pos_edges[0] + 1.11, 27, r"$C_I$", c="#dddddd", verticalalignment="top")
     ax["D"].set_ylabel(r"$z$ [Mm]")
     ax["D"].set_xlabel(r"Slit position [Mm]")
-    ax["D"].text(1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
+    ax["D"].text(slit_pos_edges[0] + 1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
 
     fig.savefig("cocoplot_lyb.png", dpi=400)
     fig.savefig("cocoplot_lyb.pdf", dpi=400)
