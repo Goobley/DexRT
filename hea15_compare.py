@@ -49,10 +49,10 @@ if __name__ == "__main__":
     voxel_scale = float(atmos.voxel_scale)
     ray_starts_prom = np.array(ray.ray_start_0[1:-1])
     vox_slit_pos_prom = np.sqrt(np.sum((ray_starts_prom - ray_starts_prom[0])**2, axis=1)) - 0.5
-    slit_pos_prom = vox_slit_pos_prom * voxel_scale
+    slit_pos_prom = vox_slit_pos_prom * voxel_scale + float(atmos.offset_z)
     ray_starts_fil = np.array(ray[f"ray_start_{ray.mu.shape[0]-1}"][1:-1])
     vox_slit_pos_fil = np.sqrt(np.sum((ray_starts_fil - ray_starts_fil[0])**2, axis=1)) - 0.5
-    slit_pos_fil = vox_slit_pos_fil * voxel_scale
+    slit_pos_fil = vox_slit_pos_fil * voxel_scale + float(atmos.offset_x)
 
     cmap = "magma"
     fig, ax = plt.subplots(2, 3, constrained_layout=True, figsize=(8, 5.5))
