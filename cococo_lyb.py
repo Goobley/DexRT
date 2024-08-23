@@ -258,8 +258,8 @@ if __name__ == "__main__":
     ax[1, 0].set_xlabel("Slit position [Mm]")
     ax[1, 1].set_xlabel("Slit position [Mm]")
     ax[1, 2].set_xlabel("Slit position [Mm]")
-    ax[0, 0].text(1.11, 27, r"$C_I$", c="#dddddd", verticalalignment="top")
-    ax[1, 0].text(1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
+    ax[0, 0].text(slit_pos_edges[0] + 1.11, 27, r"$C_I$", c="#dddddd", verticalalignment="top")
+    ax[1, 0].text(slit_pos_edges[0] + 1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
     fig.savefig("cocoplot_lyb_colourblind_panels.png", dpi=400)
     fig.savefig("cocoplot_lyb_colourblind_panels.pdf", dpi=400)
 

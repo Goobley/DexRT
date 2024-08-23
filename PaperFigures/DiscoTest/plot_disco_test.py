@@ -91,7 +91,7 @@ if __name__ == "__main__":
     for a in ax:
         a.set_axis_off()
     ax[0].imshow(J_lw, origin="lower", interpolation="nearest", rasterized=True)
-    ax[0].set_title("SC 10th Order (SOTA)")
+    ax[0].set_title("SC 13th Order (SOTA)")
 
     dex = xr.open_dataset("disco_test_out.nc")
     dex_bilin = xr.open_dataset("disco_test_out_bilin.nc")
