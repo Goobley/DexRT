@@ -16,6 +16,8 @@ The calculation of the radiation field through the atmosphere is performed by a 
 
 Atomic data is provided in the [CRTAF](https://github.com/Goobley/CommonRTAtomicFormat) format, a nascent potential-standard for interoperation between non-LTE codes.
 
+Please forgive the current state of the repository, it will be tidied up soon™.
+
 ![COCOPLOT of J across Ly beta in a prominence model](Images/cocoplot_lyb_j.png)
 
 📖 Documentation
