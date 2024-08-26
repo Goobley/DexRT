@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle, Wedge, Arc
+from matplotlib.patches import Circle, Wedge, Arc, FancyArrowPatch
 import matplotlib as mpl
 import numpy as np
 try:
@@ -12,6 +12,9 @@ mpl.rcParams['axes.prop_cycle'] = plt.cycler(color=plt.get_cmap("Set2").colors)
 SOURCE_OFFSET = 0.0
 CENTRED = True
 ADD_LABELS = True
+LABEL_DISTANCES = True
+DIST_LABEL_X0 = 3.5
+DIST_LABEL_X1 = 3.8
 NEAR_ANGLE = True
 FAR_ANGLE = True
 B_PLANE_Y = 0.5
@@ -38,12 +41,18 @@ def gamma_offset(w, d, v):
 if __name__ == "__main__":
     print(f"BLOCKER_PERP_DIST: {BLOCKER_PERP_DIST}")
     print(f"SOURCE_SIZE: {SOURCE_SIZE}")
-    fig, ax = plt.subplots(figsize=(6, 6), layout="constrained")
+    if LABEL_DISTANCES:
+        fig, ax = plt.subplots(figsize=(6, 6.225), layout="constrained")
+    else:
+        fig, ax = plt.subplots(figsize=(6, 6), layout="constrained")
     ax.set_aspect("equal")
     ax.set_axis_off()
     CANVAS_SIZE = (4.0, 4.0)
     ax.set_xlim(0.0, CANVAS_SIZE[0])
-    ax.set_ylim(0.0, CANVAS_SIZE[1]+0.01)
+    if LABEL_DISTANCES:
+        ax.set_ylim(0.0, CANVAS_SIZE[1]+0.15)
+    else:
+        ax.set_ylim(0.0, CANVAS_SIZE[1]+0.01)
     blocker_y = CANVAS_SIZE[1] - BLOCKER_PERP_DIST
     if CENTRED:
         SOURCE_OFFSET = -0.5 * SOURCE_SIZE
@@ -189,6 +198,115 @@ if __name__ == "__main__":
             avg_angle = np.deg2rad(0.5 * (angle0 + angle1))
             angle_dist = 0.5 * arc_diam + 0.02
             plt.text(arc_centre[0] + np.cos(avg_angle) * angle_dist, arc_centre[1] + np.sin(avg_angle) * angle_dist, r"$\beta$", horizontalalignment="center")
+
+    if LABEL_DISTANCES:
+
+        d_patch = FancyArrowPatch(
+            (DIST_LABEL_X0, CANVAS_SIZE[1]),
+            (DIST_LABEL_X0, CANVAS_SIZE[1]-BLOCKER_PERP_DIST),
+            # length_includes_head=True,
+            arrowstyle="<->",
+            shrinkA=0,
+            shrinkB=0,
+            mutation_scale=8,
+            ec=my_grey,
+        )
+        ax.add_patch(d_patch)
+        plt.text(
+            DIST_LABEL_X0 - 0.02,
+            0.5 * (CANVAS_SIZE[1] + (CANVAS_SIZE[1] - BLOCKER_PERP_DIST)),
+            "d",
+            horizontalalignment="right",
+            c=my_grey,
+        )
+
+        h_patch = FancyArrowPatch(
+            (DIST_LABEL_X0, CANVAS_SIZE[1]-BLOCKER_PERP_DIST),
+            (DIST_LABEL_X0, B_PLANE_Y),
+            # length_includes_head=True,
+            arrowstyle="<->",
+            shrinkA=0,
+            shrinkB=0,
+            mutation_scale=8,
+            ec=my_grey,
+        )
+        ax.add_patch(h_patch)
+        plt.text(
+            DIST_LABEL_X0 - 0.02,
+            0.5 * (B_PLANE_Y + (CANVAS_SIZE[1] - BLOCKER_PERP_DIST)),
+            "h",
+            horizontalalignment="right",
+            c=my_grey,
+        )
+
+        D_patch = FancyArrowPatch(
+            (DIST_LABEL_X1, CANVAS_SIZE[1]),
+            (DIST_LABEL_X1, B_PLANE_Y),
+            # length_includes_head=True,
+            arrowstyle="<->",
+            shrinkA=0,
+            shrinkB=0,
+            mutation_scale=8,
+            ec=my_grey,
+        )
+        ax.add_patch(D_patch)
+        plt.text(
+            DIST_LABEL_X1 - 0.02,
+            0.5 * (CANVAS_SIZE[1] + B_PLANE_Y),
+            "D",
+            horizontalalignment="right",
+            c=my_grey,
+        )
+
+        w_patch = FancyArrowPatch(
+            (source_start, CANVAS_SIZE[1] + 0.03),
+            (source_end, CANVAS_SIZE[1] + 0.03),
+            # length_includes_head=True,
+            arrowstyle="<->",
+            shrinkA=0,
+            shrinkB=0,
+            mutation_scale=8,
+            ec=my_grey,
+        )
+        ax.add_patch(w_patch)
+        plt.text(
+            0.5 * (source_start + source_end),
+            CANVAS_SIZE[1] + 0.03,
+            "w",
+            verticalalignment="bottom",
+            c=my_grey,
+        )
+        line_end_buffer = 0.08
+        plt.plot(
+            [DIST_LABEL_X0 - line_end_buffer, DIST_LABEL_X1 + line_end_buffer],
+            [CANVAS_SIZE[1], CANVAS_SIZE[1]],
+            c=my_grey,
+            lw=0.5,
+        )
+        plt.plot(
+            [DIST_LABEL_X0 - line_end_buffer, DIST_LABEL_X1 + line_end_buffer],
+            [B_PLANE_Y, B_PLANE_Y],
+            c=my_grey,
+            lw=0.5,
+        )
+        plt.plot(
+            [DIST_LABEL_X0 - line_end_buffer, DIST_LABEL_X0 + line_end_buffer],
+            [CANVAS_SIZE[1] - BLOCKER_PERP_DIST, CANVAS_SIZE[1] - BLOCKER_PERP_DIST],
+            c=my_grey,
+            lw=0.5,
+        )
+        plt.plot(
+            [source_start, source_start],
+            [CANVAS_SIZE[1] + 0.01, CANVAS_SIZE[1] + 0.06],
+            c=my_grey,
+            lw=0.5,
+        )
+        plt.plot(
+            [source_end, source_end],
+            [CANVAS_SIZE[1] + 0.01, CANVAS_SIZE[1] + 0.06],
+            c=my_grey,
+            lw=0.5,
+        )
 
     try:
         print(f"B/A: {b_length / a_length:.3f}")
