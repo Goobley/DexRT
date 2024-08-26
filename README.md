@@ -20,6 +20,15 @@ Please forgive the current state of the repository, it will be tidied up soon™
 
 ![COCOPLOT of J across Ly beta in a prominence model](Images/cocoplot_lyb_j.png)
 
+Non-exhaustive feature list:
+- GPU accelerated
+- Radiance cascades formal solution in 2D
+- Non-LTE solution via same-preconditioning MALI (Rybicki & Hummer 1992)
+- Electron density charge conservation (secondary Newton-Raphson, e.g. Heinzel 1995, Osborne & Milic 2021)
+- Pressure conservation a la [Promweaver](https://github.com/Goobley/Promweaver)
+- `dexrt_ray`: a single-pass final formal solver allowing for calculation of intensity and formation properties such as contribution function from arbitrary angles.
+- Docker container specifications provided in `.devcontainer` that have been tested (primarily nvhpc). These environments can be worked from directly with VSCode.
+
 📖 Documentation
 ----------------
 
