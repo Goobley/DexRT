@@ -717,6 +717,7 @@ int main(int argc, char** argv) {
             if (non_lte) {
                 int i = 0;
                 if (actually_conserve_charge) {
+                    // TODO(cmo): Make all of these parameters configurable
                     fmt::println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
@@ -727,18 +728,20 @@ int main(int argc, char** argv) {
                         // NOTE(cmo): When dealing with just the collisional
                         // rates, numerical precision can be a bit of a pain,
                         // and get stuck in loops. Here we ignore changes to
-                        // populations below 1e-12 of the total species fraction
+                        // populations below 1e-7 of the total species fraction
                         // -- they are very unlikely overly important for charge
                         // conservation stuff. This is just to get a starting
                         // guess anyway.
                         lte_max_change = stat_eq<f64>(&state, StatEqOptions{
-                            .ignore_change_below_ntot_frac=FP(1e-12)
+                            .ignore_change_below_ntot_frac=FP(1e-7)
                         });
-                        if (lte_i < 2) {
+                        // NOTE(cmo): Run the stat eq twice to ensure it's
+                        // settled, sometimes Ca takes a little while.
+                        if (lte_i % 2) {
                             continue;
                         }
                         fp_t nr_update = nr_post_update<f64>(&state, NrPostUpdateOptions{
-                            .ignore_change_below_ntot_frac=FP(1e-12)
+                            .ignore_change_below_ntot_frac=FP(1e-7)
                         });
                         lte_max_change = std::max(nr_update, lte_max_change);
                         if (actually_conserve_pressure) {
