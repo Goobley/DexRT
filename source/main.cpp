@@ -725,25 +725,21 @@ int main(int argc, char** argv) {
                         lte_i += 1;
                         compute_nh0(state);
                         compute_collisions_to_gamma(&state);
-                        // NOTE(cmo): When dealing with just the collisional
-                        // rates, numerical precision can be a bit of a pain,
-                        // and get stuck in loops. Here we ignore changes to
-                        // populations below 1e-7 of the total species fraction
-                        // -- they are very unlikely overly important for charge
-                        // conservation stuff. This is just to get a starting
-                        // guess anyway.
                         lte_max_change = stat_eq<f64>(&state, StatEqOptions{
                             .ignore_change_below_ntot_frac=FP(1e-7)
                         });
-                        // NOTE(cmo): Run the stat eq twice to ensure it's
-                        // settled, sometimes Ca takes a little while.
-                        if (lte_i % 2) {
+                        if (lte_i < 2) {
                             continue;
                         }
+                        // NOTE(cmo): Ignore what the lte_change actually is
+                        // from stat eq... it will "converge" essentially
+                        // instantly due to linearity, so whilst the error may
+                        // be above a threshold, it's unlikely to get
+                        // meaningfully better after the second iteration
                         fp_t nr_update = nr_post_update<f64>(&state, NrPostUpdateOptions{
                             .ignore_change_below_ntot_frac=FP(1e-7)
                         });
-                        lte_max_change = std::max(nr_update, lte_max_change);
+                        lte_max_change = nr_update;
                         if (actually_conserve_pressure) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
                             lte_max_change = std::max(nh_tot_update, lte_max_change);

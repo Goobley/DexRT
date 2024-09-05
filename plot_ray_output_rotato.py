@@ -15,12 +15,12 @@ delta_lambda = 0.017
 delta_lambda = 0.082
 # outdir = Path("SnowKHIRay")
 # outdir = Path("Valeriia_a0500")
-outdir = Path("JackHighRes/Frames")
+outdir = Path("VeronikaProm/Frames")
 outdir.mkdir(parents=True, exist_ok=True)
 
 # prefix = "build"
-prefix = "JackHighRes"
-config_file = f"jk20200550_ray.yaml"
+prefix = "/mnt/c/Users/cmo/OneDrive - University of Glasgow/AmrvacJercicStochasticModel/Dex"
+config_file = f"stochastic_prom_jercic_0526_ray.yaml"
 
 # atom_name = "Ca II"
 # lambda0 = 854.4437912696352
@@ -31,10 +31,10 @@ config_file = f"jk20200550_ray.yaml"
 atom_name = "H I"
 # lambda0 = 121.56841096386113
 # delta_lambda = 0.07
-lambda0 = 102.57334047695103
-delta_lambda = 0.07
-# lambda0 = 656.4691622298104
-# delta_lambda = 0.17
+# lambda0 = 102.57334047695103
+# delta_lambda = 0.07
+lambda0 = 656.4691622298104
+delta_lambda = 0.17
 
 line_name = f"{atom_name} {lambda0:.2f} nm"
 line_name_save = line_name.replace(" ", "_")
@@ -273,3 +273,4 @@ if __name__ == "__main__":
         plt.close(tau_fig)
 
 # ffmpeg -framerate 12 -i SnowKHIRay/%03d.png -pix_fmt yuv420p -vcodec libx264 -movflags +faststart -vf "format=yuv420p,scale=1920:1080" -crf 10 test.mp4
+# ffmpeg -framerate 12 -i Ca_II_854.44_nm_%03d.png -pix_fmt yuv420p -vcodec libx264 -movflags +faststart -vf""format=yuv420p,scale=1920:-1" -crf 10 Ca_II_854.44_nm.mp4
