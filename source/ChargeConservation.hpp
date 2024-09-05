@@ -37,10 +37,9 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
         GammaH.extent(1),
         GammaH.extent(2) * GammaH.extent(3)
     ));
-    // NOTE(cmo): Sort out the diagonal before we copy into the tranpose (full Gamma)
+    // NOTE(cmo): Sort out the diagonal before we copy into the transpose (full Gamma)
     fixup_gamma(GammaH_flat);
     yakl::fence();
-    auto FullGammaH = GammaH.createDeviceCopy();
     const auto& H_atom = extract_atom(state->adata, state->adata_host, 0);
     // NOTE(cmo): Immediately transposed
     yakl::Array<T, 2, yakl::memDevice> F("F", GammaH_flat.extent(2), num_eqn);
@@ -130,163 +129,85 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
     yakl::fence();
 
     // NOTE(cmo): Compute LHS, based on Lightspinner impl
-    if constexpr (compute_F_host) {
-        auto GammaT_host = GammaT.createHostCopy();
-        auto pops_host = new_pops.createHostCopy();
-        auto nhtot_host = nhtot.createHostCopy();
-        auto ne_host = ne_flat.createHostCopy();
-        auto C_flat_host = C_flat.createHostCopy();
-        auto dC_host = dC.createHostCopy();
-        yakl::fence();
-        for (i64 k = 0; k < F_host.extent(0); ++k) {
-            for (int i = 0; i < num_level; ++i) {
+    parallel_for(
+        "Compute F",
+        SimpleBounds<2>(F.extent(0), F.extent(1)),
+        YAKL_LAMBDA (i64 k, int i) {
+            if (i < (num_level - 1)) {
                 T Fi = FP(0.0);
                 for (int j = 0; j < num_level; ++j) {
-                    Fi += GammaT_host(k, j, i) * pops_host(k, j);
+                    Fi += GammaT(k, j, i) * new_pops(k, j);
                 }
-                F_host(k, i) = Fi;
-            }
-            T dntot = state->adata_host.abundance(0) * nhtot_host(k);
-            for (int j = 0; j < num_level; ++j) {
-                dntot -= pops_host(k, j);
-            }
-            F_host(k, num_level-1) = dntot;
-            T charge = FP(0.0);
-            for (int j = 0; j < num_level; ++j) {
-                charge += (state->adata_host.stage(j) - FP(1.0)) * pops_host(k, j);
-            }
-            charge -= ne_host(k);
-            F_host(k, num_eqn-1) = charge;
-        }
-        for (i64 k = 0; k < dF_host.extent(0); ++k) {
-            for (int i = 0; i < num_eqn; ++i) {
-                for (int j = 0; j < num_eqn; ++j) {
-                    dF_host(k, i, j) = FP(0.0);
-                }
-            }
-            for (int i = 0; i < num_level; ++i) {
+                F(k, i) = Fi;
+            } else if (i == (num_level - 1)) {
+                T dntot = H_atom.abundance * nhtot(k);
                 for (int j = 0; j < num_level; ++j) {
-                    dF_host(k, i, j) = -GammaT_host(k, i, j);
+                    dntot -= new_pops(k, j);
                 }
+                F(k, i) = dntot;
+            } else if (i == (num_eqn - 1)) {
+                T charge = FP(0.0);
+                for (int j = 0; j < num_level; ++j) {
+                    charge += (H_atom.stage(j) - FP(1.0)) * new_pops(k, j);
+                }
+                charge -= ne_flat(k);
+                F(k, i) = charge;
             }
-            const int num_cont = state->adata_host.num_cont(0);
-            for (int kr = 0; kr < num_cont; ++kr) {
-                const auto& cont = state->adata_host.continua(kr);
-                const fp_t precon_Rji = GammaT_host(k, cont.j, cont.i) - C_flat_host(cont.i, cont.j, k);
-                dF_host(k, num_eqn-1, cont.i) += -(precon_Rji / ne_host(k)) * pops_host(k, cont.j);
-            }
-            for (int i = 0; i < num_level; ++i) {
-                fp_t entry = FP(0.0);
-                for (int ll = 0; ll < num_level; ++ll) {
-                    entry -= dC_host(i, ll, k) * pops_host(k, ll);
-                }
-                dF_host(k, num_eqn-1, i) += entry;
-            }
-            for (int ll = 0; ll < num_eqn; ++ll) {
-                dF_host(k, ll, num_level-1) = FP(0.0);
-            }
-            for (int ll = 0; ll < num_level; ++ll) {
-                dF_host(k, ll, num_level-1) = FP(1.0);
-                dF_host(k, ll, num_eqn-1) = -(state->adata_host.stage(ll) - FP(1.0));
-            }
-            dF_host(k, num_eqn-1, num_eqn-1) = FP(1.0);
-        }
-        F = F_host.createDeviceCopy();
-        dF = dF_host.createDeviceCopy();
-        yakl::fence();
-    } else {
-
-        parallel_for(
-            "Compute F",
-            SimpleBounds<2>(F.extent(0), F.extent(1)),
-            YAKL_LAMBDA (i64 k, int i) {
-                if (i < num_level - 1) {
-                    T Fi = FP(0.0);
-                    for (int j = 0; j < num_level; ++j) {
-                        Fi += GammaT(k, j, i) * new_pops(k, j);
-                    }
-                    F(k, i) = Fi;
-                } else if (i == (num_level - 1)) {
-                    T dntot = H_atom.abundance * nhtot(k);
-                    for (int j = 0; j < num_level; ++j) {
-                        dntot -= new_pops(k, j);
-                    }
-                    F(k, i) = dntot;
-                } else if (i == (num_eqn - 1)) {
-                    T charge = FP(0.0);
-                    for (int j = 0; j < num_level; ++j) {
-                        charge += (H_atom.stage(j) - FP(1.0)) * new_pops(k, j);
-                    }
-                    charge -= ne_flat(k);
-                    F(k, i) = charge;
-                }
-            }
-        );
-        // NOTE(cmo): Compute matrix system -- very messy.
-        parallel_for(
-            "Compute dF",
-            SimpleBounds<3>(dF.extent(0), dF.extent(1), dF.extent(2)),
-            YAKL_LAMBDA (i64 k, int i, int j) {
-                if (i < num_level && j < num_level) {
-                    dF(k, i, j) = -GammaT(k, i, j);
-                }
-                if (j == 0) {
-                    if (i == 0) {
-                        for (int kr = 0; kr < H_atom.continua.extent(0); ++kr) {
-                            const auto& cont = H_atom.continua(kr);
-                            const fp_t precon_Rji = GammaT(k, cont.j, cont.i) - C_flat(cont.i, cont.j, k);
-                            dF(k, num_eqn-1, cont.i) += -(precon_Rji / ne_flat(k)) * new_pops(k, cont.j);
-                        }
-                    }
-                    if (i < num_level) {
-                        // TODO(cmo): This can be atomicised and done over j.
-                        for (int jj = 0; jj < num_level; ++jj) {
-                            dF(k, num_eqn-1, i) -= dC(i, jj, k) * new_pops(k, jj);
-                        }
-                    }
-                }
-                if (i < num_level && j == (num_level-1)) {
-                    // NOTE(cmo): Number conservation eqn for H
-                    dF(k, i, j) = FP(1.0);
-                }
-                if (i == num_level && j == (num_level-1)) {
-                    // NOTE(cmo): Number conservation eqn for H
-                    dF(k, i, j) = FP(0.0);
-                }
-                if (i < num_level && j == (num_eqn - 1)) {
-                    dF(k, i, j) = -(H_atom.stage(i) - FP(1.0));
-                }
-                if (i == (num_eqn - 1) && j == (num_eqn - 1)) {
-                    dF(k, i, j) = FP(1.0);
-                }
-            }
-        );
-        yakl::fence();
-
-    }
-
-    yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", F.extent(0), F.extent(1));
-    yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", F.extent(0));
-    yakl::Array<i32, 1, yakl::memDevice> info("info", F.extent(0));
-    yakl::Array<T*, 1, yakl::memDevice> dF_ptrs("dF_ptrs", dF.extent(0));
-    yakl::Array<T*, 1, yakl::memDevice> F_ptrs("F_ptrs", F.extent(0));
-    ipivs = FP(0.0);
-    info = 0;
-
-    parallel_for(
-        "Setup pointers",
-        SimpleBounds<1>(dF_ptrs.extent(0)),
-        YAKL_LAMBDA (i64 k) {
-            F_ptrs(k) = &F(k, 0);
-            dF_ptrs(k) = &dF(k, 0, 0);
-            ipiv_ptrs(k) = &ipivs(k, 0);
         }
     );
+    // NOTE(cmo): Compute matrix system -- very messy.
+    parallel_for(
+        "Compute dF",
+        SimpleBounds<3>(dF.extent(0), dF.extent(1), dF.extent(2)),
+        YAKL_LAMBDA (i64 k, int i, int j) {
+            if (i < num_level && j < num_level) {
+                dF(k, i, j) = -GammaT(k, i, j);
+            }
+            if (j == 0) {
+                if (i == 0) {
+                    for (int kr = 0; kr < H_atom.continua.extent(0); ++kr) {
+                        const auto& cont = H_atom.continua(kr);
+                        const T precon_Rji = GammaT(k, cont.j, cont.i) - C_flat(cont.i, cont.j, k);
+                        const T entry = -(precon_Rji / ne_flat(k)) * new_pops(k, cont.j);
+                        yakl::atomicAdd(
+                            dF(k, num_eqn-1, cont.i),
+                            entry
+                        );
+                    }
+                }
+                if (i < num_level) {
+                    // TODO(cmo): This can be atomicised and done over j.
+                    for (int jj = 0; jj < num_level; ++jj) {
+                        yakl::atomicAdd(
+                            dF(k, num_eqn-1, i),
+                            - dC(i, jj, k) * new_pops(k, jj)
+                        );
+                    }
+                }
+            }
+            if (i < num_level && j == (num_level-1)) {
+                // NOTE(cmo): Number conservation eqn for H
+                dF(k, i, j) = FP(1.0);
+            }
+            if (i == num_level && j == (num_level-1)) {
+                // NOTE(cmo): Number conservation eqn for H
+                dF(k, i, j) = FP(0.0);
+            }
+            if (i < num_level && j == (num_eqn - 1)) {
+                dF(k, i, j) = -(H_atom.stage(i) - FP(1.0));
+            }
+            if (i == (num_eqn - 1) && j == (num_eqn - 1)) {
+                dF(k, i, j) = FP(1.0);
+            }
+        }
+    );
+    yakl::fence();
+
     // z * Nx + x
-    int print_idx = std::min(323 * state->pops.extent(2) + 520, F.extent(0)-1);
+    int print_idx = std::min(369 * state->pops.extent(2) + 587, F.extent(0)-1);
     if (print_debug) {
         const auto dF_host = dF.createHostCopy();
-        const auto dC_host = dC.createHostCopy();
+        // const auto dC_host = dC.createHostCopy();
         const auto F_host = F.createHostCopy();
         const auto ne_host = ne_flat.createHostCopy();
         const auto pops_host = pops.createHostCopy();
@@ -305,19 +226,33 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
             }
             fmt::print("\n");
         }
-        fmt::println("-------- dC ----------");
-        for (int i = 0; i < dC_host.extent(0); ++i) {
-            for (int j = 0; j < dC_host.extent(1); ++j) {
-                fmt::print("{:e}, ", dC_host(i, j, print_idx));
-            }
-            fmt::print("\n");
-        }
-        fmt::print("F pre ");
+        fmt::print("\n");
+
+        fmt::print("F pre\n");
         for (int i = 0; i < F.extent(1); ++i) {
             fmt::print("{:e}, ", F_host(print_idx, i));
         }
         fmt::print("\n");
     }
+    yakl::fence();
+
+    yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", F.extent(0), F.extent(1));
+    yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", F.extent(0));
+    yakl::Array<i32, 1, yakl::memDevice> info("info", F.extent(0));
+    yakl::Array<T*, 1, yakl::memDevice> dF_ptrs("dF_ptrs", dF.extent(0));
+    yakl::Array<T*, 1, yakl::memDevice> F_ptrs("F_ptrs", F.extent(0));
+    ipivs = FP(0.0);
+    info = 0;
+
+    parallel_for(
+        "Setup pointers",
+        SimpleBounds<1>(dF_ptrs.extent(0)),
+        YAKL_LAMBDA (i64 k) {
+            F_ptrs(k) = &F(k, 0);
+            dF_ptrs(k) = &dF(k, 0, 0);
+            ipiv_ptrs(k) = &ipivs(k, 0);
+        }
+    );
     yakl::fence();
     static_assert(
         std::is_same_v<T, f32> || std::is_same_v<T, f64>,

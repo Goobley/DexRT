@@ -706,7 +706,7 @@ int main(int argc, char** argv) {
             const int initial_lambda_iterations = config.initial_lambda_iterations;
             const int max_iters = config.max_iter;
 
-            constexpr fp_t non_lte_tol = FP(1e-3);
+            const fp_t non_lte_tol = config.pop_tol;
             auto& waves = state.adata_host.wavelength;
             auto fs_fn = dynamic_formal_sol_rc;
             // if (static_soln) {
@@ -721,7 +721,7 @@ int main(int argc, char** argv) {
                     fmt::println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
-                    while ((lte_max_change > FP(1e-3) || lte_i < 6) && lte_i < max_iters) {
+                    while ((lte_max_change > FP(1e-5) || lte_i < 6) && lte_i < max_iters) {
                         lte_i += 1;
                         compute_nh0(state);
                         compute_collisions_to_gamma(&state);
