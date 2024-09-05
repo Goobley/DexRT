@@ -43,15 +43,12 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
     const auto& H_atom = extract_atom(state->adata, state->adata_host, 0);
     // NOTE(cmo): Immediately transposed
     yakl::Array<T, 2, yakl::memDevice> F("F", GammaH_flat.extent(2), num_eqn);
-    yakl::Array<T, 2, yakl::memHost> F_host("F", GammaH_flat.extent(2), num_eqn);
     yakl::Array<T, 3, yakl::memDevice> GammaT("GammaH^T", GammaH_flat.extent(2), num_level, num_level);
     yakl::Array<T, 3, yakl::memDevice> dF("dF", GammaH_flat.extent(2), num_eqn, num_eqn);
-    yakl::Array<T, 3, yakl::memHost> dF_host("dF", GammaH_flat.extent(2), num_eqn, num_eqn);
     F = FP(0.0);
     dF = FP(0.0);
     yakl::Array<T, 2, yakl::memDevice> new_pops("new_pops", GammaT.extent(0), num_level);
     yakl::fence();
-    constexpr bool compute_F_host = true;
 
     parallel_for(
         "Transpose Gamma",
