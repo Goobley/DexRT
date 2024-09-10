@@ -107,6 +107,19 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
         }
     }
     fmt::println("Active cells: {}/{}", active_count, active.extent(0) * active.extent(1));
+    // TODO(cmo): Do this parallel on GPU
+    yakl::Array<i64, 2, yakl::memHost> active_map("active_map", space_x, space_y);
+    i64 active_idx = 0;
+    for (int z = 0; z < active_map.extent(0); ++z) {
+        for (int x = 0; x < active_map.extent(1); ++x) {
+            if (!cpu_active(z, x)) {
+                active_map(z, x) = -1;
+            } else {
+                active_map(z, x) = active_idx++;
+            }
+        }
+    }
+    state.active_map = active_map.createDeviceCopy();
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
     state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary);

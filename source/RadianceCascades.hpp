@@ -637,7 +637,9 @@ DynamicState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
+    const yakl::Array<i64, 2, yakl::memDevice>& active_map,
+    const DirectionalEmisOpacInterp& dir_interp
 ) {
     return DynamicState{};
 }
@@ -652,7 +654,9 @@ Raymarch2dDynamicState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
+    const yakl::Array<i64, 2, yakl::memDevice>& active_map,
+    const DirectionalEmisOpacInterp& dir_interp
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
@@ -671,20 +675,58 @@ Raymarch2dDynamicState get_dyn_state(
     };
 }
 
+template <>
+YAKL_INLINE
+Raymarch2dDynamicInterpState get_dyn_state(
+    int la,
+    const RayProps& ray,
+    const fp_t incl,
+    const Atmosphere& atmos,
+    const AtomicData<fp_t>& adata,
+    const VoigtProfile<fp_t>& profile,
+    const Fp2d& flat_pops,
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
+    const yakl::Array<i64, 2, yakl::memDevice>& active_map,
+    const DirectionalEmisOpacInterp& dir_interp
+)
+{
+    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
+    vec3 mu;
+    mu(0) = ray.dir(0) * sin_theta;
+    mu(1) = incl;
+    mu(2) = ray.dir(1) * sin_theta;
+
+    return Raymarch2dDynamicInterpState{
+        .mu = mu,
+        .vx = atmos.vx,
+        .vy = atmos.vy,
+        .vz = atmos.vz,
+        .dynamic_opac = dynamic_opac,
+        .active_map = active_map,
+        .dir_interp = dir_interp
+    };
+}
+
 template <int RcMode=0>
 void cascade_i_25d(
     const State& state,
     const CascadeState& casc_state,
     int cascade_idx,
-    const CascadeCalcSubset& subset
+    const CascadeCalcSubset& subset,
+    const DirectionalEmisOpacInterp& dir_interp = DirectionalEmisOpacInterp()
 ) {
-    JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac, active);
+    JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac, active, active_map);
     JasUnpack(subset, la_start, la_end, subset_idx);
     const auto& profile = state.phi;
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
     constexpr bool dynamic = RcMode & RC_DYNAMIC;
-    using DynamicState = std::conditional_t<dynamic, Raymarch2dDynamicState, DexEmpty>;
+    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (RcMode & RC_DYNAMIC_INTERP);
+    using DynamicState = std::conditional_t<
+        dynamic_interp,
+        Raymarch2dDynamicInterpState,
+        std::conditional_t<dynamic, Raymarch2dDynamicState, DexEmpty>
+    >;
     const bool sparse_calc = state.config.sparse_calculation;
 
     CascadeIdxs lookup = cascade_indices(casc_state, cascade_idx);
@@ -792,7 +834,9 @@ void cascade_i_25d(
                     adata,
                     profile,
                     flat_pops,
-                    dynamic_opac
+                    dynamic_opac,
+                    active_map,
+                    dir_interp
                 );
                 RaymarchParams<DynamicState> params {
                     .distance_scale = atmos.voxel_scale,

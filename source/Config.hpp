@@ -42,6 +42,11 @@ constexpr bool DIR_BY_DIR = true;
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
 static_assert(!PREAVERAGE, "Don't use preaveraging for DexRT unless you know what you're doing! (Then disable me)");
 
+constexpr bool INTERPOLATE_DIRECTIONAL_OPACITY = true;
+constexpr int INTERPOLATE_DIRECTIONAL_BINS = 15;
+// NOTE(cmo): Code will warn if insufficient bins to provide less than this
+constexpr fp_t INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH = FP(2.0);
+
 enum class RcConfiguration {
     Vanilla,
     ParallaxFix,

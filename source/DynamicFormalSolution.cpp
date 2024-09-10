@@ -8,6 +8,7 @@
 #include "Atmosphere.hpp"
 #include "RcUtilsModes.hpp"
 #include "MergeToJ.hpp"
+#include "DirectionalEmisOpacInterp.hpp"
 
 void dynamic_compute_gamma(
     const State& state,
@@ -296,26 +297,35 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     );
     yakl::fence();
 
+    DirectionalEmisOpacInterp dir_interp;
+    if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
+        i64 num_active_zones = casc_state.probes_to_compute[0].extent(0);
+        dir_interp = DirectionalEmisOpacInterp_new(num_active_zones, wave_batch);
+    }
+
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = true,
         .preaverage = PREAVERAGE,
         .sample_bc = true,
         .compute_alo = false,
-        .dir_by_dir = DIR_BY_DIR
+        .dir_by_dir = DIR_BY_DIR,
+        .dynamic_interp = INTERPOLATE_DIRECTIONAL_OPACITY
     });
     constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
         .dynamic = true,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
         .compute_alo = false,
-        .dir_by_dir = DIR_BY_DIR
+        .dir_by_dir = DIR_BY_DIR,
+        .dynamic_interp = INTERPOLATE_DIRECTIONAL_OPACITY
     });
     constexpr int RcModeAlo = RC_flags_pack(RcFlags{
         .dynamic = true,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
         .compute_alo = true,
-        .dir_by_dir = DIR_BY_DIR
+        .dir_by_dir = DIR_BY_DIR,
+        .dynamic_interp = INTERPOLATE_DIRECTIONAL_OPACITY
     });
     constexpr int RcStorage = RC_flags_storage();
     // NOTE(cmo): Compute RC FS
@@ -329,18 +339,23 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             .la_end=la_end,
             .subset_idx=subset_idx
         };
+        if (dir_interp.emis_vel.initialized()) {
+            dir_interp.fill<RcModeNoBc>(state, casc_state, subset, lte_scratch);
+        }
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,
             casc_state.num_cascades,
-            subset
+            subset,
+            dir_interp
         );
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
             cascade_i_25d<RcModeNoBc>(
                 state,
                 casc_state,
                 casc_idx,
-                subset
+                subset,
+                dir_interp
             );
         }
         if (state.alo.initialized() && !lambda_iterate) {
@@ -348,14 +363,16 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 state,
                 casc_state,
                 0,
-                subset
+                subset,
+                dir_interp
             );
         } else {
             cascade_i_25d<RcModeNoBc>(
                 state,
                 casc_state,
                 0,
-                subset
+                subset,
+                dir_interp
             );
         }
         if (state.alo.initialized()) {

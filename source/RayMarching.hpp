@@ -6,6 +6,7 @@
 #include "State.hpp"
 #include "CascadeState.hpp"
 #include "EmisOpac.hpp"
+#include "DirectionalEmisOpacInterp.hpp"
 #include <optional>
 
 struct RayMarchState2d {
@@ -302,6 +303,16 @@ struct Raymarch2dDynamicState {
     const Fp2d& n; // flattened
 };
 
+struct Raymarch2dDynamicInterpState {
+    vec3 mu;
+    const FpConst2d& vx;
+    const FpConst2d& vy;
+    const FpConst2d& vz;
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
+    const yakl::Array<i64, 2, yakl::memDevice>& active_map;
+    const DirectionalEmisOpacInterp& dir_interp;
+};
+
 template <typename Bc, class DynamicState=DexEmpty>
 struct Raymarch2dArgs {
     const CascadeStateAndBc<Bc>& casc_state_bc;
@@ -328,7 +339,15 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic = RcMode & RC_DYNAMIC;
-    static_assert(!dynamic || (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicState>), "If dynamic must provide dynamic state");
+    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (RcMode & RC_DYNAMIC_INTERP);
+    static_assert(
+        !dynamic || (dynamic && (
+            std::is_same_v<DynamicState, Raymarch2dDynamicState>
+            || (dynamic_interp && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>)
+            )
+        ),
+        "If dynamic must provide dynamic state"
+    );
 
     auto domain_dims = state.eta.get_dimensions();
     ivec2 domain_size;
@@ -382,7 +401,8 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
 
         eta_s = state.eta(v, u, wave);
         chi_s = state.chi(v, u, wave) + FP(1e-15);
-        if constexpr (dynamic) {
+        if constexpr (dynamic && !dynamic_interp) {
+            // NOTE(cmo): dyn_state is Raymarch2dDynamicState
             const Atmosphere& atmos = dyn_state.atmos;
             const i64 k = v * atmos.temperature.extent(1) + u;
             if (
@@ -418,6 +438,24 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
 
                 eta_s += lines.eta;
                 chi_s += lines.chi;
+            }
+        } else if constexpr (dynamic && dynamic_interp) {
+            // NOTE(cmo): dyn_state is Raymarch2dDynamicInterpState
+            if (dyn_state.dynamic_opac(v, u, wave)) {
+                const int ks = dyn_state.active_map(v, u);
+                if (ks != -1) {
+                    const auto& mu = dyn_state.mu;
+                    const fp_t vel = (
+                        dyn_state.vx(v, u) * mu(0)
+                        + dyn_state.vy(v, u) * mu(1)
+                        + dyn_state.vz(v, u) * mu(2)
+                    );
+                    auto contrib = dyn_state.dir_interp.sample(ks, wave, vel);
+
+                    // NOTE(cmo): We are overwriting here, not adding.
+                    eta_s = contrib.eta;
+                    chi_s = contrib.chi + FP(1e-15);
+                }
             }
         }
 

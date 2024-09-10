@@ -29,6 +29,7 @@ struct State {
     HPartFn<> nh_lte;
     yakl::Array<bool, 3, yakl::memDevice> dynamic_opac; // [z, x, wave] -- whether this cell needs its lines to be computed separately
     yakl::Array<bool, 2, yakl::memDevice> active; // [z, x]  -- whether this cell should be considered
+    yakl::Array<i64, 2, yakl::memDevice> active_map; // [z, x] -- index of this cell in an array only allocated for active cells (-1 if not allocated)
     Fp3d wphi; /// [kr, z, x]
     Fp3d pops; /// [num_level, x, y]
     Fp3d J; /// [num_wave, x, y] -- if we're paging J to cpu, the first axis is wave_batch

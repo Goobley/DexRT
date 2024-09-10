@@ -265,21 +265,24 @@ void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bo
         .preaverage = PREAVERAGE,
         .sample_bc = true,
         .compute_alo = false,
-        .dir_by_dir = DIR_BY_DIR
+        .dir_by_dir = DIR_BY_DIR,
+        .dynamic_interp = false
     });
     constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
         .compute_alo = false,
-        .dir_by_dir = DIR_BY_DIR
+        .dir_by_dir = DIR_BY_DIR,
+        .dynamic_interp = false
     });
     constexpr int RcModeAlo = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
         .compute_alo = true,
-        .dir_by_dir = DIR_BY_DIR
+        .dir_by_dir = DIR_BY_DIR,
+        .dynamic_interp = false
     });
     constexpr int RcStorage = RC_flags_storage();
 
