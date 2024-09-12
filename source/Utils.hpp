@@ -162,5 +162,37 @@ Fp2d slice_pops(const Fp2d& pops, const AtomicData<T, mem_space>& adata, int ia)
     );
     return result;
 }
+
+/// Converts from normalised direction vector dir to polar angles [theta, phi] -- theta relative to y
+YAKL_INLINE
+vec2 dir_to_angs(vec3 dir) {
+    using ConstantsFP::pi;
+
+    fp_t sin_theta = std::sqrt(FP(1.0) - square(dir(1)));
+    fp_t theta = std::acos(dir(1));
+    fp_t phi = std::atan2(dir(2) / sin_theta, dir(0) / sin_theta);
+    if (phi < FP(0.0)) {
+        phi += FP(2.0) * pi;
+    }
+    vec2 result;
+    result(0) = theta;
+    result(1) = phi;
+    return result;
+}
+
+/// Converts from polar angles [theta, phi] in radians, theta relative to y, to normalised direction vector
+YAKL_INLINE
+vec3 angs_to_dir(vec2 angs) {
+    fp_t cp = std::cos(angs(1));
+    fp_t sp = std::sin(angs(1));
+    fp_t ct = std::cos(angs(0));
+    fp_t st = std::sin(angs(0));
+    vec3 d;
+    d(0) = cp * st;
+    d(1) = ct;
+    d(2) = sp * st;
+    return d;
+}
+
 #else
 #endif

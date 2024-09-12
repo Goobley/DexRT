@@ -513,6 +513,32 @@ YAKL_INLINE fp_t probe_frac_dir_idx(const CascadeRays& dims, vec2 dir) {
     return frac_idx;
 }
 
+struct SphericalAngularRange {
+    /// polar (y) angle radians [min, max]
+    vec2 theta_range;
+    /// x-z angle radians [min, max]
+    vec2 phi_range;
+};
+
+/// Returns the theta and phi ranges associated with a c0 ray (currently assumes all inclinations)
+YAKL_INLINE
+SphericalAngularRange c0_flat_dir_angular_range(
+    const CascadeRays& dims,
+    const InclQuadrature& incl_quad,
+    int phi_idx
+) {
+    using ConstantsFP::pi;
+
+    SphericalAngularRange result;
+    result.theta_range(0) = std::acos(incl_quad.muy(dims.num_incl-1));
+    result.theta_range(1) = std::acos(incl_quad.muy(0));
+
+    const fp_t phi_step = FP(2.0) * pi / fp_t(dims.num_flat_dirs);
+    result.phi_range(0) = phi_step * phi_idx;
+    result.phi_range(1) = phi_step * (phi_idx+1);
+    return result;
+}
+
 
 #else
 #endif

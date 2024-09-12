@@ -7,6 +7,8 @@
 #include "EmisOpac.hpp"
 #include "Atmosphere.hpp"
 
+#include <optional>
+
 struct DirectionalEmisOpacInterp {
     Fp3d emis_vel; // [k_active, wave, vel]
     Fp3d opac_vel; // [k_active, wave, vel]
@@ -36,11 +38,8 @@ struct DirectionalEmisOpacInterp {
         min_vel = FP(1e8);
         yakl::fence();
 
-        fmt::println("fill");
-
-        // NOTE(cmo): Base this off the highest angular resolution cascade
         const int num_cascades = casc_state.num_cascades;
-        const int cascade_idx = casc_state.num_cascades;
+        const int cascade_idx = 0;
         CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
         CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
 
@@ -58,12 +57,10 @@ struct DirectionalEmisOpacInterp {
 
         parallel_for(
             "Min/Max Vel",
-            SimpleBounds<3>(
-                spatial_bounds,
-                ray_subset.num_flat_dirs,
-                ray_subset.num_incl
+            SimpleBounds<1>(
+                spatial_bounds
             ),
-            YAKL_LAMBDA (i64 k, int phi_idx, int theta_idx) {
+            YAKL_LAMBDA (i64 k) {
                 int u, v;
                 if (sparse_calc) {
                     u = probe_space_lookup(k, 0);
@@ -77,48 +74,113 @@ struct DirectionalEmisOpacInterp {
                     u = k % ray_set.num_probes(0);
                     v = k / ray_set.num_probes(0);
                 }
-                ivec2 cell_coord;
-                cell_coord(0) = u;
-                cell_coord(1) = v;
-                phi_idx += ray_subset.start_flat_dirs;
-                theta_idx += ray_subset.start_incl;
-                ProbeIndex probe_idx{
-                    .coord=cell_coord,
-                    .dir=phi_idx,
-                    .incl=theta_idx,
-                    .wave=0
-                };
-                RayProps ray = ray_props(ray_set, num_cascades, cascade_idx, probe_idx);
-                const fp_t incl = incl_quad.muy(theta_idx);
-                vec3 mu;
-                const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
-                mu(0) = ray.dir(0) * sin_theta;
-                mu(1) = incl;
-                mu(2) = ray.dir(1) * sin_theta;
-                // NOTE(cmo): The k in the for loop may be the sparse flat index, rather than the flat index.
-                i64 k_full = v * atmos.vx.extent(1) + u;
-                const fp_t vel = (
-                    atmos.vx.get_data()[k_full] * mu(0)
-                    + atmos.vy.get_data()[k_full] * mu(1)
-                    + atmos.vz.get_data()[k_full] * mu(2)
-                );
 
+                auto vec_norm = [] (vec3 v) -> fp_t {
+                    return std::sqrt(square(v(0)) + square(v(1))  + square(v(2)));
+                };
+                auto dot_vecs = [] (vec3 a, vec3 b) -> fp_t {
+                    fp_t acc = FP(0.0);
+                    for (int i = 0; i < 3; ++i) {
+                        acc += a(i) * b(i);
+                    }
+                    return acc;
+                };
+
+                vec3 vel;
+                // NOTE(cmo): Because we invert the x and z of the view ray when
+                // tracing, so invert those in the velocity for this
+                // calculation.
+                // vel(0) = -atmos.vx(v, u);
+                vel(0) = atmos.vx(v, u);
+                vel(1) = atmos.vy(v, u);
+                // vel(2) = -atmos.vz(v, u);
+                vel(2) = atmos.vz(v, u);
+                const fp_t vel_norm = vec_norm(vel);
+                vec3 vel_dir = vel / vel_norm;
+                // vec3 opp_vel_dir = FP(-1.0) * vel;
+                vec3 opp_vel_dir;
+                opp_vel_dir(0) = -vel_dir(0);
+                opp_vel_dir(1) = -vel_dir(1);
+                opp_vel_dir(2) = -vel_dir(2);
+                vec2 vel_angs = dir_to_angs(vel_dir);
+                vec2 opp_vel_angs = dir_to_angs(opp_vel_dir);
+
+                fp_t vmin = FP(1e6);
+                fp_t vmax = FP(-1e6);
+
+                auto extra_tests = [&vmin, &vmax, &vel, dot_vecs] (vec2 angles, const SphericalAngularRange& range) {
+                    auto in_range = [] (fp_t ang, vec2 range) -> int {
+                        bool r0 = (ang >= range(0));
+                        bool r1 = (ang <= range(1));
+                        return (r0 && r1);
+                    };
+                    const int theta_ir = in_range(angles(0), range.theta_range);
+                    const int phi_ir = in_range(angles(1), range.phi_range);
+                    vec2 test0, test1;
+
+                    if (theta_ir && phi_ir) {
+                        vec3 d = angs_to_dir(angles);
+                        const fp_t dot = dot_vecs(vel, d);
+                        vmin = std::min(vmin, dot);
+                        vmax = std::max(vmax, dot);
+                        return;
+                    }
+
+                    vec3 d0, d1;
+                    if (theta_ir) {
+                        vec2 a;
+                        a(0) = angles(0);
+                        a(1) = range.phi_range(0);
+                        d0 = angs_to_dir(a);
+                        a(1) = range.phi_range(1);
+                        d1 = angs_to_dir(a);
+                    } else if (phi_ir) {
+                        vec2 a;
+                        a(0) = range.theta_range(0);
+                        a(1) = angles(1);
+                        d0 = angs_to_dir(a);
+                        a(0) = range.theta_range(1);
+                        d1 = angs_to_dir(a);
+                    } else {
+                        return;
+                    }
+                    const fp_t dot0 = dot_vecs(vel, d0);
+                    const fp_t dot1 = dot_vecs(vel, d1);
+                    vmin = std::min(vmin, std::min(dot0, dot1));
+                    vmax = std::max(vmax, std::max(dot0, dot1));
+                };
+
+                for (
+                    int phi_idx = ray_subset.start_flat_dirs;
+                    phi_idx < ray_subset.num_flat_dirs + ray_subset.start_flat_dirs;
+                    ++phi_idx
+                ) {
+                    SphericalAngularRange ang_range =  c0_flat_dir_angular_range(ray_set, incl_quad, phi_idx);
+                    // NOTE(cmo): Check the 4 corners of the range
+                    for (int i = 0; i < 4; ++i) {
+                        vec2 angs;
+                        angs(0) = ang_range.theta_range(i / 2);
+                        angs(1) = ang_range.phi_range(i % 2);
+
+                        vec3 d = angs_to_dir(angs);
+                        const fp_t dot = dot_vecs(vel, d);
+                        vmin = std::min(vmin, dot);
+                        vmax = std::max(vmax, dot);
+                    }
+
+                    // NOTE(cmo): Do the extra tests
+                    extra_tests(vel_angs, ang_range);
+                    extra_tests(opp_vel_angs, ang_range);
+                }
+
+                vmin -= FP(0.02) * std::abs(vmin);
+                vmax += FP(0.02) * std::abs(vmax);
                 const i64 storage_idx = active_map(v, u);
-                // TODO(cmo): If the atomics are a bottleneck, we should be able
-                // to do the reduction per cell in shared memory
-                // TODO(cmo): yes this is a huge issue. Need to move to hierarchical parallelism
-                yakl::atomicMin(
-                    min_vel(storage_idx),
-                    vel
-                );
-                yakl::atomicMax(
-                    max_vel(storage_idx),
-                    vel
-                );
+                min_vel(storage_idx) = vmin;
+                max_vel(storage_idx) = vmax;
             }
         );
         yakl::fence();
-        fmt::println("Min/max done");
 
         int wave_batch = subset.la_end - subset.la_start;
         wave_batch = std::min(wave_batch, ray_subset.wave_batch);
@@ -127,8 +189,12 @@ struct DirectionalEmisOpacInterp {
         JasUnpack(state, adata, dynamic_opac, phi, pops);
         JasUnpack(casc_state, eta, chi);
         const auto flatmos = flatten<const fp_t>(atmos);
-        // yakl::ScalarLiveOut<fp_t> max_thermal_vel_frac(FP(0.0));
-        // yakl::ScalarLiveOut<i32> thermal_vel_frac_over_count(0);
+        // NOTE(cmo): Was getting segfaults with ScalarLiveOuts
+        Fp1d max_thermal_vel_frac("max_thermal_vel_frac", 1);
+        yakl::Array<i32, 1, yakl::memDevice> thermal_vel_frac_over_count("thermal_vel_frac_over_count", 1);
+        max_thermal_vel_frac = FP(0.0);
+        thermal_vel_frac_over_count = 0;
+        yakl::fence();
         auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
         auto flat_n_star = n_star.reshape<2>(Dims(n_star.extent(0), n_star.extent(1) * n_star.extent(2)));
 
@@ -166,10 +232,10 @@ struct DirectionalEmisOpacInterp {
                     const fp_t vtherm = thermal_vel(adata.mass(governing_atom), flatmos.temperature(kf));
                     const fp_t vtherm_frac = dv / vtherm;
 
-                    // if (vtherm_frac > INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH) {
-                    //     yakl::atomicMax(max_thermal_vel_frac(), vtherm_frac);
-                    //     yakl::atomicAdd(thermal_vel_frac_over_count(), 1);
-                    // }
+                    if (vtherm_frac > INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH) {
+                        yakl::atomicMax(max_thermal_vel_frac(0), vtherm_frac);
+                        yakl::atomicAdd(thermal_vel_frac_over_count(0), 1);
+                    }
                 }
                 AtmosPointParams local_atmos;
                 local_atmos.temperature = flatmos.temperature(kf);
@@ -202,15 +268,16 @@ struct DirectionalEmisOpacInterp {
             }
         );
         yakl::fence();
-        fmt::println("Emis/opac done");
-        // if (thermal_vel_frac_over_count.hostRead() > 0) {
-        //     fmt::println(
-        //         "{} cells with velocity sampling over {} thermal widths (max: {}), consider increasing INTERPOLATE_DIRECTIONAL_BINS",
-        //         thermal_vel_frac_over_count.hostRead(),
-        //         INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH,
-        //         max_thermal_vel_frac.hostRead()
-        //     );
-        // }
+        i32 count = thermal_vel_frac_over_count.createHostCopy()(0);
+        if (count > 0) {
+            fp_t max_frac = max_thermal_vel_frac.createHostCopy()(0);
+            fmt::println(
+                "{} cells with velocity sampling over {} thermal widths (max: {}), consider increasing INTERPOLATE_DIRECTIONAL_BINS",
+                count,
+                INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH,
+                max_frac
+            );
+        }
     }
 
     YAKL_DEVICE_INLINE EmisOpac sample(i64 ks, int wave, fp_t vel) const {
@@ -219,11 +286,16 @@ struct DirectionalEmisOpacInterp {
         int ivp;
         fp_t tv, tvp;
         if (frac_v < FP(0.0) || frac_v >= (INTERPOLATE_DIRECTIONAL_BINS - 1)) {
+            // if (ks == 173641) {
+                printf("Clamping frac_v: %f (%d) -- %f\n", frac_v, ks, vel);
+                assert(false);
+            // }
             iv = std::min(std::max(iv, 0), INTERPOLATE_DIRECTIONAL_BINS-1);
             ivp = iv;
             tv = FP(1.0);
             tvp = FP(0.0);
         } else {
+            // printf("Not clamping frac_v: %f\n", frac_v);
             ivp = iv + 1;
             tvp = frac_v - iv;
             tv = FP(1.0) - tvp;
