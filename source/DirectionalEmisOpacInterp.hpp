@@ -10,15 +10,15 @@
 #include <optional>
 
 struct DirectionalEmisOpacInterp {
-    Fp3d emis_vel; // [k_active, wave, vel]
-    Fp3d opac_vel; // [k_active, wave, vel]
+    // Fp3d emis_vel; // [vel, k_active, wave]
+    // Fp3d opac_vel; // [vel, k_active, wave]
+    Fp4d emis_opac_vel; // [k_active, vel, eta(0)/chi(1), wave]
     // NOTE(cmo): Stacking the above in a 4d array may lead to better cache usage (emis/opac as last dim)
     Fp2d vel_start; // [k_active, wave]
     Fp2d vel_step; // [k_active, wave]
 
     void zero() {
-        emis_vel = FP(0.0);
-        opac_vel = FP(0.0);
+        emis_opac_vel = FP(0.0);
         vel_start = FP(0.0);
         vel_step = FP(0.0);
         yakl::fence();
@@ -31,8 +31,8 @@ struct DirectionalEmisOpacInterp {
         const CascadeCalcSubset& subset,
         const Fp3d& n_star
     ) const {
-        Fp1d max_vel("max_vel", emis_vel.extent(0));
-        Fp1d min_vel("min_vel", emis_vel.extent(0));
+        Fp1d max_vel("max_vel", emis_opac_vel.extent(0));
+        Fp1d min_vel("min_vel", emis_opac_vel.extent(0));
         // NOTE(cmo): Relativistic flows should be fast enough!
         max_vel = -FP(1e8);
         min_vel = FP(1e8);
@@ -50,7 +50,7 @@ struct DirectionalEmisOpacInterp {
             probe_space_lookup = casc_state.probes_to_compute[0];
             spatial_bounds = probe_space_lookup.extent(0);
         }
-        assert(emis_vel.extent(0) == spatial_bounds && "Sparse sizes don't match");
+        assert(emis_opac_vel.extent(0) == spatial_bounds && "Sparse sizes don't match");
         const auto& incl_quad = state.incl_quad;
         const auto& atmos = state.atmos;
         const auto& active_map = state.active_map;
@@ -90,14 +90,11 @@ struct DirectionalEmisOpacInterp {
                 // NOTE(cmo): Because we invert the x and z of the view ray when
                 // tracing, so invert those in the velocity for this
                 // calculation.
-                // vel(0) = -atmos.vx(v, u);
-                vel(0) = atmos.vx(v, u);
-                vel(1) = atmos.vy(v, u);
-                // vel(2) = -atmos.vz(v, u);
-                vel(2) = atmos.vz(v, u);
+                vel(0) = -atmos.vx(v, u);
+                vel(1) = -atmos.vy(v, u);
+                vel(2) = -atmos.vz(v, u);
                 const fp_t vel_norm = vec_norm(vel);
                 vec3 vel_dir = vel / vel_norm;
-                // vec3 opp_vel_dir = FP(-1.0) * vel;
                 vec3 opp_vel_dir;
                 opp_vel_dir(0) = -vel_dir(0);
                 opp_vel_dir(1) = -vel_dir(1);
@@ -185,7 +182,7 @@ struct DirectionalEmisOpacInterp {
         int wave_batch = subset.la_end - subset.la_start;
         wave_batch = std::min(wave_batch, ray_subset.wave_batch);
 
-        JasUnpack((*this), emis_vel, opac_vel, vel_start, vel_step);
+        JasUnpack((*this), emis_opac_vel, vel_start, vel_step);
         JasUnpack(state, adata, dynamic_opac, phi, pops);
         JasUnpack(casc_state, eta, chi);
         const auto flatmos = flatten<const fp_t>(atmos);
@@ -202,10 +199,10 @@ struct DirectionalEmisOpacInterp {
             "Emis/Opac Samples",
             SimpleBounds<3>(
                 spatial_bounds,
-                wave_batch,
-                emis_vel.extent(2)
+                emis_opac_vel.extent(1),
+                wave_batch
             ),
-            YAKL_LAMBDA (i64 ks, int wave, int vel_idx) {
+            YAKL_LAMBDA (i64 ks, int vel_idx, int wave) {
                 int u, v;
                 if (sparse_calc) {
                     u = probe_space_lookup(ks, 0);
@@ -263,8 +260,8 @@ struct DirectionalEmisOpacInterp {
                 chi_s += line_terms.chi;
                 eta_s += line_terms.eta;
 
-                emis_vel(ks, wave, vel_idx) = eta_s;
-                opac_vel(ks, wave, vel_idx) = chi_s;
+                emis_opac_vel(ks, vel_idx, 0, wave) = eta_s;
+                emis_opac_vel(ks, vel_idx, 1, wave) = chi_s;
             }
         );
         yakl::fence();
@@ -287,8 +284,8 @@ struct DirectionalEmisOpacInterp {
         fp_t tv, tvp;
         if (frac_v < FP(0.0) || frac_v >= (INTERPOLATE_DIRECTIONAL_BINS - 1)) {
             // if (ks == 173641) {
-                printf("Clamping frac_v: %f (%d) -- %f\n", frac_v, ks, vel);
-                assert(false);
+                // printf("Clamping frac_v: %f (%d) -- %f\n", frac_v, ks, vel);
+                // assert(false);
             // }
             iv = std::min(std::max(iv, 0), INTERPOLATE_DIRECTIONAL_BINS-1);
             ivp = iv;
@@ -300,8 +297,8 @@ struct DirectionalEmisOpacInterp {
             tvp = frac_v - iv;
             tv = FP(1.0) - tvp;
         }
-        const fp_t eta = tv * emis_vel(ks, wave, iv) + tvp * emis_vel(ks, wave, ivp);
-        const fp_t chi = tv * opac_vel(ks, wave, iv) + tvp * opac_vel(ks, wave, ivp);
+        const fp_t eta = tv * emis_opac_vel(ks, iv, 0, wave) + tvp * emis_opac_vel(ks, ivp, 0, wave);
+        const fp_t chi = tv * emis_opac_vel(ks, iv, 1, wave) + tvp * emis_opac_vel(ks, ivp, 1, wave);
         return EmisOpac{
             .eta = eta,
             .chi = chi
@@ -312,8 +309,9 @@ struct DirectionalEmisOpacInterp {
 inline
 DirectionalEmisOpacInterp DirectionalEmisOpacInterp_new(i64 num_active_zones, int wave_batch) {
     DirectionalEmisOpacInterp result;
-    result.emis_vel = Fp3d("emis_vel", num_active_zones, wave_batch, INTERPOLATE_DIRECTIONAL_BINS);
-    result.opac_vel = Fp3d("opac_vel", num_active_zones, wave_batch, INTERPOLATE_DIRECTIONAL_BINS);
+    // result.emis_vel = Fp3d("emis_vel", INTERPOLATE_DIRECTIONAL_BINS, num_active_zones, wave_batch);
+    // result.opac_vel = Fp3d("opac_vel", INTERPOLATE_DIRECTIONAL_BINS, num_active_zones, wave_batch);
+    result.emis_opac_vel = Fp4d("emis_opac_vel", num_active_zones, INTERPOLATE_DIRECTIONAL_BINS, 2, wave_batch);
     result.vel_start = Fp2d("vel_start", num_active_zones, wave_batch);
     result.vel_step = Fp2d("vel_step", num_active_zones, wave_batch);
     result.zero();

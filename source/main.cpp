@@ -839,6 +839,7 @@ int main(int argc, char** argv) {
                 }
                 yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
+                    la_start = 100;
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                     setup_wavelength_batch(state, la_start, la_end);
                     fmt::println(
@@ -851,6 +852,7 @@ int main(int argc, char** argv) {
                     bool lambda_iterate = true;
                     fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
                     finalise_wavelength_batch(state, la_start, la_end);
+                    break;
                 }
             }
             yakl::timer_stop("DexRT");

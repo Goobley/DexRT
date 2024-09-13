@@ -274,7 +274,9 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 adata.mass(governing_atom),
                 local_atmos.temperature
             ));
-            flat_dynamic_opac(k, wave) = static_only;
+            auto active_set = slice_active_set(adata, la);
+            const bool no_lines = (active_set.extent(0) == 0);
+            flat_dynamic_opac(k, wave) = static_only || no_lines;
             EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
 
             auto result = emis_opac(
@@ -286,7 +288,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                     .n_star_scratch = flat_n_star,
                     .k = k,
                     .atmos = local_atmos,
-                    .active_set = slice_active_set(adata, la),
+                    .active_set = active_set,
                     .active_set_cont = slice_active_cont_set(adata, la),
                     .mode = mode
                 }
@@ -299,7 +301,10 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
 
     DirectionalEmisOpacInterp dir_interp;
     if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
-        i64 num_active_zones = casc_state.probes_to_compute[0].extent(0);
+        i64 num_active_zones = flatmos.temperature.extent(0);
+        if (sparse_calc) {
+            num_active_zones = casc_state.probes_to_compute[0].extent(0);
+        }
         dir_interp = DirectionalEmisOpacInterp_new(num_active_zones, wave_batch);
     }
 
@@ -339,7 +344,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             .la_end=la_end,
             .subset_idx=subset_idx
         };
-        if (dir_interp.emis_vel.initialized()) {
+        if (dir_interp.emis_opac_vel.initialized()) {
             dir_interp.fill<RcModeNoBc>(state, casc_state, subset, lte_scratch);
         }
         cascade_i_25d<RcModeBc>(
