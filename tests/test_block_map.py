@@ -65,7 +65,7 @@ class BlockMap:
                self.morton_traversal_order.append(encode_morton_2(x, z))
         self.morton_traversal_order = sorted(self.morton_traversal_order)
         self.fill_grids(field)
-        self.bbox = BBox(np.array([0, 0], dtype=np.int32), np.array(field.shape, dtype=np.int32))
+        self.bbox = BBox(np.array([0, 0], dtype=np.int32), np.array([field.shape[1], field.shape[0]], dtype=np.int32))
 
     def fill_grids(self, field):
         grid_index = 0
@@ -111,7 +111,15 @@ class Accessor:
     def has_leaves(self, x, z):
         tile_x = int(x // BLOCK_SIZE)
         tile_z = int(z // BLOCK_SIZE)
-        return self.block_map.entries[tile_z, tile_x] != -1
+        if self.tile_key == (tile_z, tile_x):
+            return True
+
+        tile_idx = self.block_map.entries[tile_z, tile_x]
+        result = tile_idx != -1
+        if result:
+            self.tile = self.block_map.grids[tile_idx]
+            self.tile_key = (tile_x, tile_z)
+        return result
 
 
 @dataclass
@@ -129,7 +137,7 @@ class Ray:
         t0, t1 = self.t0, self.t1
         for i in range(2):
             a = float(bbox.min[i])
-            b = float(bbox.max[i] + 1)
+            b = float(bbox.max[i])
             if a >= b:
                 return False, (t0, t1)
 
@@ -157,26 +165,31 @@ def round_down(coord):
     return np.floor(coord).astype(np.int32)
 
 class TwoLevelDDA:
-    def __init__(self, accessor: Accessor, ray: Ray):
+    def __init__(self, accessor: Accessor, ray: Ray, refined_size: int=1):
         self.accessor = accessor
         self.ray = ray
+        self.refined_size = refined_size
 
         if not ray.clip(self.accessor.block_map.bbox):
-            print("Can't trace -- need to signal this")
+            raise ValueError("Outside domain")
 
-        end_pos = ray.at(ray.t1)
-        self.start_pos = ray.at(ray.t0)
-        self.curr_coord = round_down(self.start_pos)
-        self.final_coord = round_down(end_pos)
-        self.next_coord = np.copy(self.curr_coord)
-
-        self.step_size = 1
+        eps = 1e-6
+        end_pos = ray.at(ray.t1 - eps)
+        start_pos = ray.at(ray.t0 + eps)
+        self.curr_coord = round_down(start_pos)
+        self.curr_coord = np.minimum(self.curr_coord, self.accessor.block_map.bbox.max-1)
+        self.step_size = refined_size
         if not accessor.has_leaves(*self.curr_coord):
             self.step_size = BLOCK_SIZE
+        self.curr_coord = self.curr_coord & (~np.uint32(self.step_size-1))
+
+        self.final_coord = round_down(end_pos)
+        self.next_coord = np.copy(self.curr_coord)
 
         self.step = np.array([0, 0], dtype=np.int32)
         self.next_hit = np.array([0.0, 0.0])
         self.delta = np.array([0.0, 0.0])
+        self.t = self.ray.t0
 
         # NOTE(cmo): Assume d is normalised correctly
         inv_dir = 1.0 / ray.d
@@ -186,65 +199,145 @@ class TwoLevelDDA:
                 self.next_hit[axis] = 1e24
             elif inv_dir[axis] > 0:
                 self.step[axis] = 1
-                self.next_hit[axis] = (self.curr_coord[axis] + self.step_size - self.start_pos[axis]) * inv_dir[axis]
+                self.next_hit[axis] = self.t + (self.curr_coord[axis] + self.step_size - start_pos[axis]) * inv_dir[axis]
                 self.delta[axis] = inv_dir[axis]
             else:
                 self.step[axis] = -1
-                # NOTE(cmo): This is probably wrong for an arbitrary input to a base cell
-                self.next_hit[axis] = (self.curr_coord[axis] - self.start_pos[axis]) * inv_dir[axis]
+                self.next_hit[axis] = self.t + (self.curr_coord[axis] - start_pos[axis]) * inv_dir[axis]
                 self.delta[axis] = -inv_dir[axis]
 
-        self.t = self.ray.t0
-        self.dt = 0.0
+        self.compute_axis_and_dt()
+
+    def compute_axis_and_dt(self):
+        self.step_axis = np.argmin(self.next_hit)
+        next_t = self.next_hit[self.step_axis]
+        if next_t > self.ray.t1:
+            self.dt = self.ray.t1 - self.t
+        else:
+            self.dt = self.next_hit[self.step_axis] - self.t
+        self.dt = max(self.dt, 0.0)
+
+    def update_step_size(self, step_size):
+        if step_size == self.step_size:
+            return
+
+        self.step_size = step_size
+        curr_pos = ray.at(self.t)
+        self.curr_coord = round_down(curr_pos) & (~np.uint32(self.step_size-1))
+        print(f"pos {curr_pos}, clamping to {self.curr_coord}")
+        inv_dir = 1.0 / ray.d
+        for axis in range(2):
+            if self.step[axis] == 0:
+                continue
+
+            self.next_hit[axis] = self.t + (self.curr_coord[axis] - curr_pos[axis]) * inv_dir[axis]
+            if self.step[axis] > 0:
+                self.next_hit[axis] += self.step_size * inv_dir[axis]
+
+        self.compute_axis_and_dt()
+
+    def exhausted(self):
+        return self.t >= self.ray.t1
 
     def next_intersection(self):
-        self.curr_coord[:] = self.next_coord
+        axis = self.step_axis
 
-        axis = 0
-        if self.next_hit[1] < self.next_hit[0]:
-            axis = 1
+        if self.next_hit[axis] <= self.t:
+            print(f"{self.next_hit[axis]} <= {self.t} clamping ({self.curr_coord})")
+            self.next_hit[axis] += self.t - 0.999999 * self.next_hit[axis] + 1.0e-6
 
-        prev_t = self.t
-        new_t = self.next_hit[axis]
+        self.t = self.next_hit[axis]
         self.next_hit[axis] += self.step_size * self.delta[axis]
-        self.next_coord[axis] += self.step_size * self.step[axis]
+        self.curr_coord[axis] += self.step_size * self.step[axis]
 
-        if new_t >= self.ray.t1 and prev_t < self.ray.t1:
-            prev_hit = self.ray.at(prev_t)
-            end_pos = self.ray.at(self.ray.t1)
-            # NOTE(cmo): This seems superfluous vs self.ray.t1 - prev_t
-            self.dt = np.sqrt(np.sum((end_pos - prev_hit)**2))
-            new_t = self.ray.t1
-        else:
-            self.dt = new_t - prev_t
+        self.compute_axis_and_dt()
+        return self.t < self.ray.t1
 
-        self.t = new_t
-        return new_t <= self.ray.t1
+    def step_through(self):
+        while self.next_intersection():
+            has_leaves = self.accessor.has_leaves(*self.curr_coord)
+            # Already marching at size 1 through refined region, return immediately
+            if self.step_size == self.refined_size and has_leaves:
+                return True
+
+            # Refine, then return first intersection inside refined region
+            if has_leaves:
+                print("refine", self.curr_coord)
+                # NOTE(cmo): A couple of different approaches for catching self-intersection with outer boundary
+                BIAS = False
+                if BIAS:
+                    self.t += 1e-6
+                self.update_step_size(self.refined_size)
+                if not BIAS:
+                    if not self.accessor.has_leaves(*self.curr_coord):
+                        continue
+                return True
+
+            # Not in refined region, so go back to big steps
+            if self.step_size == self.refined_size:
+                print("coarsen", self.curr_coord)
+                # NOTE(cmo): Boop us away from the boundary of this coarsened cell to avoid getting stuck.
+                self.t += 0.01
+                self.update_step_size(BLOCK_SIZE)
+        return False
+
+    def can_sample(self):
+        return self.step_size == self.refined_size
+
+
+def ray_from_start_end(start, end):
+    d = (end - start)
+    length = np.linalg.norm(d)
+    d /= length
+
+    ray = Ray(o=start, d=d, t0=0.0, t1=length)
+    return ray
+
 
 if __name__ == "__main__":
     field = xr.open_dataset(data).temperature.values
+    # field = np.random.uniform(size=(16, 16))
 
     block_map = BlockMap(field)
     order = block_map.order() * BLOCK_SIZE + BLOCK_SIZE / 2
-    plt.imshow(field, origin="lower")
+    x_edges = np.arange(field.shape[1]+1)
+    z_edges = np.arange(field.shape[0]+1)
+    plt.pcolormesh(x_edges, z_edges, field)
     plt.plot(order[:, 0], order[:, 1])
     for x in range(BLOCK_SIZE, field.shape[1], BLOCK_SIZE):
-        plt.axvline(x + 0.5, c='k', lw=0.5)
+        plt.axvline(x, c='k', lw=0.5)
     for z in range(BLOCK_SIZE, field.shape[0], BLOCK_SIZE):
-        plt.axhline(z + 0.5, c='k', lw=0.5)
+        plt.axhline(z, c='k', lw=0.5)
 
     acc = Accessor(block_map)
-    ray = Ray(o=np.array([1, 1]), d=np.array([0.7, np.sqrt(1.0 - 0.7**2)]), t0=0.0, t1=1e4)
-    hdda = TwoLevelDDA(acc, ray)
+    # ray = Ray(o=np.array([1, 1]), d=np.array([0.6, np.sqrt(1.0 - 0.6**2)]), t0=0.0, t1=1e4)
+    # ray = ray_from_start_end(np.array([2.2, 3.5]), np.array([3.1, 10.23]))
+    # ray = ray_from_start_end(np.array([1.91421, 3.085815]), np.array([0.5, 4.5]))
+    # ray = ray_from_start_end(np.array([2.1, 3.1]), np.array([4.8, 5.8]))
+    # ray = ray_from_start_end(np.array([2.8, 18.4]), np.array([21.0, 2342.0]))
+    # ray = ray_from_start_end(np.array([17.0, 8.5]), np.array([14.1, 5.6]))
+    # ray = ray_from_start_end(np.array([1.91421, 3.085815]) + 200, np.array([0.5, 4.5]) + 200)
+    ray = ray_from_start_end(np.array([800.0, 247.3]), np.array([564.0, 564.0]))
+    # ray = ray_from_start_end()
+    hdda = TwoLevelDDA(acc, ray, 1)
 
-    ts = [hdda.t]
-    while hdda.next_intersection():
-        ts.append(hdda.t)
+    # ts = [hdda.t]
+    # while hdda.step_through():
+    #     ts.append(hdda.t)
+    ts = []
+    i = 0
+    while not hdda.exhausted() and i < 100:
+        if hdda.can_sample():
+            ts.append(hdda.t)
+            if not acc.has_leaves(*hdda.curr_coord):
+                raise ValueError("OOB")
+            print(hdda.curr_coord, hdda.t, hdda.dt, ray.at(hdda.t))
+        hdda.step_through()
+        i += 1
 
     ts = np.array(ts)
     hits = ray.at(ts[:, None])
     plt.plot(hits[:, 0], hits[:, 1], 'x')
-    # NOTE(cmo): Weird offsets going on here. Start by making image sane -- centre pixels on 0.5s
 
 
 
