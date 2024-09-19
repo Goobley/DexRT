@@ -19,6 +19,7 @@
 #include "ProfileNormalisation.hpp"
 #include "PromweaverBoundary.hpp"
 #include "DexrtConfig.hpp"
+#include "BlockMap.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else
@@ -53,6 +54,9 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     state.atoms_with_gamma = gamma_atoms.atoms;
     state.atoms_with_gamma_mapping = gamma_atoms.mapping;
     state.atmos = atmos;
+
+    state.block_map.init(atmos, config.threshold_temperature);
+
     state.phi = VoigtProfile<fp_t>(
         VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
         VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}

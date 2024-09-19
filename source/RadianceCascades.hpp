@@ -5,6 +5,7 @@
 #include "BoundaryDispatch.hpp"
 #include "RayMarching.hpp"
 #include "Atmosphere.hpp"
+#include "MiscSparseStorage.hpp"
 
 template <typename DynamicState>
 struct RaymarchParams {
@@ -30,20 +31,38 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     const RaymarchParams<DynamicState>& params
 ) {
     ray = invert_direction(ray);
-    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
-        Raymarch2dArgs<Bc, DynamicState>{
-            .casc_state_bc = casc_state,
-            .ray = ray,
-            .distance_scale = params.distance_scale,
-            .incl = params.incl,
-            .incl_weight = params.incl_weight,
-            .wave = this_probe.wave,
-            .la = params.la,
-            .offset = params.offset,
-            .active = params.active,
-            .dyn_state = params.dyn_state
-        }
-    );
+    RadianceInterval<Alo> ri;
+    if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
+        ri = two_level_dda_raymarch_2d<RcMode, Bc>(
+            Raymarch2dArgs<Bc, DynamicState>{
+                .casc_state_bc = casc_state,
+                .ray = ray,
+                .distance_scale = params.distance_scale,
+                .incl = params.incl,
+                .incl_weight = params.incl_weight,
+                .wave = this_probe.wave,
+                .la = params.la,
+                .offset = params.offset,
+                .active = params.active,
+                .dyn_state = params.dyn_state
+            }
+        );
+    } else {
+        ri = dda_raymarch_2d<RcMode, Bc>(
+            Raymarch2dArgs<Bc, DynamicState>{
+                .casc_state_bc = casc_state,
+                .ray = ray,
+                .distance_scale = params.distance_scale,
+                .incl = params.incl,
+                .incl_weight = params.incl_weight,
+                .wave = this_probe.wave,
+                .la = params.la,
+                .offset = params.offset,
+                .active = params.active,
+                .dyn_state = params.dyn_state
+            }
+        );
+    }
 
     constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
     // const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
@@ -71,11 +90,9 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                     .wave = this_probe.wave
                 };
                 interp.I += ray_weight * weights(bilin) * probe_fetch<RcMode>(upper_I, upper_rays, upper_probe);
-                // interp.tau += ray_weight * weights(bilin) * std::exp(-probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe));
                 interp.tau += ray_weight * weights(bilin) * probe_fetch<RcMode>(upper_tau, upper_rays, upper_probe);
             }
         }
-        // interp.tau = -std::log(interp.tau);
     }
     return merge_intervals(ri, interp);
 }
@@ -639,7 +656,9 @@ DynamicState get_dyn_state(
     const Fp2d& flat_pops,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const DirectionalEmisOpacInterp& dir_interp
+    const DirectionalEmisOpacInterp& dir_interp,
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const SparseStores& sparse_stores
 ) {
     return DynamicState{};
 }
@@ -656,7 +675,9 @@ Raymarch2dDynamicState get_dyn_state(
     const Fp2d& flat_pops,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const DirectionalEmisOpacInterp& dir_interp
+    const DirectionalEmisOpacInterp& dir_interp,
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const SparseStores& sparse_stores
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
@@ -687,7 +708,9 @@ Raymarch2dDynamicInterpState get_dyn_state(
     const Fp2d& flat_pops,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const DirectionalEmisOpacInterp& dir_interp
+    const DirectionalEmisOpacInterp& dir_interp,
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const SparseStores& sparse_stores
 )
 {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
@@ -701,9 +724,9 @@ Raymarch2dDynamicInterpState get_dyn_state(
         .vx = atmos.vx,
         .vy = atmos.vy,
         .vz = atmos.vz,
-        .dynamic_opac = dynamic_opac,
-        .active_map = active_map,
-        .dir_interp = dir_interp
+        .dir_interp = dir_interp,
+        .block_map = block_map,
+        .sparse_stores = sparse_stores
     };
 }
 
@@ -713,7 +736,8 @@ void cascade_i_25d(
     const CascadeState& casc_state,
     int cascade_idx,
     const CascadeCalcSubset& subset,
-    const DirectionalEmisOpacInterp& dir_interp = DirectionalEmisOpacInterp()
+    const DirectionalEmisOpacInterp& dir_interp = DirectionalEmisOpacInterp(),
+    const SparseStores& sparse_stores = SparseStores()
 ) {
     JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac, active, active_map);
     JasUnpack(subset, la_start, la_end, subset_idx);
@@ -781,6 +805,7 @@ void cascade_i_25d(
         spatial_bounds = probe_space_lookup.extent(0);
     }
 
+    const auto& block_map = state.block_map;
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());
     parallel_for(
@@ -794,6 +819,7 @@ void cascade_i_25d(
             ray_subset.num_incl
         ),
         YAKL_LAMBDA (i64 k, /* int v, int u, */ int phi_idx, int wave, int theta_idx) {
+        // YAKL_LAMBDA (int phi_idx, int theta_idx, i64 k, int wave) {
             constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
             int u, v;
             if (sparse_calc) {
@@ -836,7 +862,9 @@ void cascade_i_25d(
                     flat_pops,
                     dynamic_opac,
                     active_map,
-                    dir_interp
+                    dir_interp,
+                    block_map,
+                    sparse_stores
                 );
                 RaymarchParams<DynamicState> params {
                     .distance_scale = atmos.voxel_scale,
@@ -913,7 +941,8 @@ void cascade_i_25d(
                 // dev_casc_state.alo(v, u, phi_idx, wave, theta_idx) = average_ri.alo;
                 dev_casc_state.alo(lin_idx) = average_ri.alo;
             }
-        }
+        },
+        yakl::LaunchConfig<128>()
     );
     yakl::fence();
     if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {

@@ -318,21 +318,21 @@ if __name__ == "__main__":
     # ray = ray_from_start_end(np.array([2.1, 3.1]), np.array([4.8, 5.8]))
     # ray = ray_from_start_end(np.array([2.8, 18.4]), np.array([21.0, 2342.0]))
     # ray = ray_from_start_end(np.array([17.0, 8.5]), np.array([14.1, 5.6]))
-    ray = ray_from_start_end(np.array([1.91421, 3.085815]) + 200, np.array([0.5, 4.5]) + 200)
-    # ray = ray_from_start_end(np.array([800.0, 247.3]), np.array([564.0, 564.0]))
+    # ray = ray_from_start_end(np.array([1.91421, 3.085815]) + 200, np.array([0.5, 4.5]) + 200)
+    ray = ray_from_start_end(np.array([800.0, 247.3]), np.array([564.0, 564.0]))
     # ray = ray_from_start_end()
-    hdda = TwoLevelDDA(acc, ray, 1)
+    hdda = TwoLevelDDA(acc, ray, 16)
 
     # ts = [hdda.t]
     # while hdda.step_through():
     #     ts.append(hdda.t)
     ts = []
     i = 0
-    while not hdda.exhausted() and i < 100:
+    while not hdda.exhausted() and i < 400:
         if hdda.can_sample():
-            ts.append(hdda.t)
             if not acc.has_leaves(*hdda.curr_coord):
                 raise ValueError("OOB")
+            ts.append(hdda.t)
             print(hdda.curr_coord, hdda.t, hdda.dt, ray.at(hdda.t))
         hdda.step_through()
         i += 1

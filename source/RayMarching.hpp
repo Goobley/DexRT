@@ -6,7 +6,9 @@
 #include "State.hpp"
 #include "CascadeState.hpp"
 #include "EmisOpac.hpp"
+#include "BlockMap.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
+#include "MiscSparseStorage.hpp"
 #include <optional>
 
 struct RayMarchState2d {
@@ -308,9 +310,11 @@ struct Raymarch2dDynamicInterpState {
     const FpConst2d& vx;
     const FpConst2d& vy;
     const FpConst2d& vz;
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
-    const yakl::Array<i64, 2, yakl::memDevice>& active_map;
+    // const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
+    // const yakl::Array<i64, 2, yakl::memDevice>& active_map;
     const DirectionalEmisOpacInterp& dir_interp;
+    const BlockMap<BLOCK_SIZE>& block_map;
+    const SparseStores& sparse_stores;
 };
 
 template <typename Bc, class DynamicState=DexEmpty>
@@ -441,8 +445,11 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
             }
         } else if constexpr (dynamic && dynamic_interp) {
             // NOTE(cmo): dyn_state is Raymarch2dDynamicInterpState
-            if (dyn_state.dynamic_opac(v, u, wave)) {
-                const int ks = dyn_state.active_map(v, u);
+            // if (dyn_state.dynamic_opac(v, u, wave)) {
+            IndexGen<BLOCK_SIZE> idx_gen(dyn_state.block_map);
+            if (idx_gen.has_leaves(u, v)) {
+                // const int ks = dyn_state.active_map(v, u);
+                const int ks = idx_gen.idx(u, v);
                 if (ks != -1) {
                     const auto& mu = dyn_state.mu;
                     const fp_t vel = (
@@ -457,6 +464,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
                     chi_s = contrib.chi + FP(1e-15);
                 }
             }
+            // }
         }
 
         fp_t tau = chi_s * s.dt * distance_scale;
@@ -484,6 +492,102 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     return result;
 }
 
+YAKL_INLINE RaySegment ray_seg_from_ray_props(const RayProps& ray) {
+    fp_t t1 = (ray.end(0) - ray.start(0)) / ray.dir(0);
+
+    return RaySegment(ray.start, ray.dir, FP(0.0), t1);
+}
+
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>
+>
+YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
+    const Raymarch2dArgs<Bc, DynamicState>& args
+) {
+    static_assert(std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>, "Only supporting interp state in block marcher");
+    JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
+    JasUnpack(casc_state_bc, state, bc);
+    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (RcMode & RC_DYNAMIC_INTERP);
+
+    RaySegment ray_seg = ray_seg_from_ray_props(ray);
+    bool start_clipped;
+    IndexGen<BLOCK_SIZE> idx_gen(dyn_state.block_map);
+    auto s = TwoLevelDDA<BLOCK_SIZE>(idx_gen);
+    const bool marcher = s.init(ray_seg, &start_clipped);
+    RadianceInterval<Alo> result{};
+    if ((RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped)) {
+        // NOTE(cmo): Check the ray is going up along z.
+        if ((ray.dir(1) > FP(0.0)) && la != -1) {
+            const fp_t cos_theta = incl;
+            const fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
+            vec3 mu;
+            mu(0) = -ray.dir(0) * sin_theta;
+            mu(1) = cos_theta;
+            mu(2) = -ray.dir(1) * sin_theta;
+            vec3 pos;
+            pos(0) = ray.centre(0) * distance_scale + offset(0);
+            pos(1) = offset(1);
+            pos(2) = ray.centre(1) * distance_scale + offset(2);
+
+            fp_t I_sample = sample_boundary(bc, la, pos, mu);
+            result.I = I_sample;
+        }
+    }
+    if (!marcher) {
+        return result;
+    }
+
+    // NOTE(cmo): one_m_edt is also the ALO
+    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
+    do {
+        if (s.can_sample()) {
+            i32 u = s.curr_coord(0);
+            i32 v = s.curr_coord(1);
+            i64 ks = idx_gen.idx(u, v);
+            if (!dyn_state.sparse_stores.dynamic(ks, wave)) {
+                eta_s = dyn_state.sparse_stores.emis(ks, wave);
+                chi_s = dyn_state.sparse_stores.opac(ks, wave) + FP(1e-15);
+            } else {
+                const auto& mu = dyn_state.mu;
+                const fp_t vel = (
+                    dyn_state.sparse_stores.vx(ks) * mu(0)
+                    + dyn_state.sparse_stores.vy(ks) * mu(1)
+                    + dyn_state.sparse_stores.vz(ks) * mu(2)
+                );
+                auto contrib = dyn_state.dir_interp.sample(ks, wave, vel);
+
+                eta_s = contrib.eta;
+                chi_s = contrib.chi + FP(1e-15);
+            }
+
+
+            fp_t tau = chi_s * s.dt * distance_scale;
+            fp_t source_fn = eta_s / chi_s;
+
+            // NOTE(cmo): implicit assumption muy != 1.0
+            fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
+            fp_t tau_mu = tau / sin_theta;
+            fp_t edt;
+            if (tau_mu < FP(1e-2)) {
+                edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
+                one_m_edt = -std::expm1(-tau_mu);
+            } else {
+                edt = std::exp(-tau_mu);
+                one_m_edt = -std::expm1(-tau_mu);
+            }
+            result.tau += tau_mu;
+            result.I = result.I * edt + source_fn * one_m_edt;
+        }
+    } while(s.step_through_grid());
+
+    if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
+        result.alo = std::max(one_m_edt, FP(0.0));
+    }
+    return result;
+}
 
 #else
 #endif

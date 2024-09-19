@@ -296,26 +296,52 @@ struct ProbeStorageIndex {
     int wave;
 };
 
+    // TODO(cmo): Refactor this to be attached to a loop ordering flag
+constexpr bool DIRS_FIRST = false;
 template <int RcMode>
 YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeIndex& probe) {
     // NOTE(cmo): probe_coord is stored as [u, v], but these are stored in the buffer as [v, u]
     // Current cascade storage is [v, u, ray, wave, incl] to give coalesced warp access
-    i64 idx = probe.incl;
-    i64 dim_mul = dims.num_incl;
-    idx += dim_mul * probe.wave;
-    dim_mul *= dims.wave_batch;
 
-    int dir = probe.dir;
-    if constexpr (RcMode & RC_PREAVERAGE) {
-        dir /= (1 << CASCADE_BRANCHING_FACTOR);
-    } else if constexpr (RcMode & RC_DIR_BY_DIR) {
-        dir = dir % dims.num_flat_dirs;
+    i64 idx;
+    int dir;
+    if constexpr (DIRS_FIRST) {
+        idx = probe.wave;
+        i64 dim_mul = dims.wave_batch;
+        idx += dim_mul * probe.coord(0);
+        dim_mul *= dims.num_probes(0);
+        idx += dim_mul * probe.coord(1);
+        dim_mul *= dims.num_probes(1);
+
+        idx += dim_mul * probe.incl;
+        dim_mul *= dims.num_incl;
+
+        dir = probe.dir;
+        if constexpr (RcMode & RC_PREAVERAGE) {
+            dir /= (1 << CASCADE_BRANCHING_FACTOR);
+        } else if constexpr (RcMode & RC_DIR_BY_DIR) {
+            dir = dir % dims.num_flat_dirs;
+        }
+        idx += dim_mul * dir;
+        dim_mul *= dims.num_flat_dirs;
+    } else {
+        idx = probe.incl;
+        i64 dim_mul = dims.num_incl;
+        idx += dim_mul * probe.wave;
+        dim_mul *= dims.wave_batch;
+
+        dir = probe.dir;
+        if constexpr (RcMode & RC_PREAVERAGE) {
+            dir /= (1 << CASCADE_BRANCHING_FACTOR);
+        } else if constexpr (RcMode & RC_DIR_BY_DIR) {
+            dir = dir % dims.num_flat_dirs;
+        }
+        idx += dim_mul * dir;
+        dim_mul *= dims.num_flat_dirs;
+        idx += dim_mul * probe.coord(0);
+        dim_mul *= dims.num_probes(0);
+        idx += dim_mul * probe.coord(1);
     }
-    idx += dim_mul * dir;
-    dim_mul *= dims.num_flat_dirs;
-    idx += dim_mul * probe.coord(0);
-    dim_mul *= dims.num_probes(0);
-    idx += dim_mul * probe.coord(1);
 #ifdef DEXRT_DEBUG
     if (probe.incl >= dims.num_incl) {
         YAKL_EXECUTE_ON_HOST_ONLY(
@@ -355,15 +381,29 @@ template <int RcMode>
 YAKL_INLINE i64 probe_linear_index(const CascadeStorage& dims, const ProbeStorageIndex& probe) {
     // NOTE(cmo): probe_coord is stored as [u, v], but these are stored in the buffer as [v, u]
     // Current cascade storage is [v, u, ray, wave, incl] to give coalesced warp access
-    i64 idx = probe.incl;
-    i64 dim_mul = dims.num_incl;
-    idx += dim_mul * probe.wave;
-    dim_mul *= dims.wave_batch;
-    idx += dim_mul * probe.dir;
-    dim_mul *= dims.num_flat_dirs;
-    idx += dim_mul * probe.coord(0);
-    dim_mul *= dims.num_probes(0);
-    idx += dim_mul * probe.coord(1);
+    i64 idx;
+    if constexpr (DIRS_FIRST) {
+        idx = probe.wave;
+        i64 dim_mul = dims.wave_batch;
+        idx += dim_mul * probe.coord(0);
+        dim_mul *= dims.num_probes(0);
+        idx += dim_mul * probe.coord(1);
+        dim_mul *= dims.num_probes(1);
+        idx += dim_mul * probe.incl;
+        dim_mul *= dims.num_incl;
+        idx += dim_mul * probe.dir;
+        dim_mul *= dims.num_flat_dirs;
+    } else {
+        idx = probe.incl;
+        i64 dim_mul = dims.num_incl;
+        idx += dim_mul * probe.wave;
+        dim_mul *= dims.wave_batch;
+        idx += dim_mul * probe.dir;
+        dim_mul *= dims.num_flat_dirs;
+        idx += dim_mul * probe.coord(0);
+        dim_mul *= dims.num_probes(0);
+        idx += dim_mul * probe.coord(1);
+    }
 #ifdef DEXRT_DEBUG
     if (probe.incl >= dims.num_incl) {
         YAKL_EXECUTE_ON_HOST_ONLY(

@@ -9,6 +9,8 @@
 #include "RcUtilsModes.hpp"
 #include "MergeToJ.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
+#include "MiscSparseStorage.hpp"
+#include "Mipmaps.hpp"
 
 void dynamic_compute_gamma(
     const State& state,
@@ -270,7 +272,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             const int la = la_start + wave;
             int governing_atom = adata.governing_trans(la).atom;
 
-            bool static_only = v_norm > (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
+            bool static_only = v_norm >= (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
                 adata.mass(governing_atom),
                 local_atmos.temperature
             ));
@@ -300,12 +302,38 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     yakl::fence();
 
     DirectionalEmisOpacInterp dir_interp;
+    SparseStores sparse_stores;
+    SparseMips mips;
     if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
-        i64 num_active_zones = flatmos.temperature.extent(0);
-        if (sparse_calc) {
-            num_active_zones = casc_state.probes_to_compute[0].extent(0);
-        }
+        // i64 num_active_zones = flatmos.temperature.extent(0);
+        // if (sparse_calc) {
+        //     num_active_zones = casc_state.probes_to_compute[0].extent(0);
+        // }
+        i64 num_active_zones = state.block_map.buffer_len();
         dir_interp = DirectionalEmisOpacInterp_new(num_active_zones, wave_batch);
+        sparse_stores.init(state.block_map.buffer_len(), wave_batch);
+        sparse_stores.fill(state, casc_state);
+
+        mips = compute_mips(state, casc_state, sparse_stores);
+        const auto& block_map = state.block_map;
+        auto& mip0 = mips.mips[0];
+        auto& mip1 = mips.mips[1];
+        parallel_for(
+            SimpleBounds<1>(1),
+            YAKL_LAMBDA (int thing) {
+                IndexGen<BLOCK_SIZE> idx_gen_0(block_map);
+                IndexGen<BLOCK_SIZE> idx_gen_1(block_map, 2);
+
+                Coord2 coord{
+                    .x=360,
+                    .z=260
+                };
+                i64 idx0 = idx_gen_0.idx(coord.x, coord.z);
+                i64 idx1 = idx_gen_1.idx(coord.x, coord.z);
+                printf("%d, %d\n", idx0, idx1);
+                printf("%f, %f\n", mip0.emis(idx0, 0), mip1.emis(idx1, 0));
+            }
+        );
     }
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
@@ -352,7 +380,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             casc_state,
             casc_state.num_cascades,
             subset,
-            dir_interp
+            dir_interp,
+            sparse_stores
         );
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
             cascade_i_25d<RcModeNoBc>(
@@ -360,7 +389,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 casc_state,
                 casc_idx,
                 subset,
-                dir_interp
+                dir_interp,
+                sparse_stores
             );
         }
         if (state.alo.initialized() && !lambda_iterate) {
@@ -369,7 +399,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 casc_state,
                 0,
                 subset,
-                dir_interp
+                dir_interp,
+                sparse_stores
             );
         } else {
             cascade_i_25d<RcModeNoBc>(
@@ -377,7 +408,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 casc_state,
                 0,
                 subset,
-                dir_interp
+                dir_interp,
+                sparse_stores
             );
         }
         if (state.alo.initialized()) {

@@ -7,15 +7,10 @@
 #include "EmisOpac.hpp"
 #include "Atmosphere.hpp"
 
-#include <optional>
-
 struct DirectionalEmisOpacInterp {
-    // Fp3d emis_vel; // [vel, k_active, wave]
-    // Fp3d opac_vel; // [vel, k_active, wave]
     Fp4d emis_opac_vel; // [k_active, vel, eta(0)/chi(1), wave]
-    // NOTE(cmo): Stacking the above in a 4d array may lead to better cache usage (emis/opac as last dim)
-    Fp2d vel_start; // [k_active, wave]
-    Fp2d vel_step; // [k_active, wave]
+    Fp1d vel_start; // [k_active]
+    Fp1d vel_step; // [k_active]
 
     void zero() {
         emis_opac_vel = FP(0.0);
@@ -43,37 +38,28 @@ struct DirectionalEmisOpacInterp {
         CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
         CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
 
-        i64 spatial_bounds = ray_subset.num_probes(1) * ray_subset.num_probes(0);
-        yakl::Array<i32, 2, yakl::memDevice> probe_space_lookup;
-        const bool sparse_calc = state.config.sparse_calculation;
-        if (sparse_calc) {
-            probe_space_lookup = casc_state.probes_to_compute[0];
-            spatial_bounds = probe_space_lookup.extent(0);
-        }
-        assert(emis_opac_vel.extent(0) == spatial_bounds && "Sparse sizes don't match");
+        // i64 spatial_bounds = ray_subset.num_probes(1) * ray_subset.num_probes(0);
+        // yakl::Array<i32, 2, yakl::memDevice> probe_space_lookup;
+        // const bool sparse_calc = state.config.sparse_calculation;
+        // if (sparse_calc) {
+        //     probe_space_lookup = casc_state.probes_to_compute[0];
+        //     spatial_bounds = probe_space_lookup.extent(0);
+        // }
+        assert(emis_opac_vel.extent(0) == state.block_map.buffer_len() && "Sparse sizes don't match");
         const auto& incl_quad = state.incl_quad;
         const auto& atmos = state.atmos;
-        const auto& active_map = state.active_map;
+        // const auto& active_map = state.active_map;
+        const auto& block_map = state.block_map;
 
         parallel_for(
             "Min/Max Vel",
-            SimpleBounds<1>(
-                spatial_bounds
-            ),
-            YAKL_LAMBDA (i64 k) {
-                int u, v;
-                if (sparse_calc) {
-                    u = probe_space_lookup(k, 0);
-                    v = probe_space_lookup(k, 1);
-                } else {
-                    // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
-                    // fast-running), but index as [u, v], i.e. dims.num_probes(0) =
-                    // dim(u). Typical definition of k = u * Nv + v, but here we do
-                    // loop index k = v * Nu + u where Nu = dims.num_probes(0). This
-                    // preserves our iteration ordering
-                    u = k % ray_set.num_probes(0);
-                    v = k / ray_set.num_probes(0);
-                }
+            block_map.loop_bounds(),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+                IndexGen<BLOCK_SIZE> idx_gen(block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                int u = coord.x;
+                int v = coord.z;
 
                 auto vec_norm = [] (vec3 v) -> fp_t {
                     return std::sqrt(square(v(0)) + square(v(1))  + square(v(2)));
@@ -113,7 +99,6 @@ struct DirectionalEmisOpacInterp {
                     };
                     const int theta_ir = in_range(angles(0), range.theta_range);
                     const int phi_ir = in_range(angles(1), range.phi_range);
-                    vec2 test0, test1;
 
                     if (theta_ir && phi_ir) {
                         vec3 d = angs_to_dir(angles);
@@ -152,7 +137,7 @@ struct DirectionalEmisOpacInterp {
                     phi_idx < ray_subset.num_flat_dirs + ray_subset.start_flat_dirs;
                     ++phi_idx
                 ) {
-                    SphericalAngularRange ang_range =  c0_flat_dir_angular_range(ray_set, incl_quad, phi_idx);
+                    SphericalAngularRange ang_range = c0_flat_dir_angular_range(ray_set, incl_quad, phi_idx);
                     // NOTE(cmo): Check the 4 corners of the range
                     for (int i = 0; i < 4; ++i) {
                         vec2 angs;
@@ -172,7 +157,7 @@ struct DirectionalEmisOpacInterp {
 
                 vmin -= FP(0.02) * std::abs(vmin);
                 vmax += FP(0.02) * std::abs(vmax);
-                const i64 storage_idx = active_map(v, u);
+                const i64 storage_idx = ks;
                 min_vel(storage_idx) = vmin;
                 max_vel(storage_idx) = vmax;
             }
@@ -195,25 +180,35 @@ struct DirectionalEmisOpacInterp {
         auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
         auto flat_n_star = n_star.reshape<2>(Dims(n_star.extent(0), n_star.extent(1) * n_star.extent(2)));
 
+        auto block_bounds = state.block_map.loop_bounds();
         parallel_for(
             "Emis/Opac Samples",
-            SimpleBounds<3>(
-                spatial_bounds,
+            SimpleBounds<4>(
+                block_bounds.dim(0),
+                block_bounds.dim(1),
                 emis_opac_vel.extent(1),
                 wave_batch
             ),
-            YAKL_LAMBDA (i64 ks, int vel_idx, int wave) {
-                int u, v;
-                if (sparse_calc) {
-                    u = probe_space_lookup(ks, 0);
-                    v = probe_space_lookup(ks, 1);
-                } else {
-                    u = ks % ray_set.num_probes(0);
-                    v = ks / ray_set.num_probes(0);
-                }
-                if (!dynamic_opac(v, u, wave)) {
-                    return;
-                }
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int vel_idx, int wave) {
+                // int u, v;
+                // if (sparse_calc) {
+                //     u = probe_space_lookup(ks, 0);
+                //     v = probe_space_lookup(ks, 1);
+                // } else {
+                //     u = ks % ray_set.num_probes(0);
+                //     v = ks / ray_set.num_probes(0);
+                // }
+                IndexGen<BLOCK_SIZE> idx_gen(block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                int u = coord.x;
+                int v = coord.z;
+                // if (!dynamic_opac(v, u, wave)) {
+                //     return;
+                // }
+                // if (block_idx == 0 && vel_idx == 0 && wave == 0) {
+                //     printf("%d, %d\n", u, v);
+                // }
 
                 const int kf = v * atmos.temperature.extent(1) + u;
                 const fp_t vmin = min_vel(ks);
@@ -221,9 +216,9 @@ struct DirectionalEmisOpacInterp {
                 const fp_t dv = (vmax - vmin) / fp_t(INTERPOLATE_DIRECTIONAL_BINS - 1);
                 const fp_t vel = vmin + dv * vel_idx;
                 const int la = subset.la_start + wave;
-                if (vel_idx == 0) {
-                    vel_start(ks, wave) = vmin;
-                    vel_step(ks, wave) = dv;
+                if (vel_idx == 0 && wave == 0) {
+                    vel_start(ks) = vmin;
+                    vel_step(ks) = dv;
                     // NOTE(cmo): Compare with thermal vel, and have a warning
                     int governing_atom = adata.governing_trans(la).atom;
                     const fp_t vtherm = thermal_vel(adata.mass(governing_atom), flatmos.temperature(kf));
@@ -278,7 +273,10 @@ struct DirectionalEmisOpacInterp {
     }
 
     YAKL_DEVICE_INLINE EmisOpac sample(i64 ks, int wave, fp_t vel) const {
-        fp_t frac_v = (vel - vel_start(ks, wave)) / vel_step(ks, wave);
+        fp_t frac_v = (vel - vel_start(ks)) / vel_step(ks);
+        if (vel_step(ks) == FP(0.0)) {
+            frac_v = FP(0.0);
+        }
         int iv = int(frac_v);
         int ivp;
         fp_t tv, tvp;
@@ -309,11 +307,9 @@ struct DirectionalEmisOpacInterp {
 inline
 DirectionalEmisOpacInterp DirectionalEmisOpacInterp_new(i64 num_active_zones, int wave_batch) {
     DirectionalEmisOpacInterp result;
-    // result.emis_vel = Fp3d("emis_vel", INTERPOLATE_DIRECTIONAL_BINS, num_active_zones, wave_batch);
-    // result.opac_vel = Fp3d("opac_vel", INTERPOLATE_DIRECTIONAL_BINS, num_active_zones, wave_batch);
     result.emis_opac_vel = Fp4d("emis_opac_vel", num_active_zones, INTERPOLATE_DIRECTIONAL_BINS, 2, wave_batch);
-    result.vel_start = Fp2d("vel_start", num_active_zones, wave_batch);
-    result.vel_step = Fp2d("vel_step", num_active_zones, wave_batch);
+    result.vel_start = Fp1d("vel_start", num_active_zones);
+    result.vel_step = Fp1d("vel_step", num_active_zones);
     result.zero();
     return result;
 }

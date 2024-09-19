@@ -7,6 +7,7 @@
 #include "PromweaverBoundary.hpp"
 #include "ZeroBoundary.hpp"
 #include "BoundaryType.hpp"
+#include "BlockMap.hpp"
 #include "DexrtConfig.hpp"
 
 #ifdef DEXRT_USE_MAGMA
@@ -18,6 +19,7 @@ struct State {
     CascadeStorage c0_size;
     GivenEmisOpac given_state;
     Atmosphere atmos;
+    BlockMap<BLOCK_SIZE> block_map;
     InclQuadrature incl_quad;
     AtomicData<fp_t, yakl::memDevice> adata;
     std::vector<CompAtom<fp_t, yakl::memDevice>> atoms;

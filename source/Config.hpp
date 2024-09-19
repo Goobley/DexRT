@@ -35,7 +35,7 @@ constexpr int CASCADE_BRANCHING_FACTOR = 2;
 constexpr int MAX_CASCADE = 5;
 
 constexpr bool LAST_CASCADE_TO_INFTY = true;
-constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e6);
+constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e4);
 
 constexpr bool PREAVERAGE = false;
 constexpr bool DIR_BY_DIR = true;
@@ -73,10 +73,11 @@ static_assert(
     "Parallax (reprojection) methods cannot be used with DIR_BY_DIR"
 );
 
+constexpr int BLOCK_SIZE = 16;
 // constexpr bool BRANCH_RAYS = false;
 // constexpr bool BILINEAR_FIX = false;
-// constexpr bool USE_MIPMAPS = false;
-// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1};
+constexpr bool USE_MIPMAPS = true;
+constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
 
 constexpr bool PINGPONG_BUFFERS = true;
 
