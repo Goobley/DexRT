@@ -9,6 +9,7 @@
 #include "BlockMap.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
 #include "MiscSparseStorage.hpp"
+#include "Mipmaps.hpp"
 #include <optional>
 
 struct RayMarchState2d {
@@ -307,14 +308,8 @@ struct Raymarch2dDynamicState {
 
 struct Raymarch2dDynamicInterpState {
     vec3 mu;
-    const FpConst2d& vx;
-    const FpConst2d& vy;
-    const FpConst2d& vz;
-    // const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
-    // const yakl::Array<i64, 2, yakl::memDevice>& active_map;
-    const DirectionalEmisOpacInterp& dir_interp;
     const BlockMap<BLOCK_SIZE>& block_map;
-    const SparseStores& sparse_stores;
+    const SparseMip& mip;
 };
 
 template <typename Bc, class DynamicState=DexEmpty>
@@ -514,7 +509,7 @@ YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
     bool start_clipped;
-    IndexGen<BLOCK_SIZE> idx_gen(dyn_state.block_map);
+    IndexGen<BLOCK_SIZE> idx_gen(dyn_state.block_map, dyn_state.mip.vox_size);
     auto s = TwoLevelDDA<BLOCK_SIZE>(idx_gen);
     const bool marcher = s.init(ray_seg, &start_clipped);
     RadianceInterval<Alo> result{};
@@ -547,21 +542,21 @@ YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
             i32 u = s.curr_coord(0);
             i32 v = s.curr_coord(1);
             i64 ks = idx_gen.idx(u, v);
-            if (!dyn_state.sparse_stores.dynamic(ks, wave)) {
-                eta_s = dyn_state.sparse_stores.emis(ks, wave);
-                chi_s = dyn_state.sparse_stores.opac(ks, wave) + FP(1e-15);
-            } else {
+            // if (!dyn_state.sparse_stores.dynamic(ks, wave)) {
+            //     eta_s = dyn_state.sparse_stores.emis(ks, wave);
+            //     chi_s = dyn_state.sparse_stores.opac(ks, wave) + FP(1e-15);
+            // } else {
                 const auto& mu = dyn_state.mu;
                 const fp_t vel = (
-                    dyn_state.sparse_stores.vx(ks) * mu(0)
-                    + dyn_state.sparse_stores.vy(ks) * mu(1)
-                    + dyn_state.sparse_stores.vz(ks) * mu(2)
+                    dyn_state.mip.vx(ks) * mu(0)
+                    + dyn_state.mip.vy(ks) * mu(1)
+                    + dyn_state.mip.vz(ks) * mu(2)
                 );
-                auto contrib = dyn_state.dir_interp.sample(ks, wave, vel);
+                auto contrib = dyn_state.mip.dir_data.sample(ks, wave, vel);
 
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
-            }
+            // }
 
 
             fp_t tau = chi_s * s.dt * distance_scale;

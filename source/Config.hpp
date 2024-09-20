@@ -78,6 +78,11 @@ constexpr int BLOCK_SIZE = 16;
 // constexpr bool BILINEAR_FIX = false;
 constexpr bool USE_MIPMAPS = true;
 constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
+constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 1, 1, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 1, 2, 2};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 0, 1, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 0, 1, 1};
 
 constexpr bool PINGPONG_BUFFERS = true;
 

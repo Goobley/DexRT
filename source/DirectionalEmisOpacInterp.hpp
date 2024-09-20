@@ -237,8 +237,10 @@ struct DirectionalEmisOpacInterp {
                 local_atmos.nh0 = flatmos.nh0(kf);
                 local_atmos.vel = vel;
 
-                fp_t chi_s = chi(v, u, wave);
-                fp_t eta_s = eta(v, u, wave);
+                // fp_t chi_s = chi(v, u, wave);
+                // fp_t eta_s = eta(v, u, wave);
+                fp_t chi_s = FP(0.0);
+                fp_t eta_s = FP(0.0);
                 auto line_terms = emis_opac(
                     EmisOpacState<fp_t>{
                         .adata = adata,
@@ -249,7 +251,8 @@ struct DirectionalEmisOpacInterp {
                         .k = kf,
                         .atmos = local_atmos,
                         .active_set = slice_active_set(adata, la),
-                        .mode = EmisOpacMode::DynamicOnly
+                        // .mode = EmisOpacMode::DynamicOnly
+                        .mode = EmisOpacMode::All
                     }
                 );
                 chi_s += line_terms.chi;
@@ -272,7 +275,7 @@ struct DirectionalEmisOpacInterp {
         }
     }
 
-    YAKL_DEVICE_INLINE EmisOpac sample(i64 ks, int wave, fp_t vel) const {
+    YAKL_INLINE EmisOpac sample(i64 ks, int wave, fp_t vel) const {
         fp_t frac_v = (vel - vel_start(ks)) / vel_step(ks);
         if (vel_step(ks) == FP(0.0)) {
             frac_v = FP(0.0);

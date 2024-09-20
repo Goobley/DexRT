@@ -182,25 +182,14 @@ struct BlockMap {
         }
     }
 
-    YAKL_INLINE i64 buffer_len() const {
-        return i64(num_active_tiles) * i64(square(BLOCK_SIZE));
+    YAKL_INLINE i64 buffer_len(i32 mip_px_size=1) const {
+        return i64(num_active_tiles) * i64(square(BLOCK_SIZE) / square(mip_px_size));
     }
 
-    YAKL_INLINE i64 buffer_len(i32 log_2_mip_dim) const {
-        return i64(num_active_tiles) * i64(square(BLOCK_SIZE) / square(log_2_mip_dim));
-    }
-
-    SimpleBounds<2> loop_bounds() const {
+    SimpleBounds<2> loop_bounds(i32 mip_px_size=1) const {
         return SimpleBounds<2>(
             num_active_tiles,
-            square(BLOCK_SIZE)
-        );
-    }
-
-    SimpleBounds<2> loop_bounds(i32 log_2_mip_dim) const {
-        return SimpleBounds<2>(
-            num_active_tiles,
-            square(BLOCK_SIZE) / square(log_2_mip_dim)
+            square(BLOCK_SIZE) / square(mip_px_size)
         );
     }
 };
@@ -238,8 +227,8 @@ struct IndexGen {
             coord = decode_morton_2(uint32_t(tile_offset));
         } else {
             coord = Coord2 {
-                .x = tile_offset % BLOCK_SIZE,
-                .z = tile_offset / BLOCK_SIZE
+                .x = tile_offset % (BLOCK_SIZE / refined_size),
+                .z = tile_offset / (BLOCK_SIZE / refined_size)
             };
         }
         coord.x *= refined_size;
@@ -256,7 +245,7 @@ struct IndexGen {
             };
             return encode_morton_2(coord);
         } else {
-            return inner_z * (BLOCK_SIZE / refined_size) + inner_x / refined_size;
+            return (inner_z * (BLOCK_SIZE / refined_size) + inner_x) / refined_size;
         }
     }
 
@@ -281,7 +270,7 @@ struct IndexGen {
             yakl::yakl_throw("OOB block requested!");
         }
 #endif
-        if (tile_idx > 0) {
+        if (tile_idx >= 0) {
             tile_base_idx = compute_base_idx(tile_idx);
             tile_key = tile_key_lookup;
             return tile_base_idx + compute_inner_offset(inner_x, inner_z);

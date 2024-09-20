@@ -656,9 +656,8 @@ DynamicState get_dyn_state(
     const Fp2d& flat_pops,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const DirectionalEmisOpacInterp& dir_interp,
     const BlockMap<BLOCK_SIZE>& block_map,
-    const SparseStores& sparse_stores
+    const SparseMip& mip
 ) {
     return DynamicState{};
 }
@@ -675,9 +674,8 @@ Raymarch2dDynamicState get_dyn_state(
     const Fp2d& flat_pops,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const DirectionalEmisOpacInterp& dir_interp,
     const BlockMap<BLOCK_SIZE>& block_map,
-    const SparseStores& sparse_stores
+    const SparseMip& mip
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
@@ -708,11 +706,9 @@ Raymarch2dDynamicInterpState get_dyn_state(
     const Fp2d& flat_pops,
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const DirectionalEmisOpacInterp& dir_interp,
     const BlockMap<BLOCK_SIZE>& block_map,
-    const SparseStores& sparse_stores
-)
-{
+    const SparseMip& mip
+) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
     mu(0) = -ray.dir(0) * sin_theta;
@@ -721,12 +717,8 @@ Raymarch2dDynamicInterpState get_dyn_state(
 
     return Raymarch2dDynamicInterpState{
         .mu = mu,
-        .vx = atmos.vx,
-        .vy = atmos.vy,
-        .vz = atmos.vz,
-        .dir_interp = dir_interp,
         .block_map = block_map,
-        .sparse_stores = sparse_stores
+        .mip=mip
     };
 }
 
@@ -736,8 +728,7 @@ void cascade_i_25d(
     const CascadeState& casc_state,
     int cascade_idx,
     const CascadeCalcSubset& subset,
-    const DirectionalEmisOpacInterp& dir_interp = DirectionalEmisOpacInterp(),
-    const SparseStores& sparse_stores = SparseStores()
+    const SparseMip& mip = SparseMip()
 ) {
     JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac, active, active_map);
     JasUnpack(subset, la_start, la_end, subset_idx);
@@ -862,9 +853,8 @@ void cascade_i_25d(
                     flat_pops,
                     dynamic_opac,
                     active_map,
-                    dir_interp,
                     block_map,
-                    sparse_stores
+                    mip
                 );
                 RaymarchParams<DynamicState> params {
                     .distance_scale = atmos.voxel_scale,

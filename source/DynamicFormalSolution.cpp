@@ -314,26 +314,41 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         sparse_stores.init(state.block_map.buffer_len(), wave_batch);
         sparse_stores.fill(state, casc_state);
 
-        mips = compute_mips(state, casc_state, sparse_stores);
-        const auto& block_map = state.block_map;
-        auto& mip0 = mips.mips[0];
-        auto& mip1 = mips.mips[1];
-        parallel_for(
-            SimpleBounds<1>(1),
-            YAKL_LAMBDA (int thing) {
-                IndexGen<BLOCK_SIZE> idx_gen_0(block_map);
-                IndexGen<BLOCK_SIZE> idx_gen_1(block_map, 2);
+        mips = compute_mips(state, casc_state, sparse_stores, dir_interp);
+        if (mips.mips.size() > 1) {
+            const auto& block_map = state.block_map;
+            auto& mip0 = mips.mips[0];
+            auto& mip1 = mips.mips[1];
+            parallel_for(
+                SimpleBounds<1>(1),
+                YAKL_LAMBDA (int thing) {
+                    IndexGen<BLOCK_SIZE> idx_gen_0(block_map);
+                    IndexGen<BLOCK_SIZE> idx_gen_1(block_map, 2);
 
-                Coord2 coord{
-                    .x=360,
-                    .z=260
-                };
-                i64 idx0 = idx_gen_0.idx(coord.x, coord.z);
-                i64 idx1 = idx_gen_1.idx(coord.x, coord.z);
-                printf("%d, %d\n", idx0, idx1);
-                printf("%f, %f\n", mip0.emis(idx0, 0), mip1.emis(idx1, 0));
-            }
-        );
+                    Coord2 coord{
+                        .x=360,
+                        .z=260
+                    };
+                    i64 idx0 = idx_gen_0.idx(coord.x, coord.z);
+                    i64 idx1 = idx_gen_1.idx(coord.x, coord.z);
+                    printf("%d, %d\n", i32(idx0), i32(idx1));
+                    printf(
+                        "[%e, %e, %e, %e] (%e), %e\n",
+                        atmos.vx(coord.z, coord.x),
+                        atmos.vx(coord.z, coord.x+1),
+                        atmos.vx(coord.z+1, coord.x),
+                        atmos.vx(coord.z+1, coord.x+1),
+                        FP(0.25) * (
+                            atmos.vx(coord.z, coord.x) +
+                            atmos.vx(coord.z, coord.x+1) +
+                            atmos.vx(coord.z+1, coord.x) +
+                            atmos.vx(coord.z+1, coord.x+1)
+                        ),
+                        mip1.vx(idx1)
+                    );
+                }
+            );
+        }
     }
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
@@ -374,24 +389,33 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         };
         if (dir_interp.emis_opac_vel.initialized()) {
             dir_interp.fill<RcModeNoBc>(state, casc_state, subset, lte_scratch);
+            mips = compute_mips(state, casc_state, sparse_stores, dir_interp);
+        }
+        SparseMip mip;
+        if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
+            mip = mips.mips[MIP_LEVEL[casc_state.num_cascades]];
         }
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,
             casc_state.num_cascades,
             subset,
-            dir_interp,
-            sparse_stores
+            mip
         );
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
+            if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
+                mip = mips.mips[MIP_LEVEL[casc_idx]];
+            }
             cascade_i_25d<RcModeNoBc>(
                 state,
                 casc_state,
                 casc_idx,
                 subset,
-                dir_interp,
-                sparse_stores
+                mip
             );
+        }
+        if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
+            mip = mips.mips[MIP_LEVEL[0]];
         }
         if (state.alo.initialized() && !lambda_iterate) {
             cascade_i_25d<RcModeAlo>(
@@ -399,8 +423,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 casc_state,
                 0,
                 subset,
-                dir_interp,
-                sparse_stores
+                mip
             );
         } else {
             cascade_i_25d<RcModeNoBc>(
@@ -408,8 +431,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 casc_state,
                 0,
                 subset,
-                dir_interp,
-                sparse_stores
+                mip
             );
         }
         if (state.alo.initialized()) {
