@@ -146,6 +146,11 @@ inline SparseMips compute_mips(
             }
         );
 
+        // TODO(cmo): This isn't done properly. The min and max v should be
+        // generated from the velocity mips, as in the setup for
+        // DirectionalEmisOpacInterp. If _this_ is outside the range, we should
+        // compute them again from scratch, through the full N levels of mips
+        // (as we need the original atmospheric params)
         parallel_for(
             "Compute mip (dir interp)",
             SimpleBounds<4>(
