@@ -170,6 +170,7 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     st->atmos.voxel_scale = voxel_scale;
     st->given_state.voxel_scale = voxel_scale;
     fmt::println("Scale: {} m", st->atmos.voxel_scale);
+    st->block_map.init(x_dim, z_dim);
 
 #ifdef DEXRT_SINGLE_PREC
     st->given_state.emis = eta.createDeviceCopy();

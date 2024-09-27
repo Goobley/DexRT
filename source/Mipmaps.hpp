@@ -16,6 +16,8 @@ struct SparseMip {
     Fp1d vx; // [ks]
     Fp1d vy; // [ks]
     Fp1d vz; // [ks]
+    Fp3d aniso_emis; // [ks, dir, wave_batch]
+    Fp3d aniso_opac; // [ks, dir, wave_batch]
 };
 
 struct SparseMips {
@@ -77,22 +79,23 @@ inline SparseMips compute_mips(
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
 
-                IndexGen<BLOCK_SIZE> idx_gen_upper(block_map, vox_size / 2);
+                const i32 upper_vox_size = vox_size / 2;
+                IndexGen<BLOCK_SIZE> idx_gen_upper(block_map, upper_vox_size);
                 fp_t emis = FP(0.0);
                 fp_t opac = FP(0.0);
                 i64 idx = idx_gen_upper.idx(coord.x, coord.z);
                 emis += prev_mip.emis(idx, wave);
                 opac += prev_mip.opac(idx, wave);
 
-                idx = idx_gen_upper.idx(coord.x+1, coord.z);
+                idx = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z);
                 emis += prev_mip.emis(idx, wave);
                 opac += prev_mip.opac(idx, wave);
 
-                idx = idx_gen_upper.idx(coord.x, coord.z+1);
+                idx = idx_gen_upper.idx(coord.x, coord.z+upper_vox_size);
                 emis += prev_mip.emis(idx, wave);
                 opac += prev_mip.opac(idx, wave);
 
-                idx = idx_gen_upper.idx(coord.x+1, coord.z+1);
+                idx = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z+upper_vox_size);
                 emis += prev_mip.emis(idx, wave);
                 opac += prev_mip.opac(idx, wave);
 
@@ -112,7 +115,8 @@ inline SparseMips compute_mips(
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
 
-                IndexGen<BLOCK_SIZE> idx_gen_upper(block_map, vox_size / 2);
+                const i32 upper_vox_size = vox_size / 2;
+                IndexGen<BLOCK_SIZE> idx_gen_upper(block_map, upper_vox_size);
                 fp_t vx = FP(0.0);
                 fp_t vy = FP(0.0);
                 fp_t vz = FP(0.0);
@@ -121,17 +125,17 @@ inline SparseMips compute_mips(
                 vy += prev_mip.vy(idx);
                 vz += prev_mip.vz(idx);
 
-                idx = idx_gen_upper.idx(coord.x+1, coord.z);
+                idx = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z);
                 vx += prev_mip.vx(idx);
                 vy += prev_mip.vy(idx);
                 vz += prev_mip.vz(idx);
 
-                idx = idx_gen_upper.idx(coord.x, coord.z+1);
+                idx = idx_gen_upper.idx(coord.x, coord.z+upper_vox_size);
                 vx += prev_mip.vx(idx);
                 vy += prev_mip.vy(idx);
                 vz += prev_mip.vz(idx);
 
-                idx = idx_gen_upper.idx(coord.x+1, coord.z+1);
+                idx = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z+upper_vox_size);
                 vx += prev_mip.vx(idx);
                 vy += prev_mip.vy(idx);
                 vz += prev_mip.vz(idx);
@@ -164,7 +168,8 @@ inline SparseMips compute_mips(
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
 
-                IndexGen<BLOCK_SIZE> idx_gen_upper(block_map, vox_size / 2);
+                const i32 upper_vox_size = vox_size / 2;
+                IndexGen<BLOCK_SIZE> idx_gen_upper(block_map, upper_vox_size);
                 fp_t min_vs[4] = {};
                 fp_t max_vs[4] = {};
 
@@ -178,13 +183,13 @@ inline SparseMips compute_mips(
                 i64 idx0 = idx_gen_upper.idx(coord.x, coord.z);
                 compute_vels(idx0, 0);
 
-                i64 idx1 = idx_gen_upper.idx(coord.x+1, coord.z);
+                i64 idx1 = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z);
                 compute_vels(idx1, 1);
 
-                i64 idx2 = idx_gen_upper.idx(coord.x, coord.z+1);
+                i64 idx2 = idx_gen_upper.idx(coord.x, coord.z+upper_vox_size);
                 compute_vels(idx2, 2);
 
-                i64 idx3 = idx_gen_upper.idx(coord.x+1, coord.z+1);
+                i64 idx3 = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z+upper_vox_size);
                 compute_vels(idx3, 3);
 
                 const fp_t min_v = std::min(min_vs[0], std::min(min_vs[1], std::min(min_vs[2], min_vs[3])));
@@ -239,6 +244,321 @@ inline SparseMips compute_mips(
                 mip.dir_data.emis_opac_vel(ks, vel_idx, 1, wave) = opac;
             }
         );
+        yakl::fence();
+    }
+
+    return result;
+}
+
+
+/// Used for static given fs case
+inline SparseMips compute_mips(
+    const State& state,
+    const CascadeState& casc_state,
+    const SparseStores& full_res
+) {
+    assert(USE_MIPMAPS);
+    JasUnpack(state, block_map);
+
+    i32 max_mip_factor = 0;
+    for (int i = 0; i < MAX_CASCADE + 1; ++i) {
+        max_mip_factor += MIPMAP_FACTORS[i];
+    }
+
+    SparseMips result;
+    result.mips.resize(max_mip_factor+1);
+    auto& mip0 = result.mips[0];
+    mip0.vox_size = 1;
+    mip0.emis = full_res.emis;
+    mip0.opac = full_res.opac;
+    mip0.vx = full_res.vx;
+    mip0.vy = full_res.vy;
+    mip0.vz = full_res.vz;
+
+    if constexpr (MIP_MODE == MipMode::Anisotropic) {
+        mip0.aniso_emis = Fp3d("aniso emis", mip0.emis.extent(0), 8, mip0.emis.extent(1));
+        mip0.aniso_opac = Fp3d("aniso opac", mip0.emis.extent(0), 8, mip0.emis.extent(1));
+        parallel_for(
+            "Fill mip 0 aniso",
+            SimpleBounds<3>(
+                mip0.emis.extent(0),
+                8,
+                mip0.emis.extent(1)
+            ),
+            YAKL_LAMBDA (i64 ks, int dir_idx, int wave) {
+                mip0.aniso_emis(ks, dir_idx, wave) = mip0.emis(ks, wave);
+                mip0.aniso_opac(ks, dir_idx, wave) = mip0.opac(ks, wave);
+            }
+        );
+        yakl::fence();
+    }
+
+    if (max_mip_factor == 0) {
+        return result;
+    }
+
+    for (int level_m_1 = 0; level_m_1 < max_mip_factor; ++level_m_1) {
+        auto& prev_mip = result.mips[level_m_1];
+        auto& mip = result.mips[level_m_1+1];
+        i32 vox_size = (1 << (level_m_1 + 1));
+        mip.vox_size = vox_size;
+        i64 flat_size = mip0.emis.extent(0) / square(vox_size);
+        mip.emis = Fp2d("emis mip", flat_size, mip0.emis.extent(1));
+        mip.opac = Fp2d("opac mip", flat_size, mip0.emis.extent(1));
+
+        if constexpr (MIP_MODE == MipMode::Anisotropic) {
+            mip.aniso_emis = Fp3d("aniso emis", flat_size, 8, mip0.emis.extent(1));
+            mip.aniso_opac = Fp3d("aniso opac", flat_size, 8, mip0.emis.extent(1));
+        }
+
+        auto bound = block_map.loop_bounds(vox_size);
+        parallel_for(
+            "Compute mip (wave batch)",
+            SimpleBounds<3>(
+                bound.dim(0),
+                bound.dim(1),
+                mip0.emis.extent(1)
+            ),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+                IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+                const SparseMip& pm = prev_mip;
+
+                const i32 upper_vox_size = vox_size / 2;
+                IndexGen<BLOCK_SIZE> idx_gen_upper(block_map, upper_vox_size);
+                fp_t emis = FP(0.0);
+                fp_t opac = FP(0.0);
+                i64 idx0 = idx_gen_upper.idx(coord.x, coord.z);
+                i64 idx1 = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z);
+                i64 idx2 = idx_gen_upper.idx(coord.x, coord.z+upper_vox_size);
+                i64 idx3 = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z+upper_vox_size);
+                if constexpr (MIP_MODE == MipMode::Classic) {
+                    emis += pm.emis(idx0, wave);
+                    opac += pm.opac(idx0, wave);
+
+                    emis += pm.emis(idx1, wave);
+                    opac += pm.opac(idx1, wave);
+
+                    emis += pm.emis(idx2, wave);
+                    opac += pm.opac(idx2, wave);
+
+                    emis += pm.emis(idx3, wave);
+                    opac += pm.opac(idx3, wave);
+
+                    emis *= FP(0.25);
+                    opac *= FP(0.25);
+                } else if constexpr (MIP_MODE == MipMode::Perceptual) {
+                    const fp_t ds = FP(0.7);
+                    // TODO(cmo): get this value properly
+                    const fp_t vox_scale = FP(1.0);
+                    const fp_t opac0 = pm.opac(idx0, wave);
+                    const fp_t opac1 = pm.opac(idx1, wave);
+                    const fp_t opac2 = pm.opac(idx2, wave);
+                    const fp_t opac3 = pm.opac(idx3, wave);
+                    const fp_t emis0 = pm.emis(idx0, wave);
+                    const fp_t emis1 = pm.emis(idx1, wave);
+                    const fp_t emis2 = pm.emis(idx2, wave);
+                    const fp_t emis3 = pm.emis(idx3, wave);
+                    const fp_t trans0 = std::exp(-opac0 * ds * vox_scale);
+                    const fp_t trans1 = std::exp(-opac1 * ds * vox_scale);
+                    const fp_t trans2 = std::exp(-opac2 * ds * vox_scale);
+                    const fp_t trans3 = std::exp(-opac3 * ds * vox_scale);
+
+                    fp_t trans_pairs = FP(0.0);
+                    trans_pairs += trans0 * trans1;
+                    trans_pairs += trans0 * trans2;
+                    trans_pairs += trans0 * trans3;
+                    trans_pairs += trans1 * trans2;
+                    trans_pairs += trans1 * trans3;
+                    trans_pairs += trans2 * trans3;
+                    trans_pairs /= FP(6.0);
+                    fp_t effective_chi = -std::log(trans_pairs) / (FP(2.0) * ds * vox_scale);
+                    if (std::isinf(effective_chi)) {
+                        effective_chi = FP(0.25) * (opac0 + opac1 + opac2 + opac3);
+                    }
+                    // const fp_t mean_source_fn = FP(0.25) * (
+                    //     emis0 / (opac0 + FP(1e-15)) +
+                    //     emis1 / (opac1 + FP(1e-15)) +
+                    //     emis2 / (opac2 + FP(1e-15)) +
+                    //     emis3 / (opac3 + FP(1e-15))
+                    // );
+                    // const fp_t effective_eta = mean_source_fn * effective_chi;
+                    fp_t trans_weighted_source = (
+                        (FP(1.0) - trans0) * (emis0 / (opac0 + FP(1e-15))) +
+                        (FP(1.0) - trans1) * (emis1 / (opac1 + FP(1e-15))) +
+                        (FP(1.0) - trans2) * (emis2 / (opac2 + FP(1e-15))) +
+                        (FP(1.0) - trans3) * (emis3 / (opac3 + FP(1e-15)))
+                    ) / (
+                        (FP(1.0) - trans0) +
+                        (FP(1.0) - trans1) +
+                        (FP(1.0) - trans2) +
+                        (FP(1.0) - trans3) +
+                        FP(1e-15)
+                    );
+                    const fp_t effective_eta = trans_weighted_source * effective_chi;
+
+                    emis = effective_eta;
+                    opac = effective_chi;
+                }
+
+                mip.emis(ks, wave) = emis;
+                mip.opac(ks, wave) = opac;
+            }
+        );
+
+        if constexpr (MIP_MODE == MipMode::Anisotropic) {
+            // NOTE(cmo): Done in ray direction, not interval direction
+            parallel_for(
+                "Compute mip (aniso wave batch)",
+                SimpleBounds<4>(
+                    bound.dim(0),
+                    bound.dim(1),
+                    mip.aniso_emis.extent(1),
+                    mip0.emis.extent(1)
+                ),
+                YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 dir_idx, i32 wave) {
+                    namespace C = ConstantsFP;
+                    IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
+                    i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                    Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+                    const SparseMip& pm = prev_mip;
+
+                    const i32 upper_vox_size = vox_size / 2;
+                    IndexGen<BLOCK_SIZE> idx_gen_upper(block_map, upper_vox_size);
+                    i64 idx0 = idx_gen_upper.idx(coord.x, coord.z);
+                    i64 idx1 = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z);
+                    i64 idx2 = idx_gen_upper.idx(coord.x, coord.z+upper_vox_size);
+                    i64 idx3 = idx_gen_upper.idx(coord.x+upper_vox_size, coord.z+upper_vox_size);
+                    const fp_t emis0 = pm.aniso_emis(idx0, dir_idx, wave);
+                    const fp_t emis1 = pm.aniso_emis(idx1, dir_idx, wave);
+                    const fp_t emis2 = pm.aniso_emis(idx2, dir_idx, wave);
+                    const fp_t emis3 = pm.aniso_emis(idx3, dir_idx, wave);
+                    const fp_t opac0 = pm.aniso_opac(idx0, dir_idx, wave);
+                    const fp_t opac1 = pm.aniso_opac(idx1, dir_idx, wave);
+                    const fp_t opac2 = pm.aniso_opac(idx2, dir_idx, wave);
+                    const fp_t opac3 = pm.aniso_opac(idx3, dir_idx, wave);
+                    const fp_t source0 = emis0 / (opac0 + FP(1e-15));
+                    const fp_t source1 = emis1 / (opac1 + FP(1e-15));
+                    const fp_t source2 = emis2 / (opac2 + FP(1e-15));
+                    const fp_t source3 = emis3 / (opac3 + FP(1e-15));
+
+
+                    const fp_t vox_scale = FP(1.0);
+
+                    const fp_t theta = fp_t(dir_idx) * C::pi / FP(4.0);
+                    // Layout
+                    // ---------
+                    // | 0 | 1 |
+                    // | 2 | 3 |
+                    // ---------
+                    if (dir_idx % 2 == 0) {
+                        const fp_t trans0 = std::exp(-opac0 * vox_scale);
+                        const fp_t trans1 = std::exp(-opac1 * vox_scale);
+                        const fp_t trans2 = std::exp(-opac2 * vox_scale);
+                        const fp_t trans3 = std::exp(-opac3 * vox_scale);
+
+                        fp_t avg_trans = FP(0.0);
+                        if (dir_idx % 4 == 0) {
+                            // horizontal
+                            avg_trans = FP(0.5) * (trans0 * trans1 + trans2 * trans3);
+                        } else {
+                            // vertical
+                            avg_trans = FP(0.5) * (trans0 * trans2 + trans1 * trans3);
+                        }
+                        fp_t effective_chi = -std::log(avg_trans) / (FP(2.0) * vox_scale);
+                        if (std::isinf(effective_chi)) {
+                            effective_chi = FP(0.25) * (opac0 + opac1 + opac2 + opac3);
+                        }
+
+                        fp_t avg_I_gain = FP(0.0);
+
+                        if (dir_idx == 0) {
+                            // 0 -> 1, 2 -> 3
+                            avg_I_gain += source0 * (FP(1.0) - trans0) * trans1 + (FP(1.0) - trans1) * source1;
+                            avg_I_gain += source2 * (FP(1.0) - trans2) * trans3 + (FP(1.0) - trans3) * source3;
+                        } else if (dir_idx == 2) {
+                            // 2 -> 0, 3 -> 1
+                            avg_I_gain += source2 * (FP(1.0) - trans2) * trans0 + (FP(1.0) - trans0) * source0;
+                            avg_I_gain += source3 * (FP(1.0) - trans3) * trans1 + (FP(1.0) - trans1) * source1;
+                        } else if (dir_idx == 4) {
+                            // 1 -> 0, 3 -> 2
+                            avg_I_gain += source1 * (FP(1.0) - trans1) * trans0 + (FP(1.0) - trans0) * source0;
+                            avg_I_gain += source3 * (FP(1.0) - trans3) * trans2 + (FP(1.0) - trans2) * source2;
+                        } else if (dir_idx == 6) {
+                            // 0 -> 2, 1 -> 3
+                            avg_I_gain += source0 * (FP(1.0) - trans0) * trans2 + (FP(1.0) - trans2) * source2;
+                            avg_I_gain += source1 * (FP(1.0) - trans1) * trans3 + (FP(1.0) - trans3) * source3;
+                        }
+                        avg_I_gain *= FP(0.5);
+
+                        fp_t effective_eta = avg_I_gain / (FP(1.0) - avg_trans) * effective_chi;
+                        if (std::isnan(effective_eta)) {
+                            effective_eta = FP(0.25) * (emis0 + emis1 + emis2 + emis3);
+                        }
+                        mip.aniso_emis(ks, dir_idx, wave) = effective_eta;
+                        mip.aniso_opac(ks, dir_idx, wave) = effective_chi;
+                    } else {
+                        constexpr fp_t ds = FP(0.7071067);
+                        const fp_t trans0 = std::exp(-opac0 * ds * vox_scale);
+                        const fp_t trans1 = std::exp(-opac1 * ds * vox_scale);
+                        const fp_t trans2 = std::exp(-opac2 * ds * vox_scale);
+                        const fp_t trans3 = std::exp(-opac3 * ds * vox_scale);
+
+                        fp_t avg_trans = FP(0.0);
+                        if (dir_idx % 4 == 1) {
+                            // Direction as / ...
+                            avg_trans = FP(0.25) * (trans0 + FP(2.0) * trans1 * trans2 + trans3);
+                        } else {
+                            // % 4 == 3
+                            // Direction as \ ...
+                            avg_trans = FP(0.25) * (trans1 + FP(2.0) * trans0 * trans3 + trans2);
+                        }
+
+                        // 2 paths with length sqrt(2), 1 path with length 2sqrt(2), but also double weighted. Gives average path length of 3/2 sqrt2
+                        fp_t effective_chi = -std::log(avg_trans) / (FP(1.5) * ds * vox_scale);
+                        if (std::isinf(effective_chi)) {
+                            effective_chi = FP(0.25) * (opac0 + opac1 + opac2 + opac3);
+                        }
+
+                        fp_t avg_I_gain = FP(0.0);
+
+                        if (dir_idx == 1) {
+                            // 0, 2 -> 1, 3
+                            avg_I_gain += source0 * (FP(1.0) - trans0);
+                            avg_I_gain += source2 * (FP(1.0) - trans2) * trans1 + (FP(1.0) - trans1) * source1;
+                            avg_I_gain += source3 * (FP(1.0) - trans3);
+                        } else if (dir_idx == 3) {
+                            // 1, 3 -> 0, 2
+                            avg_I_gain += source1 * (FP(1.0) - trans1);
+                            avg_I_gain += source3 * (FP(1.0) - trans3) * trans0 + (FP(1.0) - trans0) * source0;
+                            avg_I_gain += source2 * (FP(1.0) - trans2);
+                        } else if (dir_idx == 5) {
+                            // 0, 1 -> 2, 3
+                            avg_I_gain += source0 * (FP(1.0) - trans0);
+                            avg_I_gain += source1 * (FP(1.0) - trans1) * trans2 + (FP(1.0) - trans2) * source2;
+                            avg_I_gain += source3 * (FP(1.0) - trans3);
+                        } else if (dir_idx == 7) {
+                            // 1, 0 -> 3, 2
+                            avg_I_gain += source1 * (FP(1.0) - trans1);
+                            avg_I_gain += source0 * (FP(1.0) - trans0) * trans3 + (FP(1.0) - trans3) * source3;
+                            avg_I_gain += source2 * (FP(1.0) - trans2);
+                        }
+                        avg_I_gain *= FP(0.333333333);
+
+                        fp_t effective_eta = avg_I_gain / (FP(1.0) - avg_trans) * effective_chi;
+                        if (std::isnan(effective_eta)) {
+                            effective_eta = FP(0.25) * (emis0 + emis1 + emis2 + emis3);
+                        }
+                        mip.aniso_emis(ks, dir_idx, wave) = effective_eta;
+                        mip.aniso_opac(ks, dir_idx, wave) = effective_chi;
+                    }
+                }
+            );
+        }
+
         yakl::fence();
     }
 

@@ -15,6 +15,8 @@ struct RaymarchParams {
     int la;
     vec3 offset;
     const yakl::Array<bool, 2, yakl::memDevice>& active;
+    const BlockMap<BLOCK_SIZE>& block_map;
+    const SparseMip& mip;
     const DynamicState& dyn_state;
 };
 
@@ -32,7 +34,8 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 ) {
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri;
-    if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
+    if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>
+        || std::is_same_v<DynamicState, DexEmpty>) {
         ri = two_level_dda_raymarch_2d<RcMode, Bc>(
             Raymarch2dArgs<Bc, DynamicState>{
                 .casc_state_bc = casc_state,
@@ -44,6 +47,8 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                 .la = params.la,
                 .offset = params.offset,
                 .active = params.active,
+                .block_map = params.block_map,
+                .mip = params.mip,
                 .dyn_state = params.dyn_state
             }
         );
@@ -59,6 +64,8 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                 .la = params.la,
                 .offset = params.offset,
                 .active = params.active,
+                .block_map = params.block_map,
+                .mip = params.mip,
                 .dyn_state = params.dyn_state
             }
         );
@@ -863,6 +870,8 @@ void cascade_i_25d(
                     .la = la,
                     .offset = offset,
                     .active = active,
+                    .block_map = block_map,
+                    .mip = mip,
                     .dyn_state = dyn_state
                 };
 

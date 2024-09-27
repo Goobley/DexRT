@@ -25,7 +25,7 @@ typedef uint64_t u64;
 #define DEXRT_DEBUG
 #endif
 
-constexpr int DEXRT_WARP_SIZE = 32;
+constexpr int DEXRT_WARP_SIZE = 4;
 
 constexpr fp_t PROBE0_LENGTH = FP(1.5);
 constexpr int PROBE0_NUM_RAYS = 4;
@@ -77,12 +77,28 @@ constexpr int BLOCK_SIZE = 16;
 // constexpr bool BRANCH_RAYS = false;
 // constexpr bool BILINEAR_FIX = false;
 constexpr bool USE_MIPMAPS = true;
-constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
-constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
 // constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 1, 1, 0};
 // constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 1, 2, 2};
 // constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 0, 1, 0};
 // constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 0, 1, 1};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {1, 0, 0, 0, 0, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {1, 1, 1, 1, 1, 1};
+constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {2, 0, 0, 0, 0, 0};
+constexpr int MIP_LEVEL[MAX_CASCADE+1] = {2, 2, 2, 2, 2, 2};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 1, 1, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 1, 2, 2};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {3, 0, 0, 0, 0, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {3, 3, 3, 3, 3, 3};
+enum class MipMode {
+    Classic,
+    Perceptual,
+    Anisotropic
+};
+constexpr MipMode MIP_MODE = MipMode::Anisotropic;
 
 constexpr bool PINGPONG_BUFFERS = true;
 
@@ -91,7 +107,7 @@ constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 
-// #define FLATLAND
+#define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_INCL = 1;
 constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);

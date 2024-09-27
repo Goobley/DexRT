@@ -143,18 +143,18 @@ YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box,
     // NOTE(cmo): Catch precision errors with a clamp -- without this we will
     // stop the ray at the edge of the box to floating point precision, but it's
     // better for these to line up perfectly.
-    for (int d = 0; d < NumDim; ++d) {
-        if (result.start(d) < box.dims[d](0)) {
-            result.start(d) = box.dims[d](0);
-        } else if (result.start(d) > box.dims[d](1)) {
-            result.start(d) = box.dims[d](1);
-        }
-        if (result.end(d) < box.dims[d](0)) {
-            result.end(d) = box.dims[d](0);
-        } else if (result.end(d) > box.dims[d](1)) {
-            result.end(d) = box.dims[d](1);
-        }
-    }
+    // for (int d = 0; d < NumDim; ++d) {
+    //     if (result.start(d) < box.dims[d](0)) {
+    //         result.start(d) = box.dims[d](0);
+    //     } else if (result.start(d) > box.dims[d](1)) {
+    //         result.start(d) = box.dims[d](1);
+    //     }
+    //     if (result.end(d) < box.dims[d](0)) {
+    //         result.end(d) = box.dims[d](0);
+    //     } else if (result.end(d) > box.dims[d](1)) {
+    //         result.end(d) = box.dims[d](1);
+    //     }
+    // }
 
     return result;
 }
@@ -250,10 +250,12 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(
 
     fp_t length = FP(0.0);
     for (int d = 0; d < NumDim; ++d) {
-        r.curr_coord(d) = std::min(int(std::floor(start_pos(d))), domain_size(d)-1);
+        // r.curr_coord(d) = std::min(int(std::floor(start_pos(d))), domain_size(d)-1);
+        r.curr_coord(d) = int(std::floor(start_pos(d)));
         r.direction(d) = end_pos(d) - start_pos(d);
         length += square(end_pos(d) - start_pos(d));
-        r.final_coord(d) = std::min(int(std::floor(end_pos(d))), domain_size(d)-1);
+        // r.final_coord(d) = std::min(int(std::floor(end_pos(d))), domain_size(d)-1);
+        r.final_coord(d) = int(std::floor(end_pos(d)));;
     }
     r.next_coord = r.curr_coord;
     length = std::sqrt(length);
@@ -278,8 +280,18 @@ YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(
     r.t = FP(0.0);
     r.dt = FP(0.0);
 
+    auto in_bounds = [&]() {
+        return (
+            r.curr_coord(0) >= 0
+            && r.curr_coord(0) < domain_size(0)
+            && r.curr_coord(1) >= 0
+            && r.curr_coord(1) < domain_size(1)
+        );
+    };
     // NOTE(cmo): Initialise to the first intersection so dt != 0
-    next_intersection(&r);
+    while (!in_bounds() || (in_bounds() && r.dt < FP(1e-6))) {
+        next_intersection(&r);
+    }
 
     return r;
 }
@@ -323,6 +335,8 @@ struct Raymarch2dArgs {
     int la;
     vec3 offset;
     const yakl::Array<bool, 2, yakl::memDevice>& active;
+    const BlockMap<BLOCK_SIZE>& block_map;
+    const SparseMip& mip;
     const DynamicState& dyn_state;
 };
 
@@ -502,14 +516,14 @@ template <
 YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
     const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
-    static_assert(std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>, "Only supporting interp state in block marcher");
+    static_assert(std::is_same_v<DynamicState, Raymarch2dDynamicInterpState> || std::is_same_v<DynamicState, DexEmpty>, "Only supporting interp state in block marcher");
     JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (RcMode & RC_DYNAMIC_INTERP);
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
     bool start_clipped;
-    IndexGen<BLOCK_SIZE> idx_gen(dyn_state.block_map, dyn_state.mip.vox_size);
+    IndexGen<BLOCK_SIZE> idx_gen(args.block_map, args.mip.vox_size);
     auto s = TwoLevelDDA<BLOCK_SIZE>(idx_gen);
     const bool marcher = s.init(ray_seg, &start_clipped);
     RadianceInterval<Alo> result{};
@@ -535,6 +549,15 @@ YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
         return result;
     }
 
+    fp_t dir = std::atan2(ray.dir(1), ray.dir(0));
+    if (dir < FP(0.0)) {
+        dir += FP(2.0) * ConstantsFP::pi;
+    }
+    dir /= FP(2.0) * ConstantsFP::pi;
+    dir *= FP(8.0);
+    i32 dir_idx = std::round(dir);
+
+
     // NOTE(cmo): one_m_edt is also the ALO
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
     do {
@@ -546,6 +569,7 @@ YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
             //     eta_s = dyn_state.sparse_stores.emis(ks, wave);
             //     chi_s = dyn_state.sparse_stores.opac(ks, wave) + FP(1e-15);
             // } else {
+            if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
                 const auto& mu = dyn_state.mu;
                 const fp_t vel = (
                     dyn_state.mip.vx(ks) * mu(0)
@@ -553,9 +577,18 @@ YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
                     + dyn_state.mip.vz(ks) * mu(2)
                 );
                 auto contrib = dyn_state.mip.dir_data.sample(ks, wave, vel);
-
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
+            } else {
+                if constexpr (MIP_MODE == MipMode::Anisotropic) {
+                    eta_s = args.mip.aniso_emis(ks, dir_idx, wave);
+                    chi_s = args.mip.aniso_opac(ks, dir_idx, wave) + FP(1e-15);
+                } else {
+                    eta_s = args.mip.emis(ks, wave);
+                    chi_s = args.mip.opac(ks, wave) + FP(1e-15);
+                }
+            }
+
             // }
 
 

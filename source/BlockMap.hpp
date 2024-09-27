@@ -93,7 +93,7 @@ struct BlockMapLookup {
 
 };
 
-template <i32 BLOCK_SIZE, class Lookup=BlockMapLookup<>>
+template <i32 BLOCK_SIZE, class Lookup=BlockMapLookup<yakl::memDevice>>
 struct BlockMap {
     i32 num_x_tiles;
     i32 num_z_tiles;
@@ -180,6 +180,40 @@ struct BlockMap {
             }
             active_tiles = active_tiles_host.createDeviceCopy();
         }
+    }
+
+    /// Everything active, no atmosphere, used for given fs
+    void init(i32 x_size, i32 z_size) {
+        if (x_size % BLOCK_SIZE != 0 || z_size % BLOCK_SIZE != 0) {
+            throw std::runtime_error("Grid is not a multiple of BLOCK_SIZE");
+        }
+        num_x_tiles = x_size / BLOCK_SIZE;
+        num_z_tiles = z_size / BLOCK_SIZE;
+        num_active_tiles = num_x_tiles * num_z_tiles;
+        bbox.min(0) = 0;
+        bbox.min(1) = 0;
+        bbox.max(0) = x_size;
+        bbox.max(1) = z_size;
+
+
+        yakl::Array<uint32_t, 1, yakl::memHost> morton_order("morton_traversal_order", num_x_tiles * num_z_tiles);
+        for (int z = 0; z < num_z_tiles; ++z) {
+            for (int x = 0; x < num_x_tiles; ++x) {
+                morton_order(z * num_x_tiles + x) = encode_morton_2(Coord2{.x = x, .z = z});
+            }
+        }
+        std::sort(morton_order.begin(), morton_order.end());
+        morton_traversal_order = morton_order.createDeviceCopy();
+        active_tiles = morton_traversal_order;
+
+        lookup.init(num_x_tiles, num_z_tiles);
+        auto lookup_host = lookup.createHostCopy();
+        i64 grid_idx = 0;
+        for (int m_idx = 0; m_idx < morton_order.extent(0); ++m_idx) {
+            Coord2 tile_index = decode_morton_2(morton_order(m_idx));
+            lookup_host(tile_index.x, tile_index.z) = grid_idx++;
+        }
+        lookup = lookup_host.createDeviceCopy();
     }
 
     YAKL_INLINE i64 buffer_len(i32 mip_px_size=1) const {
@@ -461,11 +495,11 @@ struct TwoLevelDDA {
         vec2 end_pos = ray(ray.t1 - eps);
         vec2 start_pos = ray(ray.t0 + eps);
         curr_coord = round_down(start_pos);
-        for (int ax = 0; ax < NUM_DIM; ++ax) {
-            curr_coord(ax) = std::min(curr_coord(ax), idx_gen.block_map.bbox.max(ax)-1);
-        }
         step_size = idx_gen.refined_size;
-        if (!idx_gen.has_leaves(curr_coord(0), curr_coord(1))) {
+        // NOTE(cmo): Most of the time we start in bounds, but occasionally not,
+        // and clamping was the wrong behaviour. If we're not in bounds, work on
+        // a step size of 1.
+        if (in_bounds() && !idx_gen.has_leaves(curr_coord(0), curr_coord(1))) {
             step_size = BLOCK_SIZE;
         }
         for (int ax = 0; ax < NUM_DIM; ++ax) {
@@ -489,6 +523,19 @@ struct TwoLevelDDA {
             }
         }
         compute_axis_and_dt();
+        // NOTE(cmo): If we didn't start in bounds, advance until we're in, and set the step size
+        bool was_in_loop = false;
+        while (!in_bounds() || (in_bounds() && dt < FP(1e-6))) {
+            was_in_loop = true;
+            next_intersection();
+        }
+        if (was_in_loop) {
+            i32 marching_step_size = idx_gen.refined_size;
+            if (!idx_gen.has_leaves(curr_coord(0), curr_coord(1))) {
+                marching_step_size = BLOCK_SIZE;
+            }
+            update_step_size(marching_step_size);
+        }
         return true;
     }
 
@@ -610,6 +657,15 @@ struct TwoLevelDDA {
         } else {
             return idx_gen.has_leaves(curr_coord(0), curr_coord(1));
         }
+    }
+
+    YAKL_INLINE bool in_bounds() const {
+        return (
+            curr_coord(0) >= idx_gen.block_map.bbox.min(0)
+            && curr_coord(1) >= idx_gen.block_map.bbox.min(1)
+            && curr_coord(0) < idx_gen.block_map.bbox.max(0)
+            && curr_coord(1) < idx_gen.block_map.bbox.max(1)
+        );
     }
 };
 

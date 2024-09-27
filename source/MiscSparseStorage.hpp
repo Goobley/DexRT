@@ -29,12 +29,13 @@ struct SparseStores {
         JasUnpack((*this), dynamic, emis, opac, vx, vy, vz);
 
         auto bounds = block_map.loop_bounds();
+        i32 wave_batch = emis.extent(1);
         parallel_for(
             "copy to sparse structure",
             SimpleBounds<3>(
                 bounds.dim(0),
                 bounds.dim(1),
-                state.c0_size.wave_batch
+                wave_batch
             ),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
                 IndexGen<BLOCK_SIZE> idx_gen(block_map);
@@ -50,6 +51,32 @@ struct SparseStores {
                     vz(ks) = atmos.vz(coord.z, coord.x);
                 }
 
+            }
+        );
+        yakl::fence();
+    }
+
+    void fill_emis_opac(const State& state, const CascadeState& casc_state) {
+        JasUnpack(state, dynamic_opac, block_map);
+        JasUnpack(casc_state, eta, chi);
+        JasUnpack((*this), emis, opac);
+
+        auto bounds = block_map.loop_bounds();
+        i32 wave_batch = emis.extent(1);
+        parallel_for(
+            "copy to sparse structure",
+            SimpleBounds<3>(
+                bounds.dim(0),
+                bounds.dim(1),
+                wave_batch
+            ),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+                IndexGen<BLOCK_SIZE> idx_gen(block_map);
+                const i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                const Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+                emis(ks, wave) = eta(coord.z, coord.x, wave);
+                opac(ks, wave) = chi(coord.z, coord.x, wave);
             }
         );
         yakl::fence();

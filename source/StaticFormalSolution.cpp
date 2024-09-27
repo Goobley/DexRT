@@ -375,6 +375,78 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         }
     );
     yakl::fence();
+    SparseStores sparse_stores;
+    sparse_stores.init(state.block_map.buffer_len(), wave_batch);
+    sparse_stores.fill_emis_opac(state, casc_state);
+    SparseMips mips = compute_mips(state, casc_state, sparse_stores);
+    SparseMip mip;
+    yakl::fence();
+    std::vector<Fp3d> eta_mips;
+    std::vector<Fp3d> chi_mips;
+    std::vector<Fp4d> eta_a_mips;
+    std::vector<Fp4d> chi_a_mips;
+    for (int mip_level=0; mip_level < mips.mips.size(); ++mip_level) {
+        const auto& mip = mips.mips[mip_level];
+        int vox_size = mip.vox_size;
+        Fp3d emis_entry("eta", eta.extent(0) / vox_size, eta.extent(1) / vox_size, eta.extent(2));
+        Fp3d opac_entry("chi", eta.extent(0) / vox_size, eta.extent(1) / vox_size, eta.extent(2));
+        Fp4d emisa_entry("eta_a", eta.extent(0) / vox_size, eta.extent(1) / vox_size, 8, eta.extent(2));
+        Fp4d opaca_entry("chi_a", eta.extent(0) / vox_size, eta.extent(1) / vox_size, 8, eta.extent(2));
+
+        const auto& block_map = state.block_map;
+        auto bounds = block_map.loop_bounds(vox_size);
+        const auto& mip_emis = mip.emis;
+        const auto& mip_opac = mip.opac;
+        parallel_for(
+            SimpleBounds<3>(
+                bounds.dim(0),
+                bounds.dim(1),
+                eta.extent(2)
+            ),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+                IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+                emis_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_emis(ks, wave);
+                opac_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_opac(ks, wave);
+            }
+        );
+        parallel_for(
+            SimpleBounds<4>(
+                bounds.dim(0),
+                bounds.dim(1),
+                8,
+                eta.extent(2)
+            ),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 dir_idx, i32 wave) {
+                IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+                emisa_entry(coord.z / vox_size, coord.x / vox_size, dir_idx, wave) = mip.aniso_emis(ks, dir_idx, wave);
+                opaca_entry(coord.z / vox_size, coord.x / vox_size, dir_idx, wave) = mip.aniso_opac(ks, dir_idx, wave);
+            }
+        );
+        yakl::fence();
+        eta_mips.push_back(emis_entry);
+        chi_mips.push_back(opac_entry);
+        eta_a_mips.push_back(emisa_entry);
+        chi_a_mips.push_back(opaca_entry);
+    }
+    yakl::SimpleNetCDF nc;
+    nc.create("mip_data.nc", yakl::NETCDF_MODE_REPLACE);
+    for (int mip_level = 0; mip_level < mips.mips.size(); ++mip_level) {
+        std::string zn = fmt::format("z{}", mip_level);
+        std::string xn = fmt::format("x{}", mip_level);
+        nc.write(eta_mips[mip_level], fmt::format("emis_{}", mip_level), {zn, xn, "wave"});
+        nc.write(chi_mips[mip_level], fmt::format("opac_{}", mip_level), {zn, xn, "wave"});
+        nc.write(eta_a_mips[mip_level], fmt::format("emis_anis_{}", mip_level), {zn, xn, "dir", "wave"});
+        nc.write(chi_a_mips[mip_level], fmt::format("opac_anis_{}", mip_level), {zn, xn, "dir", "wave"});
+    }
+    nc.close();
+
+
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = false,
         .preaverage = PREAVERAGE,
@@ -398,19 +470,27 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
             .la_end=la_end,
             .subset_idx=subset_idx
         };
+        if constexpr (USE_MIPMAPS) {
+            mip = mips.mips[MIP_LEVEL[casc_state.num_cascades]];
+        }
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,
             casc_state.num_cascades,
-            subset
+            subset,
+            mip
         );
         yakl::fence();
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 0; --casc_idx) {
+            if constexpr (USE_MIPMAPS) {
+                mip = mips.mips[MIP_LEVEL[casc_idx]];
+            }
             cascade_i_25d<RcModeNoBc>(
                 state,
                 casc_state,
                 casc_idx,
-                subset
+                subset,
+                mip
             );
             yakl::fence();
         }
