@@ -507,48 +507,57 @@ inline SparseMips compute_mips(
                         const fp_t trans2 = std::exp(-opac2 * ds * vox_scale);
                         const fp_t trans3 = std::exp(-opac3 * ds * vox_scale);
 
-                        fp_t avg_trans = FP(0.0);
+                        fp_t avg_trans_short = FP(0.0);
+                        fp_t avg_trans_long = FP(0.0);
                         if (dir_idx % 4 == 1) {
                             // Direction as / ...
-                            avg_trans = FP(0.25) * (trans0 + FP(2.0) * trans1 * trans2 + trans3);
+                            avg_trans_short = FP(0.5) * (trans0 + trans3);
+                            avg_trans_long =  trans1 * trans2;
                         } else {
                             // % 4 == 3
                             // Direction as \ ...
-                            avg_trans = FP(0.25) * (trans1 + FP(2.0) * trans0 * trans3 + trans2);
+                            avg_trans_short = FP(0.5) * (trans1 + trans2);
+                            avg_trans_long = trans0 * trans3;
                         }
+                        // NOTE(cmo): Chi computed like this is unexpectedly low in uniform regions.
+                        // Do the single and double separately?
 
                         // 2 paths with length sqrt(2), 1 path with length 2sqrt(2), but also double weighted. Gives average path length of 3/2 sqrt2
-                        fp_t effective_chi = -std::log(avg_trans) / (FP(1.5) * ds * vox_scale);
+                        fp_t effective_chi_short = -std::log(avg_trans_short) / (ds * vox_scale);
+                        fp_t effective_chi_long = -std::log(avg_trans_long) / (FP(2.0) * ds * vox_scale);
+                        fp_t effective_chi = FP(0.5) * (effective_chi_long + effective_chi_short);
                         if (std::isinf(effective_chi)) {
                             effective_chi = FP(0.25) * (opac0 + opac1 + opac2 + opac3);
                         }
 
-                        fp_t avg_I_gain = FP(0.0);
-
+                        fp_t avg_I_gain_short = FP(0.0);
+                        fp_t avg_I_gain_long = FP(0.0);
                         if (dir_idx == 1) {
                             // 0, 2 -> 1, 3
-                            avg_I_gain += source0 * (FP(1.0) - trans0);
-                            avg_I_gain += source2 * (FP(1.0) - trans2) * trans1 + (FP(1.0) - trans1) * source1;
-                            avg_I_gain += source3 * (FP(1.0) - trans3);
+                            avg_I_gain_short += source0 * (FP(1.0) - trans0);
+                            avg_I_gain_short += source3 * (FP(1.0) - trans3);
+                            avg_I_gain_long+= source2 * (FP(1.0) - trans2) * trans1 + (FP(1.0) - trans1) * source1;
                         } else if (dir_idx == 3) {
                             // 1, 3 -> 0, 2
-                            avg_I_gain += source1 * (FP(1.0) - trans1);
-                            avg_I_gain += source3 * (FP(1.0) - trans3) * trans0 + (FP(1.0) - trans0) * source0;
-                            avg_I_gain += source2 * (FP(1.0) - trans2);
+                            avg_I_gain_short += source1 * (FP(1.0) - trans1);
+                            avg_I_gain_short += source2 * (FP(1.0) - trans2);
+                            avg_I_gain_long += source3 * (FP(1.0) - trans3) * trans0 + (FP(1.0) - trans0) * source0;
                         } else if (dir_idx == 5) {
                             // 0, 1 -> 2, 3
-                            avg_I_gain += source0 * (FP(1.0) - trans0);
-                            avg_I_gain += source1 * (FP(1.0) - trans1) * trans2 + (FP(1.0) - trans2) * source2;
-                            avg_I_gain += source3 * (FP(1.0) - trans3);
+                            avg_I_gain_short += source0 * (FP(1.0) - trans0);
+                            avg_I_gain_short += source3 * (FP(1.0) - trans3);
+                            avg_I_gain_long += source1 * (FP(1.0) - trans1) * trans2 + (FP(1.0) - trans2) * source2;
                         } else if (dir_idx == 7) {
                             // 1, 0 -> 3, 2
-                            avg_I_gain += source1 * (FP(1.0) - trans1);
-                            avg_I_gain += source0 * (FP(1.0) - trans0) * trans3 + (FP(1.0) - trans3) * source3;
-                            avg_I_gain += source2 * (FP(1.0) - trans2);
+                            avg_I_gain_short += source1 * (FP(1.0) - trans1);
+                            avg_I_gain_short += source2 * (FP(1.0) - trans2);
+                            avg_I_gain_long += source0 * (FP(1.0) - trans0) * trans3 + (FP(1.0) - trans3) * source3;
                         }
-                        avg_I_gain *= FP(0.333333333);
+                        avg_I_gain_short *= FP(0.5);
 
-                        fp_t effective_eta = avg_I_gain / (FP(1.0) - avg_trans) * effective_chi;
+                        fp_t effective_eta_short = avg_I_gain_short / (FP(1.0) - avg_trans_short) * effective_chi;
+                        fp_t effective_eta_long = avg_I_gain_long / (FP(1.0) - avg_trans_long) * effective_chi;
+                        fp_t effective_eta = FP(0.5) * (effective_eta_short + effective_eta_long);
                         if (std::isnan(effective_eta)) {
                             effective_eta = FP(0.25) * (emis0 + emis1 + emis2 + emis3);
                         }

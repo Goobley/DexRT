@@ -555,7 +555,9 @@ YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
     }
     dir /= FP(2.0) * ConstantsFP::pi;
     dir *= FP(8.0);
-    i32 dir_idx = std::round(dir);
+    i32 dir_idx = i32(std::round(dir)) % 8;
+    fp_t frac_part = dir - i32(dir);
+    constexpr bool angular_interp = true;
 
 
     // NOTE(cmo): one_m_edt is also the ALO
@@ -581,8 +583,16 @@ YAKL_INLINE RadianceInterval<Alo> two_level_dda_raymarch_2d(
                 chi_s = contrib.chi + FP(1e-15);
             } else {
                 if constexpr (MIP_MODE == MipMode::Anisotropic) {
-                    eta_s = args.mip.aniso_emis(ks, dir_idx, wave);
-                    chi_s = args.mip.aniso_opac(ks, dir_idx, wave) + FP(1e-15);
+                    if constexpr (angular_interp) {
+                        i32 dir_idxp = (dir_idx + 1) % 8;
+                        fp_t tp = frac_part;
+                        fp_t t = FP(1.0) - frac_part;
+                        eta_s = t * args.mip.aniso_emis(ks, dir_idx, wave) + tp * args.mip.aniso_emis(ks, dir_idxp, wave);
+                        chi_s = t * args.mip.aniso_opac(ks, dir_idx, wave) + tp * args.mip.aniso_opac(ks, dir_idxp, wave) + FP(1e-15);
+                    } else {
+                        eta_s = args.mip.aniso_emis(ks, dir_idx, wave);
+                        chi_s = args.mip.aniso_opac(ks, dir_idx, wave) + FP(1e-15);
+                    }
                 } else {
                     eta_s = args.mip.emis(ks, wave);
                     chi_s = args.mip.opac(ks, wave) + FP(1e-15);
