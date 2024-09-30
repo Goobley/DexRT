@@ -297,49 +297,59 @@ def ray_from_start_end(start, end):
 
 
 if __name__ == "__main__":
-    field = xr.open_dataset(data).temperature.values
-    # field = np.random.uniform(size=(16, 16))
+    # field = xr.open_dataset(data).temperature.values
+    # # field = np.random.uniform(size=(16, 16))
 
-    block_map = BlockMap(field)
-    order = block_map.order() * BLOCK_SIZE + BLOCK_SIZE / 2
-    x_edges = np.arange(field.shape[1]+1)
-    z_edges = np.arange(field.shape[0]+1)
-    plt.pcolormesh(x_edges, z_edges, field)
-    plt.plot(order[:, 0], order[:, 1])
-    for x in range(BLOCK_SIZE, field.shape[1], BLOCK_SIZE):
-        plt.axvline(x, c='k', lw=0.5)
-    for z in range(BLOCK_SIZE, field.shape[0], BLOCK_SIZE):
-        plt.axhline(z, c='k', lw=0.5)
+    # block_map = BlockMap(field)
+    # order = block_map.order() * BLOCK_SIZE + BLOCK_SIZE / 2
+    # x_edges = np.arange(field.shape[1]+1)
+    # z_edges = np.arange(field.shape[0]+1)
+    # plt.pcolormesh(x_edges, z_edges, field)
+    # plt.plot(order[:, 0], order[:, 1])
+    # for x in range(BLOCK_SIZE, field.shape[1], BLOCK_SIZE):
+    #     plt.axvline(x, c='k', lw=0.5)
+    # for z in range(BLOCK_SIZE, field.shape[0], BLOCK_SIZE):
+    #     plt.axhline(z, c='k', lw=0.5)
 
-    acc = Accessor(block_map)
-    # ray = Ray(o=np.array([1, 1]), d=np.array([0.6, np.sqrt(1.0 - 0.6**2)]), t0=0.0, t1=1e4)
-    # ray = ray_from_start_end(np.array([2.2, 3.5]), np.array([3.1, 10.23]))
-    # ray = ray_from_start_end(np.array([1.91421, 3.085815]), np.array([0.5, 4.5]))
-    # ray = ray_from_start_end(np.array([2.1, 3.1]), np.array([4.8, 5.8]))
-    # ray = ray_from_start_end(np.array([2.8, 18.4]), np.array([21.0, 2342.0]))
-    # ray = ray_from_start_end(np.array([17.0, 8.5]), np.array([14.1, 5.6]))
-    # ray = ray_from_start_end(np.array([1.91421, 3.085815]) + 200, np.array([0.5, 4.5]) + 200)
-    ray = ray_from_start_end(np.array([800.0, 247.3]), np.array([564.0, 564.0]))
-    # ray = ray_from_start_end()
-    hdda = TwoLevelDDA(acc, ray, 16)
+    # acc = Accessor(block_map)
+    # # ray = Ray(o=np.array([1, 1]), d=np.array([0.6, np.sqrt(1.0 - 0.6**2)]), t0=0.0, t1=1e4)
+    # # ray = ray_from_start_end(np.array([2.2, 3.5]), np.array([3.1, 10.23]))
+    # # ray = ray_from_start_end(np.array([1.91421, 3.085815]), np.array([0.5, 4.5]))
+    # # ray = ray_from_start_end(np.array([2.1, 3.1]), np.array([4.8, 5.8]))
+    # # ray = ray_from_start_end(np.array([2.8, 18.4]), np.array([21.0, 2342.0]))
+    # # ray = ray_from_start_end(np.array([17.0, 8.5]), np.array([14.1, 5.6]))
+    # # ray = ray_from_start_end(np.array([1.91421, 3.085815]) + 200, np.array([0.5, 4.5]) + 200)
+    # ray = ray_from_start_end(np.array([800.0, 247.3]), np.array([564.0, 564.0]))
+    # # ray = ray_from_start_end()
+    # hdda = TwoLevelDDA(acc, ray, 16)
 
-    # ts = [hdda.t]
-    # while hdda.step_through():
-    #     ts.append(hdda.t)
-    ts = []
-    i = 0
-    while not hdda.exhausted() and i < 400:
-        if hdda.can_sample():
-            if not acc.has_leaves(*hdda.curr_coord):
-                raise ValueError("OOB")
-            ts.append(hdda.t)
-            print(hdda.curr_coord, hdda.t, hdda.dt, ray.at(hdda.t))
-        hdda.step_through()
-        i += 1
+    # # ts = [hdda.t]
+    # # while hdda.step_through():
+    # #     ts.append(hdda.t)
+    # ts = []
+    # i = 0
+    # while not hdda.exhausted() and i < 400:
+    #     if hdda.can_sample():
+    #         if not acc.has_leaves(*hdda.curr_coord):
+    #             raise ValueError("OOB")
+    #         ts.append(hdda.t)
+    #         print(hdda.curr_coord, hdda.t, hdda.dt, ray.at(hdda.t))
+    #     hdda.step_through()
+    #     i += 1
 
-    ts = np.array(ts)
-    hits = ray.at(ts[:, None])
-    plt.plot(hits[:, 0], hits[:, 1], 'x')
+    # ts = np.array(ts)
+    # hits = ray.at(ts[:, None])
+    # plt.plot(hits[:, 0], hits[:, 1], 'x')
+
+    codes = []
+    n_points = 96
+    for z in range(n_points):
+        for x in range(n_points):
+            codes.append((x, z, encode_morton_2(x, z)))
+    codes = sorted(codes, key=lambda x: x[2])
+    codes = np.array(codes)
+    assert (codes[1:, 2] - codes[:-1, 2]).max() == 1
+    plt.plot(codes[:, 0], codes[:, 1])
 
 
 

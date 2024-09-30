@@ -93,7 +93,7 @@ struct BlockMapLookup {
 
 };
 
-template <i32 BLOCK_SIZE, class Lookup=BlockMapLookup<yakl::memDevice>>
+template <i32 BLOCK_SIZE, class Lookup=BlockMapLookup<>>
 struct BlockMap {
     i32 num_x_tiles;
     i32 num_z_tiles;
@@ -228,6 +228,122 @@ struct BlockMap {
     }
 };
 
+/// Checks if integer t is a power of 2
+template <typename T>
+bool is_pow_2(T t) {
+    return (t & (t - 1)) == 0;
+}
+
+
+template <u8 entry_size=3, int mem_space=yakl::memDevice>
+struct MultiLevelLookup {
+    static constexpr u8 packed_entries_per_u64 = sizeof(u64) / entry_size;
+    static constexpr u64 lowest_entry_mask = ~(entry_size - 1);
+    static_assert(entry_size <= 8, "Entry size must be <= 8");
+    i32 num_x_tiles;
+    i32 num_z_tiles;
+    // NOTE(cmo): We're still laying out these tiles linearly here... not ideal,
+    // but it has a very small footprint -- should remain resident in cache.
+    yakl::Array<u64, 1, mem_space> entries;
+
+    template <class BlockMap>
+    void init(const BlockMap& block_map) {
+        num_x_tiles = block_map.num_x_tiles;
+        num_z_tiles = block_map.num_z_tiles;
+        const i32 num_entries = block_map.num_x_tiles * block_map.num_z_tiles;
+        const i32 storage_for_entries = (num_entries + packed_entries_per_u64 - 1) / packed_entries_per_u64;
+        entries = decltype(entries)("MultiLevel Entries", storage_for_entries);
+    }
+
+    YAKL_INLINE u8 get(i32 x, i32 z) const {
+        const i32 flat_idx = z * num_x_tiles + x;
+        const i32 block_idx = flat_idx / packed_entries_per_u64;
+        const i32 entry_idx = flat_idx % packed_entries_per_u64;
+
+        const u64 block = entries(block_idx);
+        const u8 entry = (block >> (entry_size * entry_idx)) & lowest_entry_mask;
+        return entry;
+    }
+
+    /// NOTE(cmo): NOT THREADSAFE -- should probably be host only?
+    YAKL_INLINE void set(i32 x, i32 z, u8 val) {
+        const i32 flat_idx = z * num_x_tiles + x;
+        const i32 block_idx = flat_idx / packed_entries_per_u64;
+        const i32 entry_idx = flat_idx % packed_entries_per_u64;
+
+        const u64 shifted_entry = u64(val) << (entry_idx * entry_size); // ---- --ab ----
+        const u64 shifted_mask = ~(lowest_entry_mask << (entry_idx * entry_size)); // ffff ff00 ffff
+        const u64 block = entries(block_idx); // 0123 4567 89ab
+        const u64 updated_block = (block & shifted_mask) | shifted_entry; // 0123 45ab 89ab
+        entries(block_idx) = updated_block;
+    }
+
+    /// Pack an array of u8 entries into the u64 storage backing array
+    void pack_u8_entries(const yakl::Array<u8, 1, memDevice>& single_entries) {
+        JasUnpack((*this), entries);
+        parallel_for(
+            "Pack u8 entries into u64",
+            SimpleBounds<1>(entries.extent(0)),
+            YAKL_LAMBDA (int block_idx) {
+                constexpr u64 val_mask = ~lowest_entry_mask;
+                u64 block = 0;
+                const int max_entry = std::min(
+                    i32(single_entries.extent(0) - block_idx * packed_entries_per_u64),
+                    i32(packed_entries_per_u64)
+                );
+                for (int entry_idx = 0; entry_idx < max_entry; ++entry_idx) {
+                    const int flat_entry_idx = block_idx + entry_idx;
+                    block |= (single_entries(flat_entry_idx) & val_mask) << (entry_idx * entry_size);
+                }
+                entries(block_idx) = block;
+            }
+        );
+        yakl::fence();
+    }
+
+    MultiLevelLookup<entry_size, yakl::memHost> createHostCopy() {
+        if constexpr (mem_space == yakl::memHost) {
+            return *this;
+        }
+
+        MultiLevelLookup<entry_size, yakl::memHost> result;
+        result.num_x_tiles = num_x_tiles;
+        result.num_z_tiles = num_z_tiles;
+        result.entries = entries.createHostCopy();
+        return result;
+    }
+
+    MultiLevelLookup<entry_size, yakl::memDevice> createDeviceCopy() {
+        if constexpr (mem_space == yakl::memDevice) {
+            return *this;
+        }
+
+        MultiLevelLookup<entry_size, yakl::memDevice> result;
+        result.num_x_tiles = num_x_tiles;
+        result.num_z_tiles = num_z_tiles;
+        result.entries = entries.createDeviceCopy();
+        return result;
+    }
+};
+
+/// NOTE(cmo): Instead of storing the tile index (which is stored in the
+/// blockmap), this stores a MultiLevelLookup of packed tile information.
+/// When unpacked to a u8 via lookup.get, if 0, the tile is empty, otherwise
+/// val-1 is its associated mip level (log2 voxel block size). As such, we have
+/// one of these per dynamic mip level.
+template <int BLOCK_SIZE, int ENTRY_SIZE=3, class Lookup=BlockMapLookup<>, class BlockMap=BlockMap<BLOCK_SIZE, Lookup>>
+struct MultiResBlockMap {
+    const BlockMap& block_map;
+    MultiLevelLookup<ENTRY_SIZE> lookup;
+
+    MultiResBlockMap(const BlockMap& block_map_) : block_map(block_map_) {};
+
+    void init() {
+        lookup.init(block_map);
+    }
+};
+
+
 constexpr bool INNER_MORTON_LOOKUP = false;
 template<i32 BLOCK_SIZE>
 struct IndexGen {
@@ -335,6 +451,156 @@ struct IndexGen {
         if (result) {
             tile_base_idx = compute_base_idx(tile_idx);
             tile_key = tile_key_lookup;
+        }
+        return result;
+    }
+
+    YAKL_INLINE
+    i64 loop_idx(i64 tile_idx, i32 block_idx) const {
+        return compute_base_idx(tile_idx) + block_idx;
+    }
+
+    YAKL_INLINE
+    Coord2 loop_coord(i64 tile_idx, i32 block_idx) const {
+        Coord2 tile_coord = compute_tile_coord(tile_idx);
+        Coord2 tile_offset = compute_tile_inner_offset(block_idx);
+        return Coord2 {
+            .x = tile_coord.x * BLOCK_SIZE + tile_offset.x,
+            .z = tile_coord.z * BLOCK_SIZE + tile_offset.z
+        };
+    }
+};
+
+struct MultiLevelTileKey {
+    i32 mip_level;
+    i32 x;
+    i32 z;
+
+
+    YAKL_INLINE bool operator==(const MultiLevelTileKey& other) const {
+        return (mip_level == other.mip_level) && (x == other.x) && (z == other.z);
+    }
+};
+
+// TODO(cmo): This approach won't work when distributed... we'll likely need to
+// add another layer of indirection, or, if we distribute by morton order, a
+// base index that is subtracted per level per node
+template<i32 BLOCK_SIZE, u8 ENTRY_SIZE>
+struct MultiLevelIndexGen {
+    MultiLevelTileKey tile_key;
+    i64 tile_base_idx;
+    const BlockMap<BLOCK_SIZE>& block_map;
+    const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mip_block_map;
+
+    YAKL_INLINE
+    MultiLevelIndexGen(
+        const BlockMap<BLOCK_SIZE>& block_map_,
+        const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mip_block_map_
+    ) :
+        tile_key({.mip_level = -1, .x = -1, .z = -1}),
+        tile_base_idx(),
+        block_map(block_map_),
+        mip_block_map(mip_block_map_)
+    {}
+
+    YAKL_INLINE
+    Coord2 compute_tile_coord(i64 tile_idx) const {
+        return decode_morton_2(block_map.active_tiles(tile_idx));
+    }
+
+    YAKL_INLINE
+    i64 compute_base_idx(i32 mip_level, i64 tile_idx) const {
+        return tile_idx * square(BLOCK_SIZE >> mip_level);
+    }
+
+    YAKL_INLINE
+    Coord2 compute_tile_inner_offset(i32 mip_level, i32 tile_offset) const {
+        Coord2 coord;
+        if constexpr (INNER_MORTON_LOOKUP) {
+            coord = decode_morton_2(uint32_t(tile_offset));
+        } else {
+            coord = Coord2 {
+                .x = tile_offset % (BLOCK_SIZE >> mip_level),
+                .z = tile_offset / (BLOCK_SIZE >> mip_level)
+            };
+        }
+        coord.x <<= mip_level;
+        coord.z <<= mip_level;
+        return coord;
+    }
+
+    YAKL_INLINE
+    i32 compute_inner_offset(i32 mip_level, i32 inner_x, i32 inner_z) const {
+        if constexpr (INNER_MORTON_LOOKUP) {
+            Coord2 coord {
+                .x = inner_x >> mip_level,
+                .z = inner_z >> mip_level
+            };
+            return encode_morton_2(coord);
+        } else {
+            return (inner_z * (BLOCK_SIZE >> mip_level) + inner_x) >> mip_level;
+        }
+    }
+
+    YAKL_INLINE
+    i64 idx(i32 mip_level, i32 x, i32 z) {
+        i32 tile_x = x / BLOCK_SIZE;
+        i32 tile_z = z / BLOCK_SIZE;
+        i32 inner_x = x % BLOCK_SIZE;
+        i32 inner_z = z % BLOCK_SIZE;
+        MultiLevelTileKey tile_key_lookup{
+            .mip_level = mip_level,
+            .x = tile_x,
+            .z = tile_z
+        };
+
+        if (tile_key == tile_key_lookup) {
+            return tile_base_idx + compute_inner_offset(mip_level, inner_x, inner_z);
+        }
+
+        i64 tile_idx = block_map.lookup(tile_x, tile_z);
+#ifdef DEXRT_DEBUG
+        if (tile_idx < 0) {
+            yakl::yakl_throw("OOB block requested!");
+        }
+#endif
+        if (tile_idx >= 0) {
+            tile_base_idx = compute_base_idx(mip_level, tile_idx);
+            tile_key = tile_key_lookup;
+            return tile_base_idx + compute_inner_offset(mip_level, inner_x, inner_z);
+        }
+        return -1;
+    }
+
+    /// Returns the mip level to sample on, or -1 if empty
+    YAKL_INLINE
+    i32 get_sample_level(i32 x, i32 z) {
+        i32 tile_x = x / BLOCK_SIZE;
+        i32 tile_z = z / BLOCK_SIZE;
+        /// NOTE(cmo): This makes the assumption that if one is requesting the
+        /// mip level of the current tile, then whatever level is there is the
+        /// one returned.
+        if (tile_x == tile_key.x && tile_z == tile_key.z) {
+            return tile_key.mip_level;
+        }
+
+        if (
+            (tile_x < 0) || (tile_x >= block_map.bbox.max(0)) ||
+            (tile_z < 0) || (tile_z >= block_map.bbox.max(1))
+        ) {
+            return -1;
+        }
+
+        i32 tile_mip_level = i32(mip_block_map.lookup.get(tile_x, tile_z)) - 1;
+        bool result = tile_mip_level != -1;
+        if (result) {
+            i64 tile_idx = block_map.lookup(tile_x, tile_z);
+            tile_base_idx = compute_base_idx(tile_mip_level, tile_idx);
+            tile_key = MultiLevelTileKey {
+                .mip_level = tile_mip_level,
+                .x = tile_x,
+                .z = tile_z
+            };
         }
         return result;
     }
