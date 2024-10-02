@@ -574,5 +574,214 @@ inline SparseMips compute_mips(
     return result;
 }
 
+/// Needed for the MultiResBlockMap where all mips are stored in one flat array. This will also modify mr_block_map
+inline SparseMip compute_flat_mips(
+    const State& state,
+    const CascadeState& casc_state,
+    const SparseStores& full_res
+) {
+    assert(USE_MIPMAPS);
+    JasUnpack(state, block_map, mr_block_map);
+
+    i32 max_mip_factor = 0;
+    for (int i = 0; i < MAX_CASCADE + 1; ++i) {
+        max_mip_factor += MIPMAP_FACTORS[i];
+    }
+
+
+    // NOTE(cmo): mippable entries is used as an accumulator during each round
+    // of mipping, and then divided by the number of sub blocks and placed into
+    // max mip_level. max_mip_level then holds the max_mip_level + 1 s.t. 0 represents empty.
+    yakl::Array<i32, 1, yakl::memDevice> mippable_entries("mippable entries", block_map.num_active_tiles);
+    yakl::Array<i32, 1, yakl::memDevice> max_mip_level("max mip entries", block_map.num_z_tiles * block_map.num_x_tiles);
+
+    max_mip_level = 0;
+    mippable_entries = 0;
+    yakl::fence();
+
+    SparseMip result;
+    i64 flat_size = mr_block_map.buffer_len();
+    const i32 wave_batch = full_res.emis.extent(1);
+    const i32 vox_scale = state.atmos.voxel_scale;
+    result.emis = Fp2d("emis flat mip", flat_size, wave_batch);
+    result.opac = Fp2d("opad flat mip", flat_size, wave_batch);
+
+    auto bounds = block_map.loop_bounds();
+    parallel_for(
+        "Copy mip 0",
+        SimpleBounds<3>(
+            bounds.dim(0),
+            bounds.dim(1),
+            wave_batch
+        ),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+            IndexGen<BLOCK_SIZE> idx_gen(block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+            if (block_idx == 0 && wave == 0) {
+                Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+                // NOTE(cmo): This is the first entry in an active tile, so
+                // increment. No need for atomic here.
+                max_mip_level(tile_coord.z * block_map.num_x_tiles + tile_coord.x) += 1;
+            }
+
+            result.emis(ks, wave) = full_res.emis(ks, wave);
+            result.opac(ks, wave) = full_res.opac(ks, wave);
+        }
+    );
+    yakl::fence();
+
+    for (int level_m_1 = 0; level_m_1 < max_mip_factor; ++level_m_1) {
+        i32 vox_size = (1 << (level_m_1 + 1));
+        auto bounds = block_map.loop_bounds(vox_size);
+
+        parallel_for(
+            "Compute mip n (wave batch)",
+            SimpleBounds<3>(
+                bounds.dim(0),
+                bounds.dim(1),
+                wave_batch
+            ),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+                const i32 level = level_m_1 + 1;
+                const fp_t ds = vox_scale;
+                MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                const i64 ks = idx_gen.loop_idx(level, tile_idx, block_idx);
+                const Coord2 coord = idx_gen.loop_coord(level, tile_idx, block_idx);
+                const Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+
+                const i32 upper_vox_size = vox_size / 2;
+                fp_t emis = FP(0.0);
+                fp_t opac = FP(0.0);
+                i64 idx0 = idx_gen.idx(level_m_1, coord.x, coord.z);
+                i64 idx1 = idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z);
+                i64 idx2 = idx_gen.idx(level_m_1, coord.x, coord.z+upper_vox_size);
+                i64 idx3 = idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z+upper_vox_size);
+
+                // E[log(chi ds)]
+                fp_t m1_chi = FP(0.0);
+                // E[log(chi ds)^2]
+                fp_t m2_chi = FP(0.0);
+                // E[log(eta ds)]
+                fp_t m1_eta = FP(0.0);
+                // E[log(eta ds)^2]
+                fp_t m2_eta = FP(0.0);
+
+                bool consider_variance = false;
+                constexpr fp_t opacity_threshold = FP(0.25);
+                constexpr fp_t variance_threshold = FP(1.0);
+
+                fp_t eta_s = result.emis(idx0, wave);
+                fp_t chi_s = result.opac(idx0, wave);
+                emis += eta_s;
+                opac += chi_s;
+                consider_variance = consider_variance || (chi_s * ds) > opacity_threshold;
+                chi_s += FP(1e-15);
+                eta_s += FP(1e-15);
+                m1_chi += std::log(chi_s * ds);
+                m2_chi += square(std::log(chi_s * ds));
+                m1_eta += std::log(eta_s * ds);
+                m2_eta += square(std::log(eta_s * ds));
+
+                eta_s = result.emis(idx1, wave);
+                chi_s = result.opac(idx1, wave);
+                emis += eta_s;
+                opac += chi_s;
+                consider_variance = consider_variance || (chi_s * ds) > opacity_threshold;
+                chi_s += FP(1e-15);
+                eta_s += FP(1e-15);
+                m1_chi += std::log(chi_s * ds);
+                m2_chi += square(std::log(chi_s * ds));
+                m1_eta += std::log(eta_s * ds);
+                m2_eta += square(std::log(eta_s * ds));
+
+                eta_s = result.emis(idx2, wave);
+                chi_s = result.opac(idx2, wave);
+                emis += eta_s;
+                opac += chi_s;
+                consider_variance = consider_variance || (chi_s * ds) > opacity_threshold;
+                chi_s += FP(1e-15);
+                eta_s += FP(1e-15);
+                m1_chi += std::log(chi_s * ds);
+                m2_chi += square(std::log(chi_s * ds));
+                m1_eta += std::log(eta_s * ds);
+                m2_eta += square(std::log(eta_s * ds));
+
+                eta_s = result.emis(idx3, wave);
+                chi_s = result.opac(idx3, wave);
+                emis += eta_s;
+                opac += chi_s;
+                consider_variance = consider_variance || (chi_s * ds) > opacity_threshold;
+                chi_s += FP(1e-15);
+                eta_s += FP(1e-15);
+                m1_chi += std::log(chi_s * ds);
+                m2_chi += square(std::log(chi_s * ds));
+                m1_eta += std::log(eta_s * ds);
+                m2_eta += square(std::log(eta_s * ds));
+
+                emis *= FP(0.25);
+                opac *= FP(0.25);
+                m1_chi *= FP(0.25);
+                m2_chi *= FP(0.25);
+                m1_eta *= FP(0.25);
+                m2_eta *= FP(0.25);
+
+                bool do_increment = true;
+                if (consider_variance) {
+                    // index of dispersion D[x] = Var[x] / Mean[x] = (M_2[x] - M_1[x]^2) / M_1[x] = M_2[x] / M_1[x] - M_1[x]
+                    fp_t D_chi = std::abs(m2_chi / m1_chi - m1_chi); // due to the log, this often negative.
+                    if (m2_chi == FP(0.0)) {
+                        D_chi = FP(0.0);
+                    }
+                    fp_t D_eta = std::abs(m2_eta / m1_eta - m1_eta);
+                    if (m2_eta == FP(0.0)) {
+                        D_eta = FP(0.0);
+                    }
+                    // Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+                    // printf("tile: %d, %d, vars: %e, %e\n %e, %e | %e, %e\n-------\n", tile_coord.x, tile_coord.z, D_chi, D_eta, m1_chi, m2_chi, m1_eta, m2_eta);
+                    if (D_chi > variance_threshold || D_eta > variance_threshold) {
+                        // printf("tile: %d, %d: false\n", tile_coord.x, tile_coord.z);
+                        do_increment = false;
+                    }
+                }
+
+                // NOTE(cmo): This is coming from many threads of a warp
+                // simultaneously, which isn't great. If it's a bottleneck,
+                // ballot across threads, do a popcount, and increment from one
+                // thread.
+                if (do_increment) {
+                    yakl::atomicAdd(mippable_entries(tile_idx), 1);
+                }
+
+                result.emis(ks, wave) = emis;
+                result.opac(ks, wave) = opac;
+            }
+        );
+        yakl::fence();
+
+        parallel_for(
+            "Update mippable array",
+            block_map.loop_bounds().dim(0),
+            YAKL_LAMBDA (i64 tile_idx) {
+                MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+                const int level = level_m_1 + 1;
+                const i32 expected_entries = square(BLOCK_SIZE >> level) * wave_batch;
+                i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord.x, tile_coord.z);
+                i32 before = max_mip_level(flat_entry);
+                if (max_mip_level(flat_entry) == level) {
+                    max_mip_level(flat_entry) += mippable_entries(tile_idx) / expected_entries;
+                }
+                mippable_entries(tile_idx) = 0;
+            }
+        );
+        yakl::fence();
+    }
+
+    mr_block_map.lookup.pack_entries(max_mip_level);
+    return result;
+}
+
 #else
 #endif

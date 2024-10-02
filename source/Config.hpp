@@ -76,9 +76,12 @@ static_assert(
 );
 
 constexpr int BLOCK_SIZE = 16;
+constexpr int HYPER_BLOCK_SIZE = 2;
+constexpr int ENTRY_SIZE = 2;
 // constexpr bool BRANCH_RAYS = false;
 // constexpr bool BILINEAR_FIX = false;
 constexpr bool USE_MIPMAPS = true;
+constexpr bool USE_FLAT_MIPS = true;
 // constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
 // constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
 // constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 1, 1, 0};

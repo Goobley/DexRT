@@ -379,24 +379,43 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     sparse_stores.init(state.block_map.buffer_len(), wave_batch);
     sparse_stores.fill_emis_opac(state, casc_state);
     SparseMips mips = compute_mips(state, casc_state, sparse_stores);
+    SparseMip flat_mips = compute_flat_mips(state, casc_state, sparse_stores);
     SparseMip mip;
     yakl::fence();
+
     std::vector<Fp3d> eta_mips;
     std::vector<Fp3d> chi_mips;
-    std::vector<Fp4d> eta_a_mips;
-    std::vector<Fp4d> chi_a_mips;
+    yakl::Array<i32, 2, yakl::memDevice> max_mip_level("max mip level reshape", eta.extent(0) / BLOCK_SIZE, eta.extent(1) / BLOCK_SIZE);
+    // std::vector<Fp4d> eta_a_mips;
+    // std::vector<Fp4d> chi_a_mips;
     for (int mip_level=0; mip_level < mips.mips.size(); ++mip_level) {
         const auto& mip = mips.mips[mip_level];
         int vox_size = mip.vox_size;
         Fp3d emis_entry("eta", eta.extent(0) / vox_size, eta.extent(1) / vox_size, eta.extent(2));
         Fp3d opac_entry("chi", eta.extent(0) / vox_size, eta.extent(1) / vox_size, eta.extent(2));
-        Fp4d emisa_entry("eta_a", eta.extent(0) / vox_size, eta.extent(1) / vox_size, 8, eta.extent(2));
-        Fp4d opaca_entry("chi_a", eta.extent(0) / vox_size, eta.extent(1) / vox_size, 8, eta.extent(2));
+        // Fp4d emisa_entry("eta_a", eta.extent(0) / vox_size, eta.extent(1) / vox_size, 8, eta.extent(2));
+        // Fp4d opaca_entry("chi_a", eta.extent(0) / vox_size, eta.extent(1) / vox_size, 8, eta.extent(2));
 
         const auto& block_map = state.block_map;
+        const auto& mr_block_map = state.mr_block_map;
         auto bounds = block_map.loop_bounds(vox_size);
-        const auto& mip_emis = mip.emis;
-        const auto& mip_opac = mip.opac;
+        // const auto& mip_emis = mip.emis;
+        // const auto& mip_opac = mip.opac;
+        // parallel_for(
+        //     SimpleBounds<3>(
+        //         bounds.dim(0),
+        //         bounds.dim(1),
+        //         eta.extent(2)
+        //     ),
+        //     YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+        //         IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
+        //         i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+        //         Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+        //         emis_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_emis(ks, wave);
+        //         opac_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_opac(ks, wave);
+        //     }
+        // );
         parallel_for(
             SimpleBounds<3>(
                 bounds.dim(0),
@@ -404,35 +423,46 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
                 eta.extent(2)
             ),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
-                IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
-                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                i64 ks = idx_gen.loop_idx(mip_level, tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(mip_level, tile_idx, block_idx);
 
-                emis_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_emis(ks, wave);
-                opac_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_opac(ks, wave);
+                emis_entry(coord.z / vox_size, coord.x / vox_size, wave) = flat_mips.emis(ks, wave);
+                opac_entry(coord.z / vox_size, coord.x / vox_size, wave) = flat_mips.opac(ks, wave);
             }
         );
         parallel_for(
-            SimpleBounds<4>(
-                bounds.dim(0),
-                bounds.dim(1),
-                8,
-                eta.extent(2)
+            SimpleBounds<1>(
+                bounds.dim(0)
             ),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 dir_idx, i32 wave) {
-                IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
-                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+            YAKL_LAMBDA (i64 tile_idx) {
+                MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
 
-                emisa_entry(coord.z / vox_size, coord.x / vox_size, dir_idx, wave) = mip.aniso_emis(ks, dir_idx, wave);
-                opaca_entry(coord.z / vox_size, coord.x / vox_size, dir_idx, wave) = mip.aniso_opac(ks, dir_idx, wave);
+                max_mip_level(tile_coord.z, tile_coord.x) = mr_block_map.lookup.get(tile_coord.x, tile_coord.z);
             }
         );
+        // parallel_for(
+        //     SimpleBounds<4>(
+        //         bounds.dim(0),
+        //         bounds.dim(1),
+        //         8,
+        //         eta.extent(2)
+        //     ),
+        //     YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 dir_idx, i32 wave) {
+        //         IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
+        //         i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+        //         Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+        //         emisa_entry(coord.z / vox_size, coord.x / vox_size, dir_idx, wave) = mip.aniso_emis(ks, dir_idx, wave);
+        //         opaca_entry(coord.z / vox_size, coord.x / vox_size, dir_idx, wave) = mip.aniso_opac(ks, dir_idx, wave);
+        //     }
+        // );
         yakl::fence();
         eta_mips.push_back(emis_entry);
         chi_mips.push_back(opac_entry);
-        eta_a_mips.push_back(emisa_entry);
-        chi_a_mips.push_back(opaca_entry);
+        // eta_a_mips.push_back(emisa_entry);
+        // chi_a_mips.push_back(opaca_entry);
     }
     yakl::SimpleNetCDF nc;
     nc.create("mip_data.nc", yakl::NETCDF_MODE_REPLACE);
@@ -441,9 +471,10 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         std::string xn = fmt::format("x{}", mip_level);
         nc.write(eta_mips[mip_level], fmt::format("emis_{}", mip_level), {zn, xn, "wave"});
         nc.write(chi_mips[mip_level], fmt::format("opac_{}", mip_level), {zn, xn, "wave"});
-        nc.write(eta_a_mips[mip_level], fmt::format("emis_anis_{}", mip_level), {zn, xn, "dir", "wave"});
-        nc.write(chi_a_mips[mip_level], fmt::format("opac_anis_{}", mip_level), {zn, xn, "dir", "wave"});
+        // nc.write(eta_a_mips[mip_level], fmt::format("emis_anis_{}", mip_level), {zn, xn, "dir", "wave"});
+        // nc.write(chi_a_mips[mip_level], fmt::format("opac_anis_{}", mip_level), {zn, xn, "dir", "wave"});
     }
+    nc.write(max_mip_level, "max_mip_level", {"z_tiles", "x_tiles"});
     nc.close();
 
 
@@ -462,6 +493,10 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         .dir_by_dir = DIR_BY_DIR
     });
     constexpr int RcStorage = RC_flags_storage();
+
+    if constexpr (USE_FLAT_MIPS) {
+        mip = flat_mips;
+    }
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
@@ -470,7 +505,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
             .la_end=la_end,
             .subset_idx=subset_idx
         };
-        if constexpr (USE_MIPMAPS) {
+        if constexpr (USE_MIPMAPS && !USE_FLAT_MIPS) {
             mip = mips.mips[MIP_LEVEL[casc_state.num_cascades]];
         }
         cascade_i_25d<RcModeBc>(
@@ -482,7 +517,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         );
         yakl::fence();
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 0; --casc_idx) {
-            if constexpr (USE_MIPMAPS) {
+            if constexpr (USE_MIPMAPS && !USE_FLAT_MIPS) {
                 mip = mips.mips[MIP_LEVEL[casc_idx]];
             }
             cascade_i_25d<RcModeNoBc>(

@@ -20,6 +20,7 @@ struct State {
     GivenEmisOpac given_state;
     Atmosphere atmos;
     BlockMap<BLOCK_SIZE> block_map;
+    MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE> mr_block_map;
     InclQuadrature incl_quad;
     AtomicData<fp_t, yakl::memDevice> adata;
     std::vector<CompAtom<fp_t, yakl::memDevice>> atoms;

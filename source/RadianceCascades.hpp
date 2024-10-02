@@ -14,8 +14,10 @@ struct RaymarchParams {
     fp_t incl_weight;
     int la;
     vec3 offset;
+    int max_mip_to_sample;
     const yakl::Array<bool, 2, yakl::memDevice>& active;
     const BlockMap<BLOCK_SIZE>& block_map;
+    const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const SparseMip& mip;
     const DynamicState& dyn_state;
 };
@@ -34,8 +36,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 ) {
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri;
-    if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>
-        || std::is_same_v<DynamicState, DexEmpty>) {
+    if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
         ri = two_level_dda_raymarch_2d<RcMode, Bc>(
             Raymarch2dArgs<Bc, DynamicState>{
                 .casc_state_bc = casc_state,
@@ -46,8 +47,29 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                 .wave = this_probe.wave,
                 .la = params.la,
                 .offset = params.offset,
+                .max_mip_to_sample = params.max_mip_to_sample,
                 .active = params.active,
                 .block_map = params.block_map,
+                .mr_block_map = params.mr_block_map,
+                .mip = params.mip,
+                .dyn_state = params.dyn_state
+            }
+        );
+    } else if constexpr (std::is_same_v<DynamicState, DexEmpty>) {
+        ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
+            Raymarch2dArgs<Bc, DynamicState>{
+                .casc_state_bc = casc_state,
+                .ray = ray,
+                .distance_scale = params.distance_scale,
+                .incl = params.incl,
+                .incl_weight = params.incl_weight,
+                .wave = this_probe.wave,
+                .la = params.la,
+                .offset = params.offset,
+                .max_mip_to_sample = params.max_mip_to_sample,
+                .active = params.active,
+                .block_map = params.block_map,
+                .mr_block_map = params.mr_block_map,
                 .mip = params.mip,
                 .dyn_state = params.dyn_state
             }
@@ -803,7 +825,8 @@ void cascade_i_25d(
         spatial_bounds = probe_space_lookup.extent(0);
     }
 
-    const auto& block_map = state.block_map;
+    JasUnpack(state, block_map, mr_block_map);
+    const int max_mip_to_sample = MIP_LEVEL[cascade_idx];
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());
     parallel_for(
@@ -869,8 +892,10 @@ void cascade_i_25d(
                     .incl_weight = incl_quad.wmuy(theta_idx),
                     .la = la,
                     .offset = offset,
+                    .max_mip_to_sample = max_mip_to_sample,
                     .active = active,
                     .block_map = block_map,
+                    .mr_block_map = mr_block_map,
                     .mip = mip,
                     .dyn_state = dyn_state
                 };
