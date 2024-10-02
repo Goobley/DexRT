@@ -7,6 +7,159 @@
 #include "EmisOpac.hpp"
 #include "Atmosphere.hpp"
 
+struct FlatVelocity {
+    Fp1d vx;
+    Fp1d vy;
+    Fp1d vz;
+};
+
+inline void compute_min_max_vel(
+    const State& state,
+    const CascadeCalcSubset& subset,
+    i32 mip_level,
+    const FlatVelocity& vels,
+    const Fp1d& min_vel,
+    const Fp1d& max_vel
+) {
+    min_vel = FP(1e8);
+    max_vel = -FP(1e8);
+    yakl::fence();
+
+    // TODO(cmo): This needs to support flat mipped velocity arrays.
+    // Handle min and max vel being the length of the mip, or of the mip chain.
+    // Compare with mr_block_map.buffer_len and block_map.buffer_len(1 << mip_level)
+    // Exception if neither
+
+    constexpr i32 RcMode = RC_flags_storage();
+    CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
+    CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
+
+    JasUnpack(state, incl_quad, atmos, block_map, mr_block_map);
+
+    assert(min_vel.extent(0) == max_vel.extent(0));
+    i64 vel_len = min_vel.extent(0);
+    i64 vel_idx_offset = 0;
+    // NOTE(cmo): Handle case of velocity arrays being length of requested mip
+    if (vel_len == block_map.buffer_len(1 << mip_level)) {
+        for (int i = 0; i < mip_level; ++i) {
+            vel_idx_offset -= block_map.buffer_len(1 << i);
+        }
+    } else if (vel_len != mr_block_map.buffer_len()) {
+        // NOTE(cmo): If not the length of current mip, or all mips, throw
+        throw std::runtime_error("Unexpected size in min/max vel calculation");
+    }
+
+    parallel_for(
+        "Min/Max Vel",
+        block_map.loop_bounds(1 << mip_level),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+            MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+            i64 ks = idx_gen.loop_idx(mip_level, tile_idx, block_idx);
+
+            auto vec_norm = [] (vec3 v) -> fp_t {
+                return std::sqrt(square(v(0)) + square(v(1))  + square(v(2)));
+            };
+            auto dot_vecs = [] (vec3 a, vec3 b) -> fp_t {
+                fp_t acc = FP(0.0);
+                for (int i = 0; i < 3; ++i) {
+                    acc += a(i) * b(i);
+                }
+                return acc;
+            };
+
+            vec3 vel;
+            // NOTE(cmo): Because we invert the x and z of the view ray when
+            // tracing, so invert those in the velocity for this
+            // calculation.
+            vel(0) = -vels.vx(ks);
+            vel(1) = -vels.vy(ks);
+            vel(2) = -vels.vz(ks);
+            const fp_t vel_norm = vec_norm(vel);
+            vec3 vel_dir = vel / vel_norm;
+            vec3 opp_vel_dir;
+            opp_vel_dir(0) = -vel_dir(0);
+            opp_vel_dir(1) = -vel_dir(1);
+            opp_vel_dir(2) = -vel_dir(2);
+            vec2 vel_angs = dir_to_angs(vel_dir);
+            vec2 opp_vel_angs = dir_to_angs(opp_vel_dir);
+
+            fp_t vmin = FP(1e6);
+            fp_t vmax = FP(-1e6);
+
+            auto extra_tests = [&vmin, &vmax, &vel, dot_vecs] (vec2 angles, const SphericalAngularRange& range) {
+                auto in_range = [] (fp_t ang, vec2 range) -> int {
+                    bool r0 = (ang >= range(0));
+                    bool r1 = (ang <= range(1));
+                    return (r0 && r1);
+                };
+                const int theta_ir = in_range(angles(0), range.theta_range);
+                const int phi_ir = in_range(angles(1), range.phi_range);
+
+                if (theta_ir && phi_ir) {
+                    vec3 d = angs_to_dir(angles);
+                    const fp_t dot = dot_vecs(vel, d);
+                    vmin = std::min(vmin, dot);
+                    vmax = std::max(vmax, dot);
+                    return;
+                }
+
+                vec3 d0, d1;
+                if (theta_ir) {
+                    vec2 a;
+                    a(0) = angles(0);
+                    a(1) = range.phi_range(0);
+                    d0 = angs_to_dir(a);
+                    a(1) = range.phi_range(1);
+                    d1 = angs_to_dir(a);
+                } else if (phi_ir) {
+                    vec2 a;
+                    a(0) = range.theta_range(0);
+                    a(1) = angles(1);
+                    d0 = angs_to_dir(a);
+                    a(0) = range.theta_range(1);
+                    d1 = angs_to_dir(a);
+                } else {
+                    return;
+                }
+                const fp_t dot0 = dot_vecs(vel, d0);
+                const fp_t dot1 = dot_vecs(vel, d1);
+                vmin = std::min(vmin, std::min(dot0, dot1));
+                vmax = std::max(vmax, std::max(dot0, dot1));
+            };
+
+            for (
+                int phi_idx = ray_subset.start_flat_dirs;
+                phi_idx < ray_subset.num_flat_dirs + ray_subset.start_flat_dirs;
+                ++phi_idx
+            ) {
+                SphericalAngularRange ang_range = c0_flat_dir_angular_range(ray_set, incl_quad, phi_idx);
+                // NOTE(cmo): Check the 4 corners of the range
+                for (int i = 0; i < 4; ++i) {
+                    vec2 angs;
+                    angs(0) = ang_range.theta_range(i / 2);
+                    angs(1) = ang_range.phi_range(i % 2);
+
+                    vec3 d = angs_to_dir(angs);
+                    const fp_t dot = dot_vecs(vel, d);
+                    vmin = std::min(vmin, dot);
+                    vmax = std::max(vmax, dot);
+                }
+
+                // NOTE(cmo): Do the extra tests
+                extra_tests(vel_angs, ang_range);
+                extra_tests(opp_vel_angs, ang_range);
+            }
+
+            vmin -= FP(0.02) * std::abs(vmin);
+            vmax += FP(0.02) * std::abs(vmax);
+            const i64 storage_idx = ks + vel_idx_offset;
+            min_vel(storage_idx) = vmin;
+            max_vel(storage_idx) = vmax;
+        }
+    );
+    yakl::fence();
+}
+
 struct DirectionalEmisOpacInterp {
     Fp4d emis_opac_vel; // [k_active, vel, eta(0)/chi(1), wave]
     Fp1d vel_start; // [k_active]
@@ -28,143 +181,23 @@ struct DirectionalEmisOpacInterp {
     ) const {
         Fp1d max_vel("max_vel", emis_opac_vel.extent(0));
         Fp1d min_vel("min_vel", emis_opac_vel.extent(0));
-        // NOTE(cmo): Relativistic flows should be fast enough!
-        max_vel = -FP(1e8);
-        min_vel = FP(1e8);
-        yakl::fence();
 
-        const int num_cascades = casc_state.num_cascades;
-        const int cascade_idx = 0;
-        CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
-        CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
-
-        // i64 spatial_bounds = ray_subset.num_probes(1) * ray_subset.num_probes(0);
-        // yakl::Array<i32, 2, yakl::memDevice> probe_space_lookup;
-        // const bool sparse_calc = state.config.sparse_calculation;
-        // if (sparse_calc) {
-        //     probe_space_lookup = casc_state.probes_to_compute[0];
-        //     spatial_bounds = probe_space_lookup.extent(0);
-        // }
         assert(emis_opac_vel.extent(0) == state.block_map.buffer_len() && "Sparse sizes don't match");
         const auto& incl_quad = state.incl_quad;
         const auto& atmos = state.atmos;
         // const auto& active_map = state.active_map;
         const auto& block_map = state.block_map;
 
-        parallel_for(
-            "Min/Max Vel",
-            block_map.loop_bounds(),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
-                IndexGen<BLOCK_SIZE> idx_gen(block_map);
-                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-                int u = coord.x;
-                int v = coord.z;
-
-                auto vec_norm = [] (vec3 v) -> fp_t {
-                    return std::sqrt(square(v(0)) + square(v(1))  + square(v(2)));
-                };
-                auto dot_vecs = [] (vec3 a, vec3 b) -> fp_t {
-                    fp_t acc = FP(0.0);
-                    for (int i = 0; i < 3; ++i) {
-                        acc += a(i) * b(i);
-                    }
-                    return acc;
-                };
-
-                vec3 vel;
-                // NOTE(cmo): Because we invert the x and z of the view ray when
-                // tracing, so invert those in the velocity for this
-                // calculation.
-                vel(0) = -atmos.vx(v, u);
-                vel(1) = -atmos.vy(v, u);
-                vel(2) = -atmos.vz(v, u);
-                const fp_t vel_norm = vec_norm(vel);
-                vec3 vel_dir = vel / vel_norm;
-                vec3 opp_vel_dir;
-                opp_vel_dir(0) = -vel_dir(0);
-                opp_vel_dir(1) = -vel_dir(1);
-                opp_vel_dir(2) = -vel_dir(2);
-                vec2 vel_angs = dir_to_angs(vel_dir);
-                vec2 opp_vel_angs = dir_to_angs(opp_vel_dir);
-
-                fp_t vmin = FP(1e6);
-                fp_t vmax = FP(-1e6);
-
-                auto extra_tests = [&vmin, &vmax, &vel, dot_vecs] (vec2 angles, const SphericalAngularRange& range) {
-                    auto in_range = [] (fp_t ang, vec2 range) -> int {
-                        bool r0 = (ang >= range(0));
-                        bool r1 = (ang <= range(1));
-                        return (r0 && r1);
-                    };
-                    const int theta_ir = in_range(angles(0), range.theta_range);
-                    const int phi_ir = in_range(angles(1), range.phi_range);
-
-                    if (theta_ir && phi_ir) {
-                        vec3 d = angs_to_dir(angles);
-                        const fp_t dot = dot_vecs(vel, d);
-                        vmin = std::min(vmin, dot);
-                        vmax = std::max(vmax, dot);
-                        return;
-                    }
-
-                    vec3 d0, d1;
-                    if (theta_ir) {
-                        vec2 a;
-                        a(0) = angles(0);
-                        a(1) = range.phi_range(0);
-                        d0 = angs_to_dir(a);
-                        a(1) = range.phi_range(1);
-                        d1 = angs_to_dir(a);
-                    } else if (phi_ir) {
-                        vec2 a;
-                        a(0) = range.theta_range(0);
-                        a(1) = angles(1);
-                        d0 = angs_to_dir(a);
-                        a(0) = range.theta_range(1);
-                        d1 = angs_to_dir(a);
-                    } else {
-                        return;
-                    }
-                    const fp_t dot0 = dot_vecs(vel, d0);
-                    const fp_t dot1 = dot_vecs(vel, d1);
-                    vmin = std::min(vmin, std::min(dot0, dot1));
-                    vmax = std::max(vmax, std::max(dot0, dot1));
-                };
-
-                for (
-                    int phi_idx = ray_subset.start_flat_dirs;
-                    phi_idx < ray_subset.num_flat_dirs + ray_subset.start_flat_dirs;
-                    ++phi_idx
-                ) {
-                    SphericalAngularRange ang_range = c0_flat_dir_angular_range(ray_set, incl_quad, phi_idx);
-                    // NOTE(cmo): Check the 4 corners of the range
-                    for (int i = 0; i < 4; ++i) {
-                        vec2 angs;
-                        angs(0) = ang_range.theta_range(i / 2);
-                        angs(1) = ang_range.phi_range(i % 2);
-
-                        vec3 d = angs_to_dir(angs);
-                        const fp_t dot = dot_vecs(vel, d);
-                        vmin = std::min(vmin, dot);
-                        vmax = std::max(vmax, dot);
-                    }
-
-                    // NOTE(cmo): Do the extra tests
-                    extra_tests(vel_angs, ang_range);
-                    extra_tests(opp_vel_angs, ang_range);
-                }
-
-                vmin -= FP(0.02) * std::abs(vmin);
-                vmax += FP(0.02) * std::abs(vmax);
-                const i64 storage_idx = ks;
-                min_vel(storage_idx) = vmin;
-                max_vel(storage_idx) = vmax;
-            }
-        );
-        yakl::fence();
+        FlatVelocity vels{
+            .vx = atmos.vx,
+            .vy = atmos.vy,
+            .vz = atmos.vz
+        };
+        compute_min_max_vel(state, subset, 0, vels, min_vel, max_vel);
 
         int wave_batch = subset.la_end - subset.la_start;
+        CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
+        CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
         wave_batch = std::min(wave_batch, ray_subset.wave_batch);
 
         JasUnpack((*this), emis_opac_vel, vel_start, vel_step);
@@ -190,25 +223,11 @@ struct DirectionalEmisOpacInterp {
                 wave_batch
             ),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int vel_idx, int wave) {
-                // int u, v;
-                // if (sparse_calc) {
-                //     u = probe_space_lookup(ks, 0);
-                //     v = probe_space_lookup(ks, 1);
-                // } else {
-                //     u = ks % ray_set.num_probes(0);
-                //     v = ks / ray_set.num_probes(0);
-                // }
                 IndexGen<BLOCK_SIZE> idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
                 int u = coord.x;
                 int v = coord.z;
-                // if (!dynamic_opac(v, u, wave)) {
-                //     return;
-                // }
-                // if (block_idx == 0 && vel_idx == 0 && wave == 0) {
-                //     printf("%d, %d\n", u, v);
-                // }
 
                 const int kf = v * atmos.temperature.extent(1) + u;
                 const fp_t vmin = min_vel(ks);
