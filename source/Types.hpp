@@ -101,8 +101,6 @@ struct CascadeState {
     std::vector<Fp1d> i_cascades;
     std::vector<Fp1d> tau_cascades;
     std::vector<yakl::Array<i32, 2, yakl::memDevice>> probes_to_compute; // [n, 2 (u, v)]
-    Fp3d eta; // [z, x, wave]
-    Fp3d chi; // [z, x, wave]
 };
 
 struct DeviceCascadeState {
@@ -112,8 +110,6 @@ struct DeviceCascadeState {
     Fp1d cascade_tau;
     FpConst1d upper_I;
     FpConst1d upper_tau;
-    Fp3d eta; // [z, x, wave]
-    Fp3d chi; // [z, x, wave]
     Fp1d alo; /// [z, x, phi, wave, theta], but flattened. Index using Cascade operators (probe_lin_index) -- you need to fetch intensity at the same time anyway.
 };
 

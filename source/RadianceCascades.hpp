@@ -5,20 +5,18 @@
 #include "BoundaryDispatch.hpp"
 #include "RayMarching.hpp"
 #include "Atmosphere.hpp"
-#include "MiscSparseStorage.hpp"
 
 template <typename DynamicState>
 struct RaymarchParams {
-    fp_t distance_scale;
-    fp_t incl;
+    fp_t distance_scale; // [m]
+    fp_t incl; // cos(theta) - polar
     fp_t incl_weight;
     int la;
-    vec3 offset;
+    vec3 offset; // (0,0,0) corner offset from (0,0,0) in m
     int max_mip_to_sample;
-    const yakl::Array<bool, 2, yakl::memDevice>& active;
     const BlockMap<BLOCK_SIZE>& block_map;
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
-    const SparseMip& mip;
+    const MultiResMipChain& mip_chain;
     const DynamicState& dyn_state;
 };
 
@@ -36,26 +34,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 ) {
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri;
-    if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
-        ri = two_level_dda_raymarch_2d<RcMode, Bc>(
-            Raymarch2dArgs<Bc, DynamicState>{
-                .casc_state_bc = casc_state,
-                .ray = ray,
-                .distance_scale = params.distance_scale,
-                .incl = params.incl,
-                .incl_weight = params.incl_weight,
-                .wave = this_probe.wave,
-                .la = params.la,
-                .offset = params.offset,
-                .max_mip_to_sample = params.max_mip_to_sample,
-                .active = params.active,
-                .block_map = params.block_map,
-                .mr_block_map = params.mr_block_map,
-                .mip = params.mip,
-                .dyn_state = params.dyn_state
-            }
-        );
-    } else if constexpr (std::is_same_v<DynamicState, DexEmpty>) {
+    if constexpr (std::is_same_v<DynamicState, DexEmpty> || std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
         ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
             Raymarch2dArgs<Bc, DynamicState>{
                 .casc_state_bc = casc_state,
@@ -67,10 +46,9 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                 .la = params.la,
                 .offset = params.offset,
                 .max_mip_to_sample = params.max_mip_to_sample,
-                .active = params.active,
                 .block_map = params.block_map,
                 .mr_block_map = params.mr_block_map,
-                .mip = params.mip,
+                .mip_chain = params.mip_chain,
                 .dyn_state = params.dyn_state
             }
         );
@@ -85,9 +63,8 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                 .wave = this_probe.wave,
                 .la = params.la,
                 .offset = params.offset,
-                .active = params.active,
                 .block_map = params.block_map,
-                .mip = params.mip,
+                .mip_chain = params.mip_chain,
                 .dyn_state = params.dyn_state
             }
         );
@@ -683,10 +660,7 @@ DynamicState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
-    const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const BlockMap<BLOCK_SIZE>& block_map,
-    const SparseMip& mip
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
 ) {
     return DynamicState{};
 }
@@ -701,10 +675,7 @@ Raymarch2dDynamicState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
-    const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const BlockMap<BLOCK_SIZE>& block_map,
-    const SparseMip& mip
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
@@ -733,10 +704,7 @@ Raymarch2dDynamicInterpState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
-    const yakl::Array<i64, 2, yakl::memDevice>& active_map,
-    const BlockMap<BLOCK_SIZE>& block_map,
-    const SparseMip& mip
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
@@ -746,8 +714,6 @@ Raymarch2dDynamicInterpState get_dyn_state(
 
     return Raymarch2dDynamicInterpState{
         .mu = mu,
-        .block_map = block_map,
-        .mip=mip
     };
 }
 
@@ -757,7 +723,7 @@ void cascade_i_25d(
     const CascadeState& casc_state,
     int cascade_idx,
     const CascadeCalcSubset& subset,
-    const SparseMip& mip = SparseMip()
+    const MultiResMipChain& mip_chain = MultiResMipChain()
 ) {
     JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac, active, active_map);
     JasUnpack(subset, la_start, la_end, subset_idx);
@@ -787,9 +753,7 @@ void cascade_i_25d(
         .cascade_I = i_cascade_i,
         .cascade_tau = tau_cascade_i,
         .upper_I = i_cascade_ip,
-        .upper_tau = tau_cascade_ip,
-        .eta = casc_state.eta,
-        .chi = casc_state.chi,
+        .upper_tau = tau_cascade_ip
     };
     if constexpr (compute_alo) {
         dev_casc_state.alo = state.alo;
@@ -833,14 +797,11 @@ void cascade_i_25d(
         "RC Loop",
         SimpleBounds<4>(
             spatial_bounds,
-            // dims.num_probes(1),
-            // dims.num_probes(0),
             ray_subset.num_flat_dirs / num_rays_per_texel,
             wave_batch,
             ray_subset.num_incl
         ),
         YAKL_LAMBDA (i64 k, /* int v, int u, */ int phi_idx, int wave, int theta_idx) {
-        // YAKL_LAMBDA (int phi_idx, int theta_idx, i64 k, int wave) {
             constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
             int u, v;
             if (sparse_calc) {
@@ -881,10 +842,7 @@ void cascade_i_25d(
                     adata,
                     profile,
                     flat_pops,
-                    dynamic_opac,
-                    active_map,
-                    block_map,
-                    mip
+                    dynamic_opac
                 );
                 RaymarchParams<DynamicState> params {
                     .distance_scale = atmos.voxel_scale,
@@ -893,10 +851,9 @@ void cascade_i_25d(
                     .la = la,
                     .offset = offset,
                     .max_mip_to_sample = max_mip_to_sample,
-                    .active = active,
                     .block_map = block_map,
                     .mr_block_map = mr_block_map,
-                    .mip = mip,
+                    .mip_chain = mip_chain,
                     .dyn_state = dyn_state
                 };
 

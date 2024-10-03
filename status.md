@@ -82,3 +82,12 @@ Formalising coordinate system
 - Storage is as [z, x] or [z, y, x]
 - These correspond to probes v, u in 2D, and w, v, u in 3D.
 - Indexing as wave typically implies the member of a batch, and la the index into the wavelength array
+
+
+Weird Issues
+============
+
+- Some array accesses, such as the BlockMap entries from MultiLevelDDA are
+triggering the YAKL "host array being accessed in a device kernel issues", but
+compute-sanitizer does not report an issue. This problem also occured when
+copying the mips out to 2d arrays for debugging.

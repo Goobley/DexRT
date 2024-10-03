@@ -8,7 +8,6 @@
 #include "EmisOpac.hpp"
 #include "BlockMap.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
-#include "MiscSparseStorage.hpp"
 #include "Mipmaps.hpp"
 #include <optional>
 
@@ -320,8 +319,6 @@ struct Raymarch2dDynamicState {
 
 struct Raymarch2dDynamicInterpState {
     vec3 mu;
-    const BlockMap<BLOCK_SIZE>& block_map;
-    const SparseMip& mip;
 };
 
 template <typename Bc, class DynamicState=DexEmpty>
@@ -335,10 +332,9 @@ struct Raymarch2dArgs {
     int la;
     vec3 offset;
     int max_mip_to_sample;
-    const yakl::Array<bool, 2, yakl::memDevice>& active;
     const BlockMap<BLOCK_SIZE>& block_map;
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
-    const SparseMip& mip;
+    const MultiResMipChain& mip_chain;
     const DynamicState& dyn_state;
 };
 
@@ -520,6 +516,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
 ) {
     static_assert(std::is_same_v<DynamicState, Raymarch2dDynamicInterpState> || std::is_same_v<DynamicState, DexEmpty>, "Only supporting interp state in block marcher");
     JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
+    JasUnpack(args, mip_chain);
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (RcMode & RC_DYNAMIC_INTERP);
 
@@ -565,16 +562,16 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
                 const auto& mu = dyn_state.mu;
                 const fp_t vel = (
-                    dyn_state.mip.vx(ks) * mu(0)
-                    + dyn_state.mip.vy(ks) * mu(1)
-                    + dyn_state.mip.vz(ks) * mu(2)
+                    mip_chain.vx(ks) * mu(0)
+                    + mip_chain.vy(ks) * mu(1)
+                    + mip_chain.vz(ks) * mu(2)
                 );
-                auto contrib = dyn_state.mip.dir_data.sample(ks, wave, vel);
+                auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
             } else {
-                eta_s = args.mip.emis(ks, wave);
-                chi_s = args.mip.opac(ks, wave) + FP(1e-15);
+                eta_s = mip_chain.emis(ks, wave);
+                chi_s = mip_chain.opac(ks, wave) + FP(1e-15);
             }
 
             // }

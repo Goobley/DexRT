@@ -45,18 +45,6 @@ inline CascadeState CascadeState_new(const CascadeStorage& c0, int num_cascades)
         }
     }
     result.num_cascades = num_cascades;
-    result.eta = Fp3d(
-        "eta",
-        c0.num_probes(1),
-        c0.num_probes(0),
-        c0.wave_batch
-    );
-    result.chi = Fp3d(
-        "chi",
-        c0.num_probes(1),
-        c0.num_probes(0),
-        c0.wave_batch
-    );
     return result;
 }
 

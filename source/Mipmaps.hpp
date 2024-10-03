@@ -5,10 +5,9 @@
 #include "State.hpp"
 #include "CascadeState.hpp"
 #include "BlockMap.hpp"
-#include "MiscSparseStorage.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
 
-struct MultiResMips {
+struct MultiResMipChain {
     Fp2d emis; // [ks, wave_batch]
     Fp2d opac; // [ks, wave_batch]
     DirectionalEmisOpacInterp dir_data;
@@ -51,6 +50,19 @@ struct MultiResMips {
         mippable_entries = 0;
         yakl::fence();
 
+        parallel_for(
+            "Set active blocks in mr_block_map",
+            SimpleBounds<1>(block_map.active_tiles.extent(0)),
+            YAKL_LAMBDA (i64 active_tile_idx) {
+                MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                i64 tile_idx = block_map.active_tiles(active_tile_idx);
+                Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+                i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord.x, tile_coord.z);
+                max_mip_level(flat_entry) = 1;
+            }
+        );
+        yakl::fence();
+
         // NOTE(cmo): First compute all the velocity and isotropic emis/opac mips
         for (int level_m_1 = 0; level_m_1 < max_mip_factor; ++level_m_1) {
             const i32 vox_size = (1 << (level_m_1 + 1));
@@ -59,7 +71,7 @@ struct MultiResMips {
             if (state.config.mode != DexrtMode::GivenFs) {
                 parallel_for(
                     "Compute vel mip",
-                    SimpleBounds<2>(bounds),
+                    SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
                     YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
                         MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
                         const i32 vox_size = (1 << (level_m_1 + 1));
@@ -231,14 +243,13 @@ struct MultiResMips {
 
             parallel_for(
                 "Update mippable array",
-                block_map.loop_bounds().dim(0),
+                SimpleBounds<1>(block_map.loop_bounds().dim(0)),
                 YAKL_LAMBDA (i64 tile_idx) {
                     MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
                     Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
                     const int level = level_m_1 + 1;
                     const i32 expected_entries = square(BLOCK_SIZE >> level) * wave_batch;
                     i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord.x, tile_coord.z);
-                    i32 before = max_mip_level(flat_entry);
                     if (max_mip_level(flat_entry) == level) {
                         max_mip_level(flat_entry) += mippable_entries(tile_idx) / expected_entries;
                     }

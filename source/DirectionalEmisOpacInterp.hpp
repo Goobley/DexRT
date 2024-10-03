@@ -177,6 +177,7 @@ struct DirectionalEmisOpacInterp {
         const State& state,
         const CascadeState& casc_state,
         const CascadeCalcSubset& subset,
+        const FlatVelocity& vels,
         const Fp3d& n_star
     ) const {
         Fp1d max_vel("max_vel", emis_opac_vel.extent(0));
@@ -188,11 +189,6 @@ struct DirectionalEmisOpacInterp {
         // const auto& active_map = state.active_map;
         const auto& block_map = state.block_map;
 
-        FlatVelocity vels{
-            .vx = atmos.vx,
-            .vy = atmos.vy,
-            .vz = atmos.vz
-        };
         compute_min_max_vel(state, subset, 0, vels, min_vel, max_vel);
 
         int wave_batch = subset.la_end - subset.la_start;
@@ -202,7 +198,6 @@ struct DirectionalEmisOpacInterp {
 
         JasUnpack((*this), emis_opac_vel, vel_start, vel_step);
         JasUnpack(state, adata, dynamic_opac, phi, pops);
-        JasUnpack(casc_state, eta, chi);
         const auto flatmos = flatten<const fp_t>(atmos);
         // NOTE(cmo): Was getting segfaults with ScalarLiveOuts
         Fp1d max_thermal_vel_frac("max_thermal_vel_frac", 1);

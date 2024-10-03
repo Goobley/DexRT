@@ -9,7 +9,6 @@
 #include "RcUtilsModes.hpp"
 #include "MergeToJ.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
-#include "MiscSparseStorage.hpp"
 #include "Mipmaps.hpp"
 
 void dynamic_compute_gamma(
@@ -222,12 +221,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     auto& pops = state.pops;
     auto& adata = state.adata;
     auto& dynamic_opac = state.dynamic_opac;
-    auto& eta = casc_state.eta;
-    auto& chi = casc_state.chi;
-
-    // if (!atmos.moving) {
-    //     return static_formal_sol_rc(state, casc_state, la_start, la_end);
-    // }
 
     const bool sparse_calc = state.config.sparse_calculation;
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
@@ -242,22 +235,30 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         assert(false && "Wavelength batch too big.");
     }
     int wave_batch = la_end - la_start;
+    MultiResMipChain mip_chain;
+    mip_chain.init(state, state.mr_block_map.buffer_len(), wave_batch);
 
     const auto flatmos = flatten<const fp_t>(atmos);
     auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
-    auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
-    auto flat_chi = chi.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
-    auto flat_dynamic_opac = dynamic_opac.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
+    auto flat_dynamic_opac = dynamic_opac.reshape<2>(
+        Dims(
+            dynamic_opac.extent(0) * dynamic_opac.extent(1),
+            dynamic_opac.extent(2)
+        )
+    );
     auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0) * state.active.extent(1)));
-    // NOTE(cmo): Compute emis/opac
+    JasUnpack(state, block_map);
+    auto bounds = block_map.loop_bounds();
     parallel_for(
         "Compute eta, chi",
-        SimpleBounds<2>(flatmos.temperature.extent(0), wave_batch),
-        YAKL_LAMBDA (int64_t k, int wave) {
-            if (sparse_calc && !flat_active(k)) {
-                return;
-            }
+        SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int wave) {
+            IndexGen<BLOCK_SIZE> idx_gen(block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+            i64 k = coord.z * atmos.temperature.extent(0) + coord.x;
+
             AtmosPointParams local_atmos;
             local_atmos.temperature = flatmos.temperature(k);
             local_atmos.ne = flatmos.ne(k);
@@ -295,61 +296,25 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                     .mode = mode
                 }
             );
-            flat_eta(k, wave) = result.eta;
-            flat_chi(k, wave) = result.chi;
+            mip_chain.emis(ks, wave) = result.eta;
+            mip_chain.opac(ks, wave) = result.chi;
+        }
+    );
+    parallel_for(
+        "Copy vels",
+        SimpleBounds<2>(bounds),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+            IndexGen<BLOCK_SIZE> idx_gen(block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+            i64 k = coord.z * atmos.temperature.extent(0) + coord.x;
+
+            mip_chain.vx(ks) = flatmos.vx(k);
+            mip_chain.vy(ks) = flatmos.vy(k);
+            mip_chain.vz(ks) = flatmos.vz(k);
         }
     );
     yakl::fence();
-
-    DirectionalEmisOpacInterp dir_interp;
-    SparseStores sparse_stores;
-    SparseMips mips;
-    if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
-        // i64 num_active_zones = flatmos.temperature.extent(0);
-        // if (sparse_calc) {
-        //     num_active_zones = casc_state.probes_to_compute[0].extent(0);
-        // }
-        i64 num_active_zones = state.block_map.buffer_len();
-        dir_interp = DirectionalEmisOpacInterp_new(num_active_zones, wave_batch);
-        sparse_stores.init(state.block_map.buffer_len(), wave_batch);
-        sparse_stores.fill(state, casc_state);
-
-        mips = compute_mips(state, casc_state, sparse_stores, dir_interp);
-        if (mips.mips.size() > 1) {
-            const auto& block_map = state.block_map;
-            auto& mip0 = mips.mips[0];
-            auto& mip1 = mips.mips[1];
-            parallel_for(
-                SimpleBounds<1>(1),
-                YAKL_LAMBDA (int thing) {
-                    IndexGen<BLOCK_SIZE> idx_gen_0(block_map);
-                    IndexGen<BLOCK_SIZE> idx_gen_1(block_map, 2);
-
-                    Coord2 coord{
-                        .x=360,
-                        .z=260
-                    };
-                    i64 idx0 = idx_gen_0.idx(coord.x, coord.z);
-                    i64 idx1 = idx_gen_1.idx(coord.x, coord.z);
-                    printf("%d, %d\n", i32(idx0), i32(idx1));
-                    printf(
-                        "[%e, %e, %e, %e] (%e), %e\n",
-                        atmos.vx(coord.z, coord.x),
-                        atmos.vx(coord.z, coord.x+1),
-                        atmos.vx(coord.z+1, coord.x),
-                        atmos.vx(coord.z+1, coord.x+1),
-                        FP(0.25) * (
-                            atmos.vx(coord.z, coord.x) +
-                            atmos.vx(coord.z, coord.x+1) +
-                            atmos.vx(coord.z+1, coord.x) +
-                            atmos.vx(coord.z+1, coord.x+1)
-                        ),
-                        mip1.vx(idx1)
-                    );
-                }
-            );
-        }
-    }
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = true,
@@ -387,35 +352,30 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             .la_end=la_end,
             .subset_idx=subset_idx
         };
-        if (dir_interp.emis_opac_vel.initialized()) {
-            dir_interp.fill<RcModeNoBc>(state, casc_state, subset, lte_scratch);
-            mips = compute_mips(state, casc_state, sparse_stores, dir_interp);
-        }
-        SparseMip mip;
-        if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
-            mip = mips.mips[MIP_LEVEL[casc_state.num_cascades]];
+        if (mip_chain.dir_data.emis_opac_vel.initialized()) {
+            FlatVelocity vels{
+                .vx = mip_chain.vx,
+                .vy = mip_chain.vy,
+                .vz = mip_chain.vz,
+            };
+            mip_chain.dir_data.fill<RcModeNoBc>(state, casc_state, subset, vels, lte_scratch);
+            mip_chain.compute_mips(state, subset);
         }
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,
             casc_state.num_cascades,
             subset,
-            mip
+            mip_chain
         );
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
-            if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
-                mip = mips.mips[MIP_LEVEL[casc_idx]];
-            }
             cascade_i_25d<RcModeNoBc>(
                 state,
                 casc_state,
                 casc_idx,
                 subset,
-                mip
+                mip_chain
             );
-        }
-        if constexpr (INTERPOLATE_DIRECTIONAL_OPACITY) {
-            mip = mips.mips[MIP_LEVEL[0]];
         }
         if (state.alo.initialized() && !lambda_iterate) {
             cascade_i_25d<RcModeAlo>(
@@ -423,7 +383,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 casc_state,
                 0,
                 subset,
-                mip
+                mip_chain
             );
         } else {
             cascade_i_25d<RcModeNoBc>(
@@ -431,7 +391,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 casc_state,
                 0,
                 subset,
-                mip
+                mip_chain
             );
         }
         if (state.alo.initialized()) {

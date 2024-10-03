@@ -189,170 +189,171 @@ void static_compute_gamma(
     yakl::fence();
 }
 
-void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
-    assert(state.config.mode == DexrtMode::Lte || state.config.mode == DexrtMode::NonLte);
-    auto& atmos = state.atmos;
-    auto& phi = state.phi;
-    auto& pops = state.pops;
-    auto& adata = state.adata;
-    auto& eta = casc_state.eta;
-    auto& chi = casc_state.chi;
+// void static_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
+//     assert(state.config.mode == DexrtMode::Lte || state.config.mode == DexrtMode::NonLte);
+//     auto& atmos = state.atmos;
+//     auto& phi = state.phi;
+//     auto& pops = state.pops;
+//     auto& adata = state.adata;
+//     auto& eta = casc_state.eta;
+//     auto& chi = casc_state.chi;
 
-    // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
-    // it, for now, trust the pool allocator
-    auto pops_dims = pops.get_dimensions();
-    Fp3d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1), pops_dims(2));
-    const bool sparse_calc = state.config.sparse_calculation;
+//     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
+//     // it, for now, trust the pool allocator
+//     auto pops_dims = pops.get_dimensions();
+//     Fp3d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1), pops_dims(2));
+//     const bool sparse_calc = state.config.sparse_calculation;
 
-    if (la_end == -1) {
-        la_end = la_start + 1;
-    }
-    if ((la_end - la_start) > WAVE_BATCH) {
-        assert(false && "Wavelength batch too big.");
-    }
-    int wave_batch = la_end - la_start;
+//     if (la_end == -1) {
+//         la_end = la_start + 1;
+//     }
+//     if ((la_end - la_start) > WAVE_BATCH) {
+//         assert(false && "Wavelength batch too big.");
+//     }
+//     int wave_batch = la_end - la_start;
 
-    auto flat_temperature = atmos.temperature.collapse();
-    auto flat_ne = atmos.ne.collapse();
-    auto flat_vturb = atmos.vturb.collapse();
-    auto flat_nhtot = atmos.nh_tot.collapse();
-    auto flat_nh0 = atmos.nh0.collapse();
-    auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
-    auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
-    auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
-    auto flat_chi = chi.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
-    auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0), state.active.extent(1)));
-    // NOTE(cmo): Compute emis/opac
-    parallel_for(
-        "Compute eta, chi",
-        SimpleBounds<2>(flat_temperature.extent(0), wave_batch),
-        YAKL_LAMBDA (int64_t k, int wave) {
-            if (sparse_calc && !flat_active(k)) {
-                return;
-            }
-            AtmosPointParams local_atmos;
-            local_atmos.temperature = flat_temperature(k);
-            local_atmos.ne = flat_ne(k);
-            local_atmos.vturb = flat_vturb(k);
-            local_atmos.nhtot = flat_nhtot(k);
-            local_atmos.nh0 = flat_nh0(k);
-            const int la = la_start + wave;
-            auto active_set = slice_active_set(adata, la);
-            auto active_cont = slice_active_cont_set(adata, la);
-            auto result = emis_opac(
-                EmisOpacState<fp_t>{
-                    .adata = adata,
-                    .profile = phi,
-                    .la = la_start + wave,
-                    .n = flat_pops,
-                    .n_star_scratch = flat_n_star,
-                    .k = k,
-                    .atmos = local_atmos,
-                    .active_set = active_set,
-                    .active_set_cont = active_cont
-                }
-            );
-            flat_eta(k, wave) = result.eta;
-            flat_chi(k, wave) = result.chi;
-        }
-    );
-    if (state.alo.initialized()) {
-        state.alo = FP(0.0);
-    }
-    yakl::fence();
-    constexpr int RcModeBc = RC_flags_pack(RcFlags{
-        .dynamic = false,
-        .preaverage = PREAVERAGE,
-        .sample_bc = true,
-        .compute_alo = false,
-        .dir_by_dir = DIR_BY_DIR,
-        .dynamic_interp = false
-    });
-    constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
-        .dynamic = false,
-        .preaverage = PREAVERAGE,
-        .sample_bc = false,
-        .compute_alo = false,
-        .dir_by_dir = DIR_BY_DIR,
-        .dynamic_interp = false
-    });
-    constexpr int RcModeAlo = RC_flags_pack(RcFlags{
-        .dynamic = false,
-        .preaverage = PREAVERAGE,
-        .sample_bc = false,
-        .compute_alo = true,
-        .dir_by_dir = DIR_BY_DIR,
-        .dynamic_interp = false
-    });
-    constexpr int RcStorage = RC_flags_storage();
+//     auto flat_temperature = atmos.temperature.collapse();
+//     auto flat_ne = atmos.ne.collapse();
+//     auto flat_vturb = atmos.vturb.collapse();
+//     auto flat_nhtot = atmos.nh_tot.collapse();
+//     auto flat_nh0 = atmos.nh0.collapse();
+//     auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+//     auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
+//     auto flat_eta = eta.reshape<2>(Dims(eta.extent(0) * eta.extent(1), eta.extent(2)));
+//     auto flat_chi = chi.reshape<2>(Dims(chi.extent(0) * chi.extent(1), chi.extent(2)));
+//     auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0), state.active.extent(1)));
+//     // NOTE(cmo): Compute emis/opac
+//     parallel_for(
+//         "Compute eta, chi",
+//         SimpleBounds<2>(flat_temperature.extent(0), wave_batch),
+//         YAKL_LAMBDA (int64_t k, int wave) {
+//             if (sparse_calc && !flat_active(k)) {
+//                 return;
+//             }
+//             AtmosPointParams local_atmos;
+//             local_atmos.temperature = flat_temperature(k);
+//             local_atmos.ne = flat_ne(k);
+//             local_atmos.vturb = flat_vturb(k);
+//             local_atmos.nhtot = flat_nhtot(k);
+//             local_atmos.nh0 = flat_nh0(k);
+//             const int la = la_start + wave;
+//             auto active_set = slice_active_set(adata, la);
+//             auto active_cont = slice_active_cont_set(adata, la);
+//             auto result = emis_opac(
+//                 EmisOpacState<fp_t>{
+//                     .adata = adata,
+//                     .profile = phi,
+//                     .la = la_start + wave,
+//                     .n = flat_pops,
+//                     .n_star_scratch = flat_n_star,
+//                     .k = k,
+//                     .atmos = local_atmos,
+//                     .active_set = active_set,
+//                     .active_set_cont = active_cont
+//                 }
+//             );
+//             flat_eta(k, wave) = result.eta;
+//             flat_chi(k, wave) = result.chi;
+//         }
+//     );
+//     if (state.alo.initialized()) {
+//         state.alo = FP(0.0);
+//     }
+//     yakl::fence();
+//     constexpr int RcModeBc = RC_flags_pack(RcFlags{
+//         .dynamic = false,
+//         .preaverage = PREAVERAGE,
+//         .sample_bc = true,
+//         .compute_alo = false,
+//         .dir_by_dir = DIR_BY_DIR,
+//         .dynamic_interp = false
+//     });
+//     constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
+//         .dynamic = false,
+//         .preaverage = PREAVERAGE,
+//         .sample_bc = false,
+//         .compute_alo = false,
+//         .dir_by_dir = DIR_BY_DIR,
+//         .dynamic_interp = false
+//     });
+//     constexpr int RcModeAlo = RC_flags_pack(RcFlags{
+//         .dynamic = false,
+//         .preaverage = PREAVERAGE,
+//         .sample_bc = false,
+//         .compute_alo = true,
+//         .dir_by_dir = DIR_BY_DIR,
+//         .dynamic_interp = false
+//     });
+//     constexpr int RcStorage = RC_flags_storage();
 
-    // NOTE(cmo): Compute RC FS
-    constexpr int num_subets = subset_tasks_per_cascade<RcStorage>();
-    for (int subset_idx = 0; subset_idx < num_subets; ++subset_idx) {
-        CascadeCalcSubset subset{
-            .la_start=la_start,
-            .la_end=la_end,
-            .subset_idx=subset_idx
-        };
-        cascade_i_25d<RcModeBc>(
-            state,
-            casc_state,
-            casc_state.num_cascades,
-            subset
-        );
-        yakl::fence();
-        for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
-            cascade_i_25d<RcModeNoBc>(
-                state,
-                casc_state,
-                casc_idx,
-                subset
-            );
-            yakl::fence();
-        }
-        if (state.alo.initialized() && !lambda_iterate) {
-            cascade_i_25d<RcModeAlo>(
-                state,
-                casc_state,
-                0,
-                subset
-            );
-        } else {
-            cascade_i_25d<RcModeNoBc>(
-                state,
-                casc_state,
-                0,
-                subset
-            );
-        }
-        yakl::fence();
-        if (state.alo.initialized()) {
-            // NOTE(cmo): Add terms to Gamma
-            if (lambda_iterate) {
-                state.alo = FP(0.0);
-                yakl::fence();
-            }
-            static_compute_gamma(
-                state,
-                casc_state,
-                lte_scratch,
-                subset
-            );
-        }
-        merge_c0_to_J(
-            casc_state.i_cascades[0],
-            state.c0_size,
-            state.J,
-            state.incl_quad,
-            la_start,
-            la_end
-        );
-        yakl::fence();
-    }
-}
+//     // NOTE(cmo): Compute RC FS
+//     constexpr int num_subets = subset_tasks_per_cascade<RcStorage>();
+//     for (int subset_idx = 0; subset_idx < num_subets; ++subset_idx) {
+//         CascadeCalcSubset subset{
+//             .la_start=la_start,
+//             .la_end=la_end,
+//             .subset_idx=subset_idx
+//         };
+//         cascade_i_25d<RcModeBc>(
+//             state,
+//             casc_state,
+//             casc_state.num_cascades,
+//             subset
+//         );
+//         yakl::fence();
+//         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
+//             cascade_i_25d<RcModeNoBc>(
+//                 state,
+//                 casc_state,
+//                 casc_idx,
+//                 subset
+//             );
+//             yakl::fence();
+//         }
+//         if (state.alo.initialized() && !lambda_iterate) {
+//             cascade_i_25d<RcModeAlo>(
+//                 state,
+//                 casc_state,
+//                 0,
+//                 subset
+//             );
+//         } else {
+//             cascade_i_25d<RcModeNoBc>(
+//                 state,
+//                 casc_state,
+//                 0,
+//                 subset
+//             );
+//         }
+//         yakl::fence();
+//         if (state.alo.initialized()) {
+//             // NOTE(cmo): Add terms to Gamma
+//             if (lambda_iterate) {
+//                 state.alo = FP(0.0);
+//                 yakl::fence();
+//             }
+//             static_compute_gamma(
+//                 state,
+//                 casc_state,
+//                 lte_scratch,
+//                 subset
+//             );
+//         }
+//         merge_c0_to_J(
+//             casc_state.i_cascades[0],
+//             state.c0_size,
+//             state.J,
+//             state.incl_quad,
+//             la_start,
+//             la_end
+//         );
+//         yakl::fence();
+//     }
+// }
 
 void static_formal_sol_given_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
     assert(state.config.mode == DexrtMode::GivenFs);
+    JasUnpack(state, block_map, mr_block_map);
 
     if (la_end == -1) {
         la_end = la_start + 1;
@@ -362,121 +363,23 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     }
     int wave_batch = la_end - la_start;
 
-    auto& eta = casc_state.eta;
-    auto& chi = casc_state.chi;
+    MultiResMipChain mip_chain;
+    mip_chain.init(state, mr_block_map.buffer_len(), wave_batch);
     auto& eta_store = state.given_state.emis;
     auto& chi_store = state.given_state.opac;
+    auto bounds = state.block_map.loop_bounds();
     parallel_for(
         "Copy eta, chi",
-        SimpleBounds<3>(eta.extent(0), eta.extent(1), wave_batch),
-        YAKL_LAMBDA (int z, int x, int wave) {
-            eta(z, x, wave) = eta_store(z, x, la_start + wave);
-            chi(z, x, wave) = chi_store(z, x, la_start + wave);
+        SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+            IndexGen<BLOCK_SIZE> idx_gen(block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+            mip_chain.emis(ks, wave) = eta_store(coord.z, coord.x, la_start + wave);
+            mip_chain.opac(ks, wave) = chi_store(coord.z, coord.x, la_start + wave);
         }
     );
     yakl::fence();
-    SparseStores sparse_stores;
-    sparse_stores.init(state.block_map.buffer_len(), wave_batch);
-    sparse_stores.fill_emis_opac(state, casc_state);
-    SparseMips mips = compute_mips(state, casc_state, sparse_stores);
-    SparseMip flat_mips = compute_flat_mips(state, casc_state, sparse_stores);
-    SparseMip mip;
-    yakl::fence();
-
-    std::vector<Fp3d> eta_mips;
-    std::vector<Fp3d> chi_mips;
-    yakl::Array<i32, 2, yakl::memDevice> max_mip_level("max mip level reshape", eta.extent(0) / BLOCK_SIZE, eta.extent(1) / BLOCK_SIZE);
-    // std::vector<Fp4d> eta_a_mips;
-    // std::vector<Fp4d> chi_a_mips;
-    for (int mip_level=0; mip_level < mips.mips.size(); ++mip_level) {
-        const auto& mip = mips.mips[mip_level];
-        int vox_size = mip.vox_size;
-        Fp3d emis_entry("eta", eta.extent(0) / vox_size, eta.extent(1) / vox_size, eta.extent(2));
-        Fp3d opac_entry("chi", eta.extent(0) / vox_size, eta.extent(1) / vox_size, eta.extent(2));
-        // Fp4d emisa_entry("eta_a", eta.extent(0) / vox_size, eta.extent(1) / vox_size, 8, eta.extent(2));
-        // Fp4d opaca_entry("chi_a", eta.extent(0) / vox_size, eta.extent(1) / vox_size, 8, eta.extent(2));
-
-        const auto& block_map = state.block_map;
-        const auto& mr_block_map = state.mr_block_map;
-        auto bounds = block_map.loop_bounds(vox_size);
-        // const auto& mip_emis = mip.emis;
-        // const auto& mip_opac = mip.opac;
-        // parallel_for(
-        //     SimpleBounds<3>(
-        //         bounds.dim(0),
-        //         bounds.dim(1),
-        //         eta.extent(2)
-        //     ),
-        //     YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
-        //         IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
-        //         i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-        //         Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-
-        //         emis_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_emis(ks, wave);
-        //         opac_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_opac(ks, wave);
-        //     }
-        // );
-        parallel_for(
-            SimpleBounds<3>(
-                bounds.dim(0),
-                bounds.dim(1),
-                eta.extent(2)
-            ),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
-                MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
-                i64 ks = idx_gen.loop_idx(mip_level, tile_idx, block_idx);
-                Coord2 coord = idx_gen.loop_coord(mip_level, tile_idx, block_idx);
-
-                emis_entry(coord.z / vox_size, coord.x / vox_size, wave) = flat_mips.emis(ks, wave);
-                opac_entry(coord.z / vox_size, coord.x / vox_size, wave) = flat_mips.opac(ks, wave);
-            }
-        );
-        parallel_for(
-            SimpleBounds<1>(
-                bounds.dim(0)
-            ),
-            YAKL_LAMBDA (i64 tile_idx) {
-                MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
-                Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
-
-                max_mip_level(tile_coord.z, tile_coord.x) = mr_block_map.lookup.get(tile_coord.x, tile_coord.z);
-            }
-        );
-        // parallel_for(
-        //     SimpleBounds<4>(
-        //         bounds.dim(0),
-        //         bounds.dim(1),
-        //         8,
-        //         eta.extent(2)
-        //     ),
-        //     YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 dir_idx, i32 wave) {
-        //         IndexGen<BLOCK_SIZE> idx_gen(block_map, vox_size);
-        //         i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-        //         Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-
-        //         emisa_entry(coord.z / vox_size, coord.x / vox_size, dir_idx, wave) = mip.aniso_emis(ks, dir_idx, wave);
-        //         opaca_entry(coord.z / vox_size, coord.x / vox_size, dir_idx, wave) = mip.aniso_opac(ks, dir_idx, wave);
-        //     }
-        // );
-        yakl::fence();
-        eta_mips.push_back(emis_entry);
-        chi_mips.push_back(opac_entry);
-        // eta_a_mips.push_back(emisa_entry);
-        // chi_a_mips.push_back(opaca_entry);
-    }
-    yakl::SimpleNetCDF nc;
-    nc.create("mip_data.nc", yakl::NETCDF_MODE_REPLACE);
-    for (int mip_level = 0; mip_level < mips.mips.size(); ++mip_level) {
-        std::string zn = fmt::format("z{}", mip_level);
-        std::string xn = fmt::format("x{}", mip_level);
-        nc.write(eta_mips[mip_level], fmt::format("emis_{}", mip_level), {zn, xn, "wave"});
-        nc.write(chi_mips[mip_level], fmt::format("opac_{}", mip_level), {zn, xn, "wave"});
-        // nc.write(eta_a_mips[mip_level], fmt::format("emis_anis_{}", mip_level), {zn, xn, "dir", "wave"});
-        // nc.write(chi_a_mips[mip_level], fmt::format("opac_anis_{}", mip_level), {zn, xn, "dir", "wave"});
-    }
-    nc.write(max_mip_level, "max_mip_level", {"z_tiles", "x_tiles"});
-    nc.close();
-
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = false,
@@ -494,9 +397,6 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     });
     constexpr int RcStorage = RC_flags_storage();
 
-    if constexpr (USE_FLAT_MIPS) {
-        mip = flat_mips;
-    }
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
@@ -505,27 +405,78 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
             .la_end=la_end,
             .subset_idx=subset_idx
         };
-        if constexpr (USE_MIPMAPS && !USE_FLAT_MIPS) {
-            mip = mips.mips[MIP_LEVEL[casc_state.num_cascades]];
+        mip_chain.compute_mips(state, subset);
+
+        std::vector<Fp3d> eta_mips;
+        std::vector<Fp3d> chi_mips;
+        yakl::Array<i32, 2, yakl::memDevice> max_mip_level("max mip level reshape", state.J.extent(1) / BLOCK_SIZE, state.J.extent(2) / BLOCK_SIZE);
+        // std::vector<Fp4d> eta_a_mips;
+        // std::vector<Fp4d> chi_a_mips;
+        for (int mip_level=0; mip_level <= state.mr_block_map.max_mip_level; ++mip_level) {
+            const int vox_size = (1 << mip_level);
+            Fp3d emis_entry("eta", state.J.extent(1) / vox_size, state.J.extent(2) / vox_size, wave_batch);
+            Fp3d opac_entry("chi", state.J.extent(1) / vox_size, state.J.extent(2) / vox_size, wave_batch);
+
+            const auto& block_map = state.block_map;
+            const auto& mr_block_map = state.mr_block_map;
+            auto bounds = block_map.loop_bounds(vox_size);
+            parallel_for(
+                SimpleBounds<3>(
+                    bounds.dim(0),
+                    bounds.dim(1),
+                    wave_batch
+                ),
+                YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+                    MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                    i64 ks = idx_gen.loop_idx(mip_level, tile_idx, block_idx);
+                    Coord2 coord = idx_gen.loop_coord(mip_level, tile_idx, block_idx);
+
+                    emis_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_chain.emis(ks, wave);
+                    opac_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_chain.opac(ks, wave);
+                }
+            );
+            parallel_for(
+                SimpleBounds<1>(
+                    bounds.dim(0)
+                ),
+                YAKL_LAMBDA (i64 tile_idx) {
+                    MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                    Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+
+                    max_mip_level(tile_coord.z, tile_coord.x) = mr_block_map.lookup.get(tile_coord.x, tile_coord.z);
+                }
+            );
+            yakl::fence();
+            eta_mips.push_back(emis_entry);
+            chi_mips.push_back(opac_entry);
         }
+        yakl::SimpleNetCDF nc;
+        // NOTE(cmo): Mips are being generated, but max_mip_level, i.e. mr_block_map not being filled
+        nc.create("mip_data.nc", yakl::NETCDF_MODE_REPLACE);
+        for (int mip_level = 0; mip_level < eta_mips.size(); ++mip_level) {
+            std::string zn = fmt::format("z{}", mip_level);
+            std::string xn = fmt::format("x{}", mip_level);
+            nc.write(eta_mips[mip_level], fmt::format("emis_{}", mip_level), {zn, xn, "wave"});
+            nc.write(chi_mips[mip_level], fmt::format("opac_{}", mip_level), {zn, xn, "wave"});
+        }
+        nc.write(max_mip_level, "max_mip_level", {"z_tiles", "x_tiles"});
+        nc.close();
+
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,
             casc_state.num_cascades,
             subset,
-            mip
+            mip_chain
         );
         yakl::fence();
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 0; --casc_idx) {
-            if constexpr (USE_MIPMAPS && !USE_FLAT_MIPS) {
-                mip = mips.mips[MIP_LEVEL[casc_idx]];
-            }
             cascade_i_25d<RcModeNoBc>(
                 state,
                 casc_state,
                 casc_idx,
                 subset,
-                mip
+                mip_chain
             );
             yakl::fence();
         }
