@@ -656,9 +656,9 @@ Raymarch2dDynamicState get_dyn_state(
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
-    mu(0) = ray.dir(0) * sin_theta;
-    mu(1) = incl;
-    mu(2) = ray.dir(1) * sin_theta;
+    mu(0) = -ray.dir(0) * sin_theta;
+    mu(1) = -incl;
+    mu(2) = -ray.dir(1) * sin_theta;
     return Raymarch2dDynamicState{
         .mu = mu,
         .active_set = slice_active_set(adata, la),
