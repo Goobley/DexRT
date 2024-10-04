@@ -257,7 +257,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            i64 k = coord.z * atmos.temperature.extent(0) + coord.x;
+            i64 k = coord.z * atmos.temperature.extent(1) + coord.x;
 
             AtmosPointParams local_atmos;
             local_atmos.temperature = flatmos.temperature(k);
@@ -307,7 +307,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            i64 k = coord.z * atmos.temperature.extent(0) + coord.x;
+            i64 k = coord.z * atmos.temperature.extent(1) + coord.x;
 
             mip_chain.vx(ks) = flatmos.vx(k);
             mip_chain.vy(ks) = flatmos.vy(k);

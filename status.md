@@ -55,6 +55,7 @@ Features/ToDo
 - [ ] PRD
 - [ ] Sparse VDB-like grid
 - [x] Optionally page J out to host memory (enabled by default)
+- [ ] Add method to IndexGenerators to generate the flat array index equivalent, we've messed that up enough.
 
 
 Ideas
