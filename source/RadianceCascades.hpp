@@ -789,7 +789,8 @@ void cascade_i_25d(
         spatial_bounds = probe_space_lookup.extent(0);
     }
 
-    JasUnpack(state, block_map, mr_block_map);
+    JasUnpack(state, mr_block_map);
+    const auto& block_map = mr_block_map.block_map;
     const int max_mip_to_sample = MIP_LEVEL[cascade_idx];
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());

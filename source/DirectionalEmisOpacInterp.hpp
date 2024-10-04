@@ -34,7 +34,8 @@ inline void compute_min_max_vel(
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
 
-    JasUnpack(state, incl_quad, atmos, block_map, mr_block_map);
+    JasUnpack(state, incl_quad, atmos, mr_block_map);
+    const auto& block_map = mr_block_map.block_map;
 
     assert(min_vel.extent(0) == max_vel.extent(0));
     i64 vel_len = min_vel.extent(0);
@@ -183,11 +184,11 @@ struct DirectionalEmisOpacInterp {
         Fp1d max_vel("max_vel", emis_opac_vel.extent(0));
         Fp1d min_vel("min_vel", emis_opac_vel.extent(0));
 
-        assert(emis_opac_vel.extent(0) == state.block_map.buffer_len() && "Sparse sizes don't match");
+        // assert(emis_opac_vel.extent(0) == state.block_map.buffer_len() && "Sparse sizes don't match");
         const auto& incl_quad = state.incl_quad;
         const auto& atmos = state.atmos;
         // const auto& active_map = state.active_map;
-        const auto& block_map = state.block_map;
+        const auto& block_map = state.mr_block_map.block_map;
 
         compute_min_max_vel(state, subset, 0, vels, min_vel, max_vel);
 
@@ -208,7 +209,7 @@ struct DirectionalEmisOpacInterp {
         auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
         auto flat_n_star = n_star.reshape<2>(Dims(n_star.extent(0), n_star.extent(1) * n_star.extent(2)));
 
-        auto block_bounds = state.block_map.loop_bounds();
+        auto block_bounds = block_map.loop_bounds();
         parallel_for(
             "Emis/Opac Samples",
             SimpleBounds<4>(

@@ -248,7 +248,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         )
     );
     auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0) * state.active.extent(1)));
-    JasUnpack(state, block_map);
+    const auto& block_map = state.mr_block_map.block_map;
     auto bounds = block_map.loop_bounds();
     parallel_for(
         "Compute eta, chi",

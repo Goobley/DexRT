@@ -353,7 +353,8 @@ void static_compute_gamma(
 
 void static_formal_sol_given_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
     assert(state.config.mode == DexrtMode::GivenFs);
-    JasUnpack(state, block_map, mr_block_map);
+    JasUnpack(state, mr_block_map);
+    const auto& block_map = mr_block_map.block_map;
 
     if (la_end == -1) {
         la_end = la_start + 1;
@@ -367,7 +368,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     mip_chain.init(state, mr_block_map.buffer_len(), wave_batch);
     auto& eta_store = state.given_state.emis;
     auto& chi_store = state.given_state.opac;
-    auto bounds = state.block_map.loop_bounds();
+    auto bounds = block_map.loop_bounds();
     parallel_for(
         "Copy eta, chi",
         SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
@@ -417,8 +418,6 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
             Fp3d emis_entry("eta", state.J.extent(1) / vox_size, state.J.extent(2) / vox_size, wave_batch);
             Fp3d opac_entry("chi", state.J.extent(1) / vox_size, state.J.extent(2) / vox_size, wave_batch);
 
-            const auto& block_map = state.block_map;
-            const auto& mr_block_map = state.mr_block_map;
             auto bounds = block_map.loop_bounds(vox_size);
             parallel_for(
                 SimpleBounds<3>(

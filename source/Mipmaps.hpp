@@ -30,7 +30,8 @@ struct MultiResMipChain {
 
     /// compute the mips from mip0 being stored in the start of these arrays. Will also update state.mr_block_map.
     void compute_mips(const State& state, const CascadeCalcSubset& subset) {
-        JasUnpack(state, block_map, mr_block_map);
+        JasUnpack(state, mr_block_map);
+        const auto& block_map = mr_block_map.block_map;
         JasUnpack((*this), vx, vy, vz, emis, opac, dir_data);
 
         i32 max_mip_factor = 0;

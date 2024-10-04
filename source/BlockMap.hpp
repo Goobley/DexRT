@@ -244,9 +244,9 @@ struct MultiLevelLookup {
     void init(const BlockMap& block_map) {
         num_x_tiles = block_map.num_x_tiles;
         num_z_tiles = block_map.num_z_tiles;
-        if (HYPER_BLOCK_SIZE > 0) {
-            num_x_tiles /= HYPER_BLOCK_SIZE;
-            num_z_tiles /= HYPER_BLOCK_SIZE;
+        if constexpr (HYPERBLOCK2x2) {
+            num_x_tiles /= 2;
+            num_z_tiles /= 2;
         }
         const i32 num_entries = block_map.num_x_tiles * block_map.num_z_tiles;
         const i32 storage_for_entries = (num_entries + packed_entries_per_u64 - 1) / packed_entries_per_u64;
@@ -255,13 +255,12 @@ struct MultiLevelLookup {
 
     YAKL_INLINE i32 flat_tile_index(i32 x, i32 z) const {
         i32 flat_idx;
-        if constexpr (HYPER_BLOCK_SIZE == 0) {
-            flat_idx = z * num_x_tiles + x;
-        } else {
-            static_assert(HYPER_BLOCK_SIZE == 2);
+        if constexpr (HYPERBLOCK2x2) {
             const i32 hyper_tile_idx = (z >> 1) * num_x_tiles + (x >> 1);
-            constexpr i32 hyper_tile_size = square(HYPER_BLOCK_SIZE);
+            constexpr i32 hyper_tile_size = 4;
             flat_idx = hyper_tile_idx * hyper_tile_size + ((z & 1) << 1) + (x & 1);
+        } else {
+            flat_idx = z * num_x_tiles + x;
         }
         return flat_idx;
     }
