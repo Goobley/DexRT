@@ -522,7 +522,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
     bool start_clipped;
-    MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(args.block_map, args.mr_block_map);
+    MRIdxGen idx_gen(args.mr_block_map);
     auto s = MultiLevelDDA<BLOCK_SIZE, ENTRY_SIZE>(idx_gen);
     const bool marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped);
     RadianceInterval<Alo> result{};

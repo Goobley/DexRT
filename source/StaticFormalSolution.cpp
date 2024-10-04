@@ -427,7 +427,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
                     wave_batch
                 ),
                 YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
-                    MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                    MRIdxGen idx_gen(mr_block_map);
                     i64 ks = idx_gen.loop_idx(mip_level, tile_idx, block_idx);
                     Coord2 coord = idx_gen.loop_coord(mip_level, tile_idx, block_idx);
 
@@ -440,7 +440,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
                     bounds.dim(0)
                 ),
                 YAKL_LAMBDA (i64 tile_idx) {
-                    MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+                    MRIdxGen idx_gen(mr_block_map);
                     Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
 
                     max_mip_level(tile_coord.z, tile_coord.x) = mr_block_map.lookup.get(tile_coord.x, tile_coord.z);

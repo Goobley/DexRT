@@ -87,7 +87,12 @@ Formalising coordinate system
 Weird Issues
 ============
 
-- Some array accesses, such as the BlockMap entries from MultiLevelDDA are
+[x] Some array accesses, such as the BlockMap entries from MultiLevelDDA are
 triggering the YAKL "host array being accessed in a device kernel issues", but
 compute-sanitizer does not report an issue. This problem also occured when
 copying the mips out to 2d arrays for debugging.
+    - This wasn't really a false positive, although the description was wrong.
+    mr_block_map was accessing block_map via a pointer, which was to the host
+    device, but the cuda compiler was optimising and pulling the device pointer
+    in block_map through, which was the only bit needed _unless_ the debug mode
+    was activated...

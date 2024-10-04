@@ -62,7 +62,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
             max_mip_level += MIPMAP_FACTORS[i];
         }
     }
-    state.mr_block_map.init(&state.block_map, max_mip_level);
+    state.mr_block_map.init(state.block_map, max_mip_level);
 
     state.phi = VoigtProfile<fp_t>(
         VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
@@ -184,7 +184,7 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
             max_mip_level += MIPMAP_FACTORS[i];
         }
     }
-    st->mr_block_map.init(&st->block_map, max_mip_level);
+    st->mr_block_map.init(st->block_map, max_mip_level);
 
 #ifdef DEXRT_SINGLE_PREC
     st->given_state.emis = eta.createDeviceCopy();

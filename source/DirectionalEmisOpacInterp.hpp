@@ -53,7 +53,7 @@ inline void compute_min_max_vel(
         "Min/Max Vel",
         block_map.loop_bounds(1 << mip_level),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
-            MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> idx_gen(block_map, mr_block_map);
+            MRIdxGen idx_gen(mr_block_map);
             i64 ks = idx_gen.loop_idx(mip_level, tile_idx, block_idx);
 
             auto vec_norm = [] (vec3 v) -> fp_t {

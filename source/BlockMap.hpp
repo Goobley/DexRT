@@ -349,12 +349,12 @@ struct MultiResBlockMap {
     static constexpr i32 max_storable_mip_level = (1 << ENTRY_SIZE);
     i32 max_mip_level;
     yakl::SArray<i64, 1, max_storable_mip_level> mip_offsets;
-    const BlockMap* block_map;
+    BlockMap block_map;
     MultiLevelLookup<ENTRY_SIZE> lookup;
 
-    void init(const BlockMap* block_map_, i32 max_mip_level_) {
+    void init(const BlockMap& block_map_, i32 max_mip_level_) {
         block_map = block_map_;
-        lookup.init(*block_map);
+        lookup.init(block_map);
         max_mip_level = max_mip_level_;
         if ((max_mip_level + 1) > max_storable_mip_level) {
             throw std::runtime_error("More mip levels requested than storable in packed data.");
@@ -363,12 +363,12 @@ struct MultiResBlockMap {
         i64 buffer_len_acc = 0;
         for (int i = 0; i < max_mip_level + 1; ++i) {
             mip_offsets(i) = buffer_len_acc;
-            buffer_len_acc += block_map->buffer_len(1 << i);
+            buffer_len_acc += block_map.buffer_len(1 << i);
         }
     }
 
     YAKL_INLINE i64 buffer_len() const {
-        return mip_offsets(max_mip_level) + block_map->buffer_len(1 << max_mip_level);
+        return mip_offsets(max_mip_level) + block_map.buffer_len(1 << max_mip_level);
     }
 };
 
@@ -386,6 +386,15 @@ struct IndexGen {
         tile_key({.x = -1, .z = -1}),
         tile_base_idx(),
         block_map(block_map_),
+        refined_size(refined_size_)
+    {}
+
+    template <u8 entry_size>
+    YAKL_INLINE
+    IndexGen(const MultiResBlockMap<BLOCK_SIZE, entry_size>& mr_block_map, i32 refined_size_=1) :
+        tile_key({.x = -1, .z = -1}),
+        tile_base_idx(),
+        block_map(mr_block_map.block_map),
         refined_size(refined_size_)
     {}
 
@@ -523,12 +532,11 @@ struct MultiLevelIndexGen {
 
     YAKL_INLINE
     MultiLevelIndexGen(
-        const BlockMap<BLOCK_SIZE>& block_map_,
         const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mip_block_map_
     ) :
         tile_key({.mip_level = -1, .x = -1, .z = -1}),
         tile_base_idx(),
-        block_map(block_map_),
+        block_map(mip_block_map_.block_map),
         mip_block_map(mip_block_map_)
     {}
 
@@ -621,8 +629,8 @@ struct MultiLevelIndexGen {
         }
 
         i32 tile_mip_level = i32(mip_block_map.lookup.get(tile_x, tile_z)) - 1;
-        bool result = tile_mip_level != -1;
-        if (result) {
+        bool sampleable = tile_mip_level != -1;
+        if (sampleable) {
             i64 tile_idx = block_map.lookup(tile_x, tile_z);
             tile_base_idx = compute_base_idx(tile_mip_level, tile_idx);
             tile_key = MultiLevelTileKey {
@@ -631,7 +639,7 @@ struct MultiLevelIndexGen {
                 .z = tile_z
             };
         }
-        return result;
+        return tile_mip_level;
     }
 
     YAKL_INLINE
@@ -752,6 +760,25 @@ struct RaySegment {
         }
         return result.intersects;
     }
+
+    /// Updates the origin to be ray(t) and the start/end t accordingly
+    YAKL_INLINE void update_origin(fp_t t) {
+        o = (*this)(t);
+        t0 -= t;
+        t1 -= t;
+    }
+
+    /// Computes t for a particular position. Does not verify if actually on the
+    /// line! Uses x unless dir(x) == 0, in which case it uses z
+    YAKL_INLINE fp_t compute_t(vec2 pos) {
+        fp_t t;
+        if (d(0) != FP(0.0)) {
+            t = (pos(0) - o(0)) * inv_d(0);
+        } else {
+            t = (pos(1) - o(1)) * inv_d(1);
+        }
+        return t;
+    }
 };
 
 
@@ -790,6 +817,7 @@ struct MultiLevelDDA {
         max_mip_level = max_mip_level_;
 
         constexpr fp_t eps = FP(1e-6);
+        ray.update_origin(ray.t0);
         vec2 end_pos = ray(ray.t1 - eps);
         vec2 start_pos = ray(ray.t0 + eps);
         curr_coord = round_down(start_pos);
@@ -823,12 +851,10 @@ struct MultiLevelDDA {
         }
         compute_axis_and_dt();
         // NOTE(cmo): If we didn't start in bounds, advance until we're in, and set the step size
-        bool was_in_loop = false;
         while (!in_bounds() || (in_bounds() && dt < FP(1e-6))) {
-            was_in_loop = true;
             next_intersection();
         }
-        update_mip_level(get_sample_level());
+        update_mip_level(get_sample_level(), true);
         return true;
     }
 
@@ -884,16 +910,24 @@ struct MultiLevelDDA {
         }
     }
 
-    YAKL_INLINE void update_mip_level(i32 new_mip_level) {
+    /// NOTE(cmo): With lock_to_block curr_coord is not updated based on t,
+    /// although curr_pos still uses this. In this instance the pos can _on the
+    /// boundary_ of the next block, but we really don't want to start out of
+    /// bounds... the ray can end up marginally (O(1e-6) * voxel_scale) larger
+    /// than correct.  This is mostly important for the initial call to this
+    /// from init.
+    YAKL_INLINE void update_mip_level(i32 new_mip_level, bool lock_to_block=false) {
         if (new_mip_level == current_mip_level) {
             return;
         }
         const i32 new_step_size = get_step_size(new_mip_level);
-
         current_mip_level = new_mip_level;
         step_size = new_step_size;
+
         vec2 curr_pos = ray(t);
-        curr_coord = round_down(curr_pos);
+        if (!lock_to_block) {
+            curr_coord = round_down(curr_pos);
+        }
         for (int ax = 0; ax < NUM_DIM; ++ax) {
             curr_coord(ax) = curr_coord(ax) & (~uint32_t(step_size-1));
         }
@@ -981,6 +1015,8 @@ struct MultiLevelDDA {
     }
 };
 
+typedef IndexGen<BLOCK_SIZE> IdxGen;
+typedef MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> MRIdxGen;
 
 #else
 #endif
