@@ -559,7 +559,8 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             //     eta_s = dyn_state.sparse_stores.emis(ks, wave);
             //     chi_s = dyn_state.sparse_stores.opac(ks, wave) + FP(1e-15);
             // } else {
-            if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
+            // if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
+            if constexpr (false) {
                 const auto& mu = dyn_state.mu;
                 const fp_t vel = (
                     mip_chain.vx(ks) * mu(0)
@@ -569,6 +570,9 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
+                // if (chi_s >= FP(1e-10)) {
+                //     printf("%e %e <%d, %d> -- waaaagh \n", eta_s, chi_s, i32(u), i32(v));
+                // }
             } else {
                 eta_s = mip_chain.emis(ks, wave);
                 chi_s = mip_chain.opac(ks, wave) + FP(1e-15);

@@ -53,10 +53,9 @@ struct MultiResMipChain {
 
         parallel_for(
             "Set active blocks in mr_block_map",
-            SimpleBounds<1>(block_map.active_tiles.extent(0)),
-            YAKL_LAMBDA (i64 active_tile_idx) {
+            SimpleBounds<1>(block_map.loop_bounds().dim(0)),
+            YAKL_LAMBDA (i64 tile_idx) {
                 MRIdxGen idx_gen(mr_block_map);
-                i64 tile_idx = block_map.active_tiles(active_tile_idx);
                 Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
                 i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord.x, tile_coord.z);
                 max_mip_level(flat_entry) = 1;

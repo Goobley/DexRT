@@ -27,7 +27,7 @@ typedef uint64_t u64;
 #define DEXRT_DEBUG
 #endif
 
-constexpr int DEXRT_WARP_SIZE = 4;
+constexpr int DEXRT_WARP_SIZE = 32;
 
 constexpr fp_t PROBE0_LENGTH = FP(1.5);
 constexpr int PROBE0_NUM_RAYS = 4;
@@ -80,8 +80,10 @@ constexpr bool HYPERBLOCK2x2 = true;
 constexpr int ENTRY_SIZE = 2;
 
 constexpr bool USE_MIPMAPS = true;
-constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
-constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
+constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
+constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
 
 constexpr bool PINGPONG_BUFFERS = true;
 
@@ -90,7 +92,7 @@ constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 
-#define FLATLAND
+// #define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_INCL = 1;
 constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);
