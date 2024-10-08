@@ -321,6 +321,13 @@ struct Raymarch2dDynamicInterpState {
     vec3 mu;
 };
 
+struct Raymarch2dDynamicCoreAndVoigtState {
+    vec3 mu;
+    const yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> active_set;
+    const VoigtProfile<fp_t, false>& profile;
+    const AtomicData<fp_t>& adata;
+};
+
 template <typename Bc, class DynamicState=DexEmpty>
 struct Raymarch2dArgs {
     const CascadeStateAndBc<Bc>& casc_state_bc;
@@ -350,7 +357,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic = RcMode & RC_DYNAMIC;
-    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (RcMode & RC_DYNAMIC_INTERP);
+    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (LINE_SCHEME == LineCoeffCalc::VelocityInterp);
     static_assert(
         !dynamic || (dynamic && (
             std::is_same_v<DynamicState, Raymarch2dDynamicState>
@@ -514,11 +521,11 @@ template <
 YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
-    static_assert(std::is_same_v<DynamicState, Raymarch2dDynamicInterpState> || std::is_same_v<DynamicState, DexEmpty>, "Only supporting interp state in block marcher");
+    static_assert(std::is_same_v<DynamicState, Raymarch2dDynamicInterpState> || std::is_same_v<DynamicState, DexEmpty> || std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>, "Only supporting interp state in block marcher");
     JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(args, mip_chain);
     JasUnpack(casc_state_bc, state, bc);
-    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (RcMode & RC_DYNAMIC_INTERP);
+    constexpr bool dynamic = (RcMode & RC_DYNAMIC);
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
     bool start_clipped;
@@ -559,7 +566,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             //     eta_s = dyn_state.sparse_stores.emis(ks, wave);
             //     chi_s = dyn_state.sparse_stores.opac(ks, wave) + FP(1e-15);
             // } else {
-            if constexpr (std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
+            if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
                 const auto& mu = dyn_state.mu;
                 const fp_t vel = (
                     mip_chain.vx(ks) * mu(0)
@@ -569,9 +576,42 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
-                // if (chi_s >= FP(1e-10)) {
-                //     printf("%e %e <%d, %d> -- waaaagh \n", eta_s, chi_s, i32(u), i32(v));
-                // }
+            } else if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
+                JasUnpack(dyn_state, mu, active_set, profile, adata);
+                eta_s = mip_chain.emis(ks, wave);
+                chi_s = mip_chain.opac(ks, wave) + FP(1e-15);
+
+                const fp_t vel = (
+                    mip_chain.vx(ks) * mu(0)
+                    + mip_chain.vy(ks) * mu(1)
+                    + mip_chain.vz(ks) * mu(2)
+                );
+                CavEmisOpacState emis_opac_state {
+                    .ks = ks,
+                    .kr = 0,
+                    .wave = wave,
+                    .lambda0 = FP(0.0),
+                    .lambda = adata.wavelength(la),
+                    .vel = vel,
+                    .phi = profile
+                };
+
+                // pls do this in registers
+                #pragma unroll
+                for (int kra = 0; kra < CORE_AND_VOIGT_MAX_LINES; ++kra) {
+                    i32 kr = active_set(kra);
+                    if (kr < 0) {
+                        break;
+                    }
+
+                    emis_opac_state.kr = kr;
+                    emis_opac_state.lambda0 = adata.lines(kr).lambda0;
+                    EmisOpac eta_chi = mip_chain.cav_data.emis_opac(
+                        emis_opac_state
+                    );
+                    eta_s += eta_chi.eta;
+                    chi_s += eta_chi.chi;
+                }
             } else {
                 eta_s = mip_chain.emis(ks, wave);
                 chi_s = mip_chain.opac(ks, wave) + FP(1e-15);

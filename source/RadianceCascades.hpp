@@ -34,7 +34,11 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 ) {
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri;
-    if constexpr (std::is_same_v<DynamicState, DexEmpty> || std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
+    if constexpr (
+       std::is_same_v<DynamicState, DexEmpty>
+       || std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>
+       || std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>
+    ) {
         ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
             Raymarch2dArgs<Bc, DynamicState>{
                 .casc_state_bc = casc_state,
@@ -717,6 +721,40 @@ Raymarch2dDynamicInterpState get_dyn_state(
     };
 }
 
+template <>
+YAKL_INLINE
+Raymarch2dDynamicCoreAndVoigtState get_dyn_state(
+    int la,
+    const RayProps& ray,
+    const fp_t incl,
+    const Atmosphere& atmos,
+    const AtomicData<fp_t>& adata,
+    const VoigtProfile<fp_t>& profile,
+    const Fp2d& flat_pops,
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+) {
+    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
+    vec3 mu;
+    mu(0) = -ray.dir(0) * sin_theta;
+    mu(1) = -incl;
+    mu(2) = -ray.dir(1) * sin_theta;
+    auto basic_a_set = slice_active_set(adata, la);
+    yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> active_set;
+    for (int a = 0; a < basic_a_set.extent(0); ++a) {
+        active_set(a) = basic_a_set(a);
+    }
+    if (basic_a_set.extent(0) < CORE_AND_VOIGT_MAX_LINES) {
+        active_set(basic_a_set.extent(0)) = -1;
+    }
+
+    return Raymarch2dDynamicCoreAndVoigtState{
+        .mu = mu,
+        .active_set = active_set,
+        .profile = profile,
+        .adata = adata
+    };
+}
+
 template <int RcMode=0>
 void cascade_i_25d(
     const State& state,
@@ -731,11 +769,20 @@ void cascade_i_25d(
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
     constexpr bool dynamic = RcMode & RC_DYNAMIC;
-    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (RcMode & RC_DYNAMIC_INTERP);
+    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (LINE_SCHEME == LineCoeffCalc::VelocityInterp);
+    constexpr bool dynamic_cav = dynamic && (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt);
     using DynamicState = std::conditional_t<
         dynamic_interp,
         Raymarch2dDynamicInterpState,
-        std::conditional_t<dynamic, Raymarch2dDynamicState, DexEmpty>
+        std::conditional_t<
+            dynamic_cav,
+            Raymarch2dDynamicCoreAndVoigtState,
+            std::conditional_t<
+                dynamic,
+                Raymarch2dDynamicState,
+                DexEmpty
+            >
+        >
     >;
     const bool sparse_calc = state.config.sparse_calculation;
 

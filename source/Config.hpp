@@ -44,10 +44,17 @@ constexpr bool DIR_BY_DIR = true;
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
 static_assert(!PREAVERAGE, "Don't use preaveraging for DexRT unless you know what you're doing! (Then disable me)");
 
-constexpr bool INTERPOLATE_DIRECTIONAL_OPACITY = true;
+enum class LineCoeffCalc {
+    Classic,
+    VelocityInterp,
+    CoreAndVoigt
+};
+constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::CoreAndVoigt;
+
 constexpr int INTERPOLATE_DIRECTIONAL_BINS = 21;
 // NOTE(cmo): Code will warn if insufficient bins to provide less than this
 constexpr fp_t INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH = FP(2.0);
+constexpr int CORE_AND_VOIGT_MAX_LINES = 8;
 
 enum class RcConfiguration {
     Vanilla,

@@ -257,7 +257,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            i64 k = coord.z * atmos.temperature.extent(1) + coord.x;
+            i64 k = idx_gen.full_flat_idx(coord.x, coord.z);
 
             AtmosPointParams local_atmos;
             local_atmos.temperature = flatmos.temperature(k);
@@ -281,6 +281,9 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             const bool no_lines = (active_set.extent(0) == 0);
             flat_dynamic_opac(k, wave) = static_only || no_lines;
             EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
+            if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
+                mode = EmisOpacMode::StaticOnly;
+            }
 
             auto result = emis_opac(
                 EmisOpacState<fp_t>{
@@ -307,7 +310,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            i64 k = coord.z * atmos.temperature.extent(1) + coord.x;
+            i64 k = idx_gen.full_flat_idx(coord.x, coord.z);
 
             mip_chain.vx(ks) = flatmos.vx(k);
             mip_chain.vy(ks) = flatmos.vy(k);
@@ -321,24 +324,21 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         .preaverage = PREAVERAGE,
         .sample_bc = true,
         .compute_alo = false,
-        .dir_by_dir = DIR_BY_DIR,
-        .dynamic_interp = INTERPOLATE_DIRECTIONAL_OPACITY
+        .dir_by_dir = DIR_BY_DIR
     });
     constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
         .dynamic = true,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
         .compute_alo = false,
-        .dir_by_dir = DIR_BY_DIR,
-        .dynamic_interp = INTERPOLATE_DIRECTIONAL_OPACITY
+        .dir_by_dir = DIR_BY_DIR
     });
     constexpr int RcModeAlo = RC_flags_pack(RcFlags{
         .dynamic = true,
         .preaverage = PREAVERAGE,
         .sample_bc = false,
         .compute_alo = true,
-        .dir_by_dir = DIR_BY_DIR,
-        .dynamic_interp = INTERPOLATE_DIRECTIONAL_OPACITY
+        .dir_by_dir = DIR_BY_DIR
     });
     constexpr int RcStorage = RC_flags_storage();
     // NOTE(cmo): Compute RC FS
@@ -360,7 +360,11 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             };
             mip_chain.dir_data.fill<RcModeNoBc>(state, casc_state, subset, vels, lte_scratch);
             mip_chain.compute_mips(state, subset);
-        }
+        } else if (mip_chain.cav_data.a_damp.initialized()) {{
+            mip_chain.cav_data.fill(state, la_start, la_end);
+            // TODO(cmo): This one isn't directionally dependent; split the compute_mips function
+            mip_chain.compute_mips(state, subset);
+        }}
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,

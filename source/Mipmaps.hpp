@@ -6,11 +6,13 @@
 #include "CascadeState.hpp"
 #include "BlockMap.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
+#include "CoreAndVoigtEmisOpac.hpp"
 
 struct MultiResMipChain {
     Fp2d emis; // [ks, wave_batch]
     Fp2d opac; // [ks, wave_batch]
     DirectionalEmisOpacInterp dir_data;
+    CoreAndVoigtData cav_data;
     Fp1d vx; // [ks]
     Fp1d vy; // [ks]
     Fp1d vz; // [ks]
@@ -21,10 +23,15 @@ struct MultiResMipChain {
         opac = Fp2d("opac_mips", buffer_len, wave_batch);
 
         if (state.config.mode != DexrtMode::GivenFs) {
-            dir_data = DirectionalEmisOpacInterp_new(buffer_len, wave_batch);
             vx = Fp1d("vx_mips", buffer_len);
             vy = Fp1d("vy_mips", buffer_len);
             vz = Fp1d("vz_mips", buffer_len);
+
+            if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
+                dir_data = DirectionalEmisOpacInterp_new(buffer_len, wave_batch);
+            } else if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
+                cav_data.init(buffer_len, CORE_AND_VOIGT_MAX_LINES, wave_batch);
+            }
         }
     }
 
@@ -283,99 +290,101 @@ struct MultiResMipChain {
         }
         yakl::fence();
 
-        // TODO(cmo): This isn't done properly. The min and max v should be
-        // generated from the velocity mips, as in the setup for
-        // DirectionalEmisOpacInterp. If _this_ is outside the range, we should
-        // compute them again from scratch, through the full N levels of mips
-        // (as we need the original atmospheric params)
-        for (int level_m_1 = 0; level_m_1 < max_mip_factor; ++level_m_1) {
-            const int vox_size = 1 << (level_m_1 + 1);
-            auto bounds = block_map.loop_bounds(vox_size);
-            const int level = level_m_1 + 1;
-            parallel_for(
-                "Compute mip (dir interp)",
-                SimpleBounds<4>(
-                    bounds.dim(0),
-                    bounds.dim(1),
-                    INTERPOLATE_DIRECTIONAL_BINS,
-                    wave_batch
-                ),
-                YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 vel_idx, i32 wave) {
-                    MRIdxGen idx_gen(mr_block_map);
-                    i64 ks = idx_gen.loop_idx(level, tile_idx, block_idx);
-                    Coord2 coord = idx_gen.loop_coord(level, tile_idx, block_idx);
+        if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
+            // TODO(cmo): This isn't done properly. The min and max v should be
+            // generated from the velocity mips, as in the setup for
+            // DirectionalEmisOpacInterp. If _this_ is outside the range, we should
+            // compute them again from scratch, through the full N levels of mips
+            // (as we need the original atmospheric params)
+            for (int level_m_1 = 0; level_m_1 < max_mip_factor; ++level_m_1) {
+                const int vox_size = 1 << (level_m_1 + 1);
+                auto bounds = block_map.loop_bounds(vox_size);
+                const int level = level_m_1 + 1;
+                parallel_for(
+                    "Compute mip (dir interp)",
+                    SimpleBounds<4>(
+                        bounds.dim(0),
+                        bounds.dim(1),
+                        INTERPOLATE_DIRECTIONAL_BINS,
+                        wave_batch
+                    ),
+                    YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 vel_idx, i32 wave) {
+                        MRIdxGen idx_gen(mr_block_map);
+                        i64 ks = idx_gen.loop_idx(level, tile_idx, block_idx);
+                        Coord2 coord = idx_gen.loop_coord(level, tile_idx, block_idx);
 
-                    const i32 upper_vox_size = vox_size / 2;
-                    const i64 idx0 = idx_gen.idx(level_m_1, coord.x, coord.z);
-                    const i64 idx1 = idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z);
-                    const i64 idx2 = idx_gen.idx(level_m_1, coord.x, coord.z+upper_vox_size);
-                    const i64 idx3 = idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z+upper_vox_size);
+                        const i32 upper_vox_size = vox_size / 2;
+                        const i64 idx0 = idx_gen.idx(level_m_1, coord.x, coord.z);
+                        const i64 idx1 = idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z);
+                        const i64 idx2 = idx_gen.idx(level_m_1, coord.x, coord.z+upper_vox_size);
+                        const i64 idx3 = idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z+upper_vox_size);
 
-                    fp_t min_vs[4];
-                    fp_t max_vs[4];
-                    auto compute_vels = [&] (int idx, int corner) {
-                        const fp_t sample_min = dir_data.vel_start(idx);
-                        const fp_t sample_max = sample_min + INTERPOLATE_DIRECTIONAL_BINS * dir_data.vel_step(idx);
-                        min_vs[corner] = sample_min;
-                        max_vs[corner] = sample_max;
-                    };
-                    compute_vels(idx0, 0);
-                    compute_vels(idx1, 1);
-                    compute_vels(idx2, 2);
-                    compute_vels(idx3, 3);
+                        fp_t min_vs[4];
+                        fp_t max_vs[4];
+                        auto compute_vels = [&] (int idx, int corner) {
+                            const fp_t sample_min = dir_data.vel_start(idx);
+                            const fp_t sample_max = sample_min + INTERPOLATE_DIRECTIONAL_BINS * dir_data.vel_step(idx);
+                            min_vs[corner] = sample_min;
+                            max_vs[corner] = sample_max;
+                        };
+                        compute_vels(idx0, 0);
+                        compute_vels(idx1, 1);
+                        compute_vels(idx2, 2);
+                        compute_vels(idx3, 3);
 
-                    fp_t min_v = min_vel(ks);
-                    fp_t max_v = max_vel(ks);
-                    fp_t vel_start = min_v;
-                    fp_t vel_step = (max_v - min_v) / fp_t(INTERPOLATE_DIRECTIONAL_BINS - 1);
-                    if (vel_idx == 0 && wave == 0) {
-                        dir_data.vel_start(ks) = vel_start;
-                        dir_data.vel_step(ks) = vel_step;
-                    }
-
-                    // NOTE(cmo): Need to take 4 samples of the upper level for each bin/wave
-                    const fp_t vel_sample = vel_start + vel_idx * vel_step;
-                    // NOTE(cmo): Clamp to the vel range of each pixel. Need to check how important this is.
-                    auto clamp_vel = [&] (int corner) {
-                        fp_t vel = vel_sample;
-                        if (vel < min_vs[corner]) {
-                            vel = min_vs[corner];
-                        } else if (vel > max_vs[corner]) {
-                            vel = max_vs[corner];
+                        fp_t min_v = min_vel(ks);
+                        fp_t max_v = max_vel(ks);
+                        fp_t vel_start = min_v;
+                        fp_t vel_step = (max_v - min_v) / fp_t(INTERPOLATE_DIRECTIONAL_BINS - 1);
+                        if (vel_idx == 0 && wave == 0) {
+                            dir_data.vel_start(ks) = vel_start;
+                            dir_data.vel_step(ks) = vel_step;
                         }
-                        return vel;
-                    };
 
-                    fp_t emis_vel = FP(0.0);
-                    fp_t opac_vel = FP(0.0);
-                    const fp_t vel0 = clamp_vel(0);
-                    auto sample = dir_data.sample(idx0, wave, vel0);
-                    emis_vel += sample.eta;
-                    opac_vel += sample.chi;
+                        // NOTE(cmo): Need to take 4 samples of the upper level for each bin/wave
+                        const fp_t vel_sample = vel_start + vel_idx * vel_step;
+                        // NOTE(cmo): Clamp to the vel range of each pixel. Need to check how important this is.
+                        auto clamp_vel = [&] (int corner) {
+                            fp_t vel = vel_sample;
+                            if (vel < min_vs[corner]) {
+                                vel = min_vs[corner];
+                            } else if (vel > max_vs[corner]) {
+                                vel = max_vs[corner];
+                            }
+                            return vel;
+                        };
 
-                    const fp_t vel1 = clamp_vel(1);
-                    sample = dir_data.sample(idx1, wave, vel1);
-                    emis_vel += sample.eta;
-                    opac_vel += sample.chi;
+                        fp_t emis_vel = FP(0.0);
+                        fp_t opac_vel = FP(0.0);
+                        const fp_t vel0 = clamp_vel(0);
+                        auto sample = dir_data.sample(idx0, wave, vel0);
+                        emis_vel += sample.eta;
+                        opac_vel += sample.chi;
 
-                    const fp_t vel2 = clamp_vel(2);
-                    sample = dir_data.sample(idx2, wave, vel2);
-                    emis_vel += sample.eta;
-                    opac_vel += sample.chi;
+                        const fp_t vel1 = clamp_vel(1);
+                        sample = dir_data.sample(idx1, wave, vel1);
+                        emis_vel += sample.eta;
+                        opac_vel += sample.chi;
 
-                    const fp_t vel3 = clamp_vel(3);
-                    sample = dir_data.sample(idx3, wave, vel3);
-                    emis_vel += sample.eta;
-                    opac_vel += sample.chi;
+                        const fp_t vel2 = clamp_vel(2);
+                        sample = dir_data.sample(idx2, wave, vel2);
+                        emis_vel += sample.eta;
+                        opac_vel += sample.chi;
 
-                    emis_vel *= FP(0.25);
-                    opac_vel *= FP(0.25);
+                        const fp_t vel3 = clamp_vel(3);
+                        sample = dir_data.sample(idx3, wave, vel3);
+                        emis_vel += sample.eta;
+                        opac_vel += sample.chi;
 
-                    dir_data.emis_opac_vel(ks, vel_idx, 0, wave) = emis_vel;
-                    dir_data.emis_opac_vel(ks, vel_idx, 1, wave) = opac_vel;
-                }
-            );
-            yakl::fence();
+                        emis_vel *= FP(0.25);
+                        opac_vel *= FP(0.25);
+
+                        dir_data.emis_opac_vel(ks, vel_idx, 0, wave) = emis_vel;
+                        dir_data.emis_opac_vel(ks, vel_idx, 1, wave) = opac_vel;
+                    }
+                );
+                yakl::fence();
+            }
         }
     }
 };
