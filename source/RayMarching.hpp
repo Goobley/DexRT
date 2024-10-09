@@ -557,6 +557,12 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
 
     // NOTE(cmo): one_m_edt is also the ALO
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
+    // NOTE(cmo): implicit assumption muy != 1.0
+    const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
+    fp_t lambda;
+    if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
+        lambda = dyn_state.adata.wavelength(la);
+    }
     do {
         if (s.can_sample()) {
             i32 u = s.curr_coord(0);
@@ -578,34 +584,33 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 chi_s = contrib.chi + FP(1e-15);
             } else if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
                 JasUnpack(dyn_state, mu, active_set, profile, adata);
-                eta_s = mip_chain.emis(ks, wave);
-                chi_s = mip_chain.opac(ks, wave) + FP(1e-15);
+                i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
+                eta_s = mip_chain.emis.get_data()[ks_wave];
+                chi_s = mip_chain.opac.get_data()[ks_wave] + FP(1e-15);
 
                 const fp_t vel = (
-                    mip_chain.vx(ks) * mu(0)
-                    + mip_chain.vy(ks) * mu(1)
-                    + mip_chain.vz(ks) * mu(2)
+                    mip_chain.vx.get_data()[ks] * mu(0)
+                    + mip_chain.vy.get_data()[ks] * mu(1)
+                    + mip_chain.vz.get_data()[ks] * mu(2)
                 );
                 CavEmisOpacState emis_opac_state {
                     .ks = ks,
-                    .kr = 0,
-                    .wave = wave,
-                    .lambda0 = FP(0.0),
-                    .lambda = adata.wavelength(la),
+                    .krl = 0,
+                    .lambda = lambda,
                     .vel = vel,
                     .phi = profile
                 };
 
                 // pls do this in registers
                 #pragma unroll
-                for (int kra = 0; kra < CORE_AND_VOIGT_MAX_LINES; ++kra) {
-                    i32 kr = active_set(kra);
-                    if (kr < 0) {
+                for (int kri = 0; kri < CORE_AND_VOIGT_MAX_LINES; ++kri) {
+                    i32 krl = active_set(kri);
+                    if (krl < 0) {
                         break;
                     }
 
-                    emis_opac_state.kr = kr;
-                    emis_opac_state.lambda0 = adata.lines(kr).lambda0;
+                    emis_opac_state.krl = krl;
+                    i32 kr = mip_chain.cav_data.active_set_mapping(krl);
                     EmisOpac eta_chi = mip_chain.cav_data.emis_opac(
                         emis_opac_state
                     );
@@ -623,9 +628,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             fp_t tau = chi_s * s.dt * distance_scale;
             fp_t source_fn = eta_s / chi_s;
 
-            // NOTE(cmo): implicit assumption muy != 1.0
-            fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
-            fp_t tau_mu = tau / sin_theta;
+            fp_t tau_mu = tau * inv_sin_theta;
             fp_t edt;
             if (tau_mu < FP(1e-2)) {
                 edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);

@@ -30,7 +30,7 @@ struct MultiResMipChain {
             if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
                 dir_data = DirectionalEmisOpacInterp_new(buffer_len, wave_batch);
             } else if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
-                cav_data.init(buffer_len, CORE_AND_VOIGT_MAX_LINES, wave_batch);
+                cav_data.init(buffer_len, CORE_AND_VOIGT_MAX_LINES);
             }
         }
     }

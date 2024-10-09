@@ -664,7 +664,8 @@ DynamicState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
+    const MultiResMipChain& mip_chain
 ) {
     return DynamicState{};
 }
@@ -679,7 +680,8 @@ Raymarch2dDynamicState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
+    const MultiResMipChain& mip_chain
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
@@ -708,7 +710,8 @@ Raymarch2dDynamicInterpState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
+    const MultiResMipChain& mip_chain
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
@@ -731,25 +734,36 @@ Raymarch2dDynamicCoreAndVoigtState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac
+    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
+    const MultiResMipChain& mip_chain
 ) {
     const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
     vec3 mu;
     mu(0) = -ray.dir(0) * sin_theta;
     mu(1) = -incl;
     mu(2) = -ray.dir(1) * sin_theta;
+
     auto basic_a_set = slice_active_set(adata, la);
-    yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> active_set;
+    yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> local_active_set; // These are krl indices for CoreAndVoigt
+    const auto& krl_mapping = mip_chain.cav_data.active_set_mapping;
+    int l_idx = 0;
     for (int a = 0; a < basic_a_set.extent(0); ++a) {
-        active_set(a) = basic_a_set(a);
+        i32 kr = basic_a_set(a);
+        for (int krl = 0; krl < CORE_AND_VOIGT_MAX_LINES; ++krl) {
+            if (krl_mapping(krl) == kr) {
+                local_active_set(l_idx++) = krl;
+            }
+        }
     }
-    if (basic_a_set.extent(0) < CORE_AND_VOIGT_MAX_LINES) {
-        active_set(basic_a_set.extent(0)) = -1;
+    if (l_idx < CORE_AND_VOIGT_MAX_LINES) {
+        local_active_set(l_idx) = -1;
     }
+
+    // TODO(cmo): compute the wavelength ratios here?
 
     return Raymarch2dDynamicCoreAndVoigtState{
         .mu = mu,
-        .active_set = active_set,
+        .active_set = local_active_set,
         .profile = profile,
         .adata = adata
     };
@@ -890,7 +904,8 @@ void cascade_i_25d(
                     adata,
                     profile,
                     flat_pops,
-                    dynamic_opac
+                    dynamic_opac,
+                    mip_chain
                 );
                 RaymarchParams<DynamicState> params {
                     .distance_scale = atmos.voxel_scale,

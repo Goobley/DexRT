@@ -37,7 +37,7 @@ TEST_CASE("Test Humlicek Impl", "[test_humlicek]") {
 TEST_CASE("Voigt Interp", "[voigt_interp]") {
     yakl::init();
     {
-        VoigtProfile<fp_t> prof(
+        VoigtProfile<fp_t, false, yakl::memDevice, true> prof(
             VoigtProfile<fp_t>::Linspace{FP(0.0), FP(10.0), 11},
             VoigtProfile<fp_t>::Linspace{FP(-20.0), FP(20.0), 11}
         );
@@ -69,7 +69,7 @@ TEST_CASE("Voigt Interp", "[voigt_interp]") {
         // NOTE(cmo): The grid is a bit coarse for accuracy, but it gets better if the grid is ramped up.
         REQUIRE_THAT(test(4, 4), WithinRel(humlicek_voigt(FP(3.8), FP(-11.4)).real(), FP(1e-1)));
 
-        VoigtProfile<f64, true> complex_prof(
+        VoigtProfile<f64, true, yakl::memDevice, true> complex_prof(
             VoigtProfile<f64>::Linspace{0.0, 15.0, 11},
             VoigtProfile<f64>::Linspace{-600.0, 600.0, 11}
         );
@@ -101,10 +101,12 @@ TEST_CASE("Voigt Interp", "[voigt_interp]") {
 
         // Check the object throws if we try to access from the CPU (in a cuda-like world)
     #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
+    #ifdef YAKL_DEBUG
         REQUIRE_THROWS(prof(FP(1.0), FP(2.0)));
     #endif
+    #endif
         // But works if constructed on the CPU
-        VoigtProfile<fp_t, false, yakl::memHost> prof_cpu(
+        VoigtProfile<fp_t, false, yakl::memHost, true> prof_cpu(
             VoigtProfile<fp_t>::Linspace{FP(0.0), FP(10.0), 101},
             VoigtProfile<fp_t>::Linspace{FP(-20.0), FP(20.0), 101}
         );

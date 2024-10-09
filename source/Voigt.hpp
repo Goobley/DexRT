@@ -6,6 +6,7 @@
 #include "Utils.hpp"
 #include <fmt/core.h>
 
+// NOTE(cmo): cuda-std is forcing some double precision - thrust is not.
 // #if defined(YAKL_ARCH_CUDA)
 // #include <cuda/std/complex>
 // template <typename T>
@@ -187,12 +188,9 @@ namespace DexVoigtDetail {
     };
 }
 
-constexpr bool VOIGT_HYPERBLOCK = true;
-constexpr bool VOIGT_MORTON = false;
-constexpr i32 VOIGT_TILESIZE = 32;
-template <typename T=fp_t, bool Complex=false, int mem_space=yakl::memDevice>
+template <typename T=fp_t, bool Complex=false, int mem_space=yakl::memDevice, bool USE_LUT=false>
 struct VoigtProfile {
-    /// Voigt function interpolator
+    /// Voigt function interpolator (if USE_LUT = true), otherwise using humlicek_wei24_voigt direct evaluation.
     /// Assumes a and v are linearly interpolated on linspaces, so
     /// these are implicit, rather than stored.
     /// For non-complex voigt, expects min v to be 0, as it is symmetric around this.
@@ -204,22 +202,26 @@ struct VoigtProfile {
     Linspace v_range;
     T v_step;
     yakl::Array<Voigt_t const, 2, mem_space> samples;
-    i32 num_v_tiles;
 
     VoigtProfile() {};
     VoigtProfile(Linspace _a_range, Linspace _v_range) :
         a_range(_a_range),
         v_range(_v_range)
     {
+        if constexpr (!USE_LUT) {
+            return;
+        }
         a_step = (a_range.max - a_range.min) / T(a_range.n - 1);
         v_step = (v_range.max - v_range.min) / T(v_range.n - 1);
-        num_v_tiles = v_range.n / VOIGT_TILESIZE;
         // NOTE(cmo): Fill table
         compute_samples();
     }
 
 
     void compute_samples() {
+        if constexpr (!USE_LUT) {
+            throw std::runtime_error("No samples to compute: not using LUT for Voigt");
+        }
         // NOTE(cmo): Allocate storage
         yakl::Array<Voigt_t, 2, mem_space> mut_samples("Voigt Samples", a_range.n, v_range.n);
 
@@ -232,58 +234,20 @@ struct VoigtProfile {
 
         // NOTE(cmo): Compute storage
         // Man, C++ makes this a pain sometimes... unless I'm just being an idiot.
-        const i32 num_v_tiles = this->num_v_tiles;
         using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
         if constexpr (mem_space == yakl::memDevice) {
             parallel_for(
                 "compute voigt",
                 SimpleBounds<2>(a_range.n, v_range.n),
                 YAKL_LAMBDA (int ia, int iv) {
-                    constexpr i32 TILESIZE = VOIGT_TILESIZE;
-                    const i32 num_tiles = num_v_tiles;
                     const auto sample = voigt_sample(ia, iv);
-                    mut_samples(ia, iv);
-                    if constexpr (VOIGT_HYPERBLOCK) {
-                        i32 iat = ia % TILESIZE;
-                        i32 ivt = iv % TILESIZE;
-                        i32 tile = (ia / TILESIZE) * num_tiles + iv / TILESIZE;
-                        i32 offset;
-                        if constexpr (VOIGT_MORTON) {
-                            offset = encode_morton_2(Coord2{
-                                .x = ivt,
-                                .z = iat
-                            });
-                        } else {
-                            offset = iat * TILESIZE + ivt;
-                        }
-                        i32 idx = tile * square(TILESIZE) + offset;
-                        mut_samples.get_data()[idx] = result_t::value(sample);
-                    } else {
-                        mut_samples(ia, iv) = result_t::value(sample);
-                    }
+                    mut_samples(ia, iv) = result_t::value(sample);
                 }
             );
         } else {
             for (int ia = 0; ia < a_range.n; ++ia) {
                 for (int iv = 0; iv < v_range.n; ++iv) {
-                    if constexpr (VOIGT_HYPERBLOCK) {
-                        i32 iat = ia % VOIGT_TILESIZE;
-                        i32 ivt = iv % VOIGT_TILESIZE;
-                        i32 tile = (ia / VOIGT_TILESIZE) * num_v_tiles + iv / VOIGT_TILESIZE;
-                        i32 offset;
-                        if constexpr (VOIGT_MORTON) {
-                            offset = encode_morton_2(Coord2{
-                                .x = ivt,
-                                .z = iat
-                            });
-                        } else {
-                            offset = iat * VOIGT_TILESIZE + ivt;
-                        }
-                        i32 idx = tile * square(VOIGT_TILESIZE) + offset;
-                        mut_samples.get_data()[idx] = result_t::value(voigt_sample(ia, iv));
-                    } else {
-                        mut_samples(ia, iv) = result_t::value(voigt_sample(ia, iv));
-                    }
+                    mut_samples(ia, iv) = result_t::value(voigt_sample(ia, iv));
                 }
             }
         }
@@ -291,175 +255,64 @@ struct VoigtProfile {
     }
 
     /// Simple clamped bilinear lookup
-//     YAKL_INLINE Voigt_t operator()(T a, T v) const {
-// #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
-// #ifdef DEXRT_DEBUG
-//         YAKL_EXECUTE_ON_HOST_ONLY(
-//             if constexpr (mem_space == memDevice) {
-//                 yakl::yakl_throw("Cannot access a VoigtProfile in device memory from CPU...");
-//             }
-//         );
-// #endif
-// #endif
-//         if constexpr (!Complex) {
-//             v = std::abs(v);
-//         }
-//         T frac_a = (a - a_range.min) / a_step;
-//         // NOTE(cmo): p suffix for term at idx + 1
-//         int ia = int(std::floor(frac_a));
-//         int iap;
-//         T ta, tap;
+    template <bool InnerUseLut = USE_LUT, std::enable_if_t<InnerUseLut, bool> = true>
+    YAKL_INLINE Voigt_t operator()(T a, T v) const {
+#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
+#ifdef DEXRT_DEBUG
+        YAKL_EXECUTE_ON_HOST_ONLY(
+            if constexpr (mem_space == memDevice) {
+                yakl::yakl_throw("Cannot access a VoigtProfile in device memory from CPU...");
+            }
+        );
+#endif
+#endif
+        if constexpr (!Complex) {
+            v = std::abs(v);
+        }
+        T frac_a = (a - a_range.min) / a_step;
+        // NOTE(cmo): p suffix for term at idx + 1
+        int ia = int(std::floor(frac_a));
+        int iap;
+        T ta, tap;
 
-//         const i32 max_a = a_range.n - 1;
-//         const i32 max_v = v_range.n - 1;
-// #ifdef DEXRT_DEBUG
-//         if (frac_a < FP(0.0) || frac_a >= (a_range.n - 1)) {
-//             ia = yakl::min(yakl::max(ia, 0), a_range.n - 1);
-//             iap = ia;
-//             ta = FP(1.0);
-//             tap = FP(0.0);
-//         } else {
-//             iap = ia + 1;
-//             tap = frac_a - ia;
-//             ta = FP(1.0) - tap;
-//         }
-// #else
-//         iap = ia + 1;
-//         tap = frac_a - ia;
-//         ta = FP(1.0) - tap;
-// #endif
-//         T frac_v = (v - v_range.min) / v_step;
-//         int iv = int(std::floor(frac_v));
-//         int ivp;
-//         T tv, tvp;
-// #ifdef DEXRT_DEBUG
-//         if (frac_v < FP(0.0) || frac_v >= (v_range.n - 1)) {
-//             iv = yakl::min(yakl::max(iv, 0), v_range.n - 1);
-//             ivp = iv;
-//             tv = FP(1.0);
-//             tvp = FP(0.0);
-//         } else {
-//             ivp = iv + 1;
-//             tvp = frac_v - iv;
-//             tv = FP(1.0) - tvp;
-//         }
-// #else
-//         ivp = iv + 1;
-//         tvp = frac_v - iv;
-//         tv = FP(1.0) - tvp;
-// #endif
+        const i32 max_a = a_range.n - 1;
+        const i32 max_v = v_range.n - 1;
+        if (frac_a < FP(0.0) || frac_a >= (a_range.n - 1)) {
+            ia = yakl::min(yakl::max(ia, 0), a_range.n - 1);
+            iap = ia;
+            ta = FP(1.0);
+            tap = FP(0.0);
+        } else {
+            iap = ia + 1;
+            tap = frac_a - ia;
+            ta = FP(1.0) - tap;
+        }
 
-//         const i32 num_tiles = this->num_v_tiles;
-//         auto compute_idx = [num_tiles] (i32 ia, i32 iv) -> i32 {
-//             i32 iat = ia % VOIGT_TILESIZE;
-//             i32 ivt = iv % VOIGT_TILESIZE;
-//             i32 tile = (ia / VOIGT_TILESIZE) * num_tiles + iv / VOIGT_TILESIZE;
-//             i32 offset;
-//             if constexpr (VOIGT_MORTON) {
-//                 offset = encode_morton_2(Coord2{
-//                     .x = ivt,
-//                     .z = iat
-//                 });
-//             } else {
-//                 offset = iat * VOIGT_TILESIZE + ivt;
-//             }
-//             i32 idx = tile * square(VOIGT_TILESIZE) + offset;
-//             return idx;
-//         };
+        T frac_v = (v - v_range.min) / v_step;
+        int iv = int(std::floor(frac_v));
+        int ivp;
+        T tv, tvp;
 
-//         auto compute_idx_flat = [max_v] (i32 ia, i32 iv) -> i32 {
-//             return ia * max_v + iv;
-//         };
+        if (frac_v < FP(0.0) || frac_v >= (v_range.n - 1)) {
+            iv = yakl::min(yakl::max(iv, 0), v_range.n - 1);
+            ivp = iv;
+            tv = FP(1.0);
+            tvp = FP(0.0);
+        } else {
+            ivp = iv + 1;
+            tvp = frac_v - iv;
+            tv = FP(1.0) - tvp;
+        }
 
-//         auto idx2 = [compute_idx, compute_idx_flat] (i32 ia, i32 iv) -> i32 {
-//             if constexpr (VOIGT_HYPERBLOCK) {
-//                 return compute_idx(ia, iv);
-//             } else {
-//                 return compute_idx_flat(ia, iv);
-//             }
-//         };
+        Voigt_t result = (
+            ta * (tv * samples(ia, iv) + tvp * samples(ia, ivp)) +
+            tap * (tv * samples(iap, iv) + tvp * samples(iap, ivp))
+        );
 
-// #if 0
-//         Voigt_t result = (
-//             ta * (tv * samples(ia, iv) + tvp * samples(ia, ivp)) +
-//             tap * (tv * samples(iap, iv) + tvp * samples(iap, ivp))
-//         );
-// #else
-//         const fp_t* ptr = samples.get_data();
-//         Voigt_t result;
+        return result;
+    }
 
-//         Voigt_t sample0;
-//         Voigt_t sample1;
-//         Voigt_t sample2;
-//         Voigt_t sample3;
-
-//         if (ia < 0 || ia >= max_a) {
-//             ia = std::min(std::max(ia, 0), max_a);
-//             if (iv < 0 || iv >=  max_v) {
-//                 iv = std::min(std::max(iv, 0), max_v);
-//                 sample0 = ptr[idx2(ia, iv)];
-//                 sample1 = sample0;
-//                 sample2 = sample0;
-//                 sample3 = sample0;
-//             } else {
-//                 sample0 = ptr[idx2(ia, iv)];
-//                 sample1 = ptr[idx2(ia, ivp)];
-//                 sample2 = sample0;
-//                 sample3 = sample1;
-//             }
-//         } else if (iv < 0 || iv >=  max_v) {
-//             iv = std::min(std::max(iv, 0), max_v);
-//             sample0 = ptr[idx2(ia, iv)];
-//             sample1 = sample0;
-//             sample2 = ptr[idx2(iap, iv)];
-//             sample3 = sample2;
-//         } else {
-//             if constexpr (VOIGT_HYPERBLOCK) {
-//                 i32 idx_ia = compute_idx(ia, iv);
-//                 i32 idx_iap = compute_idx(iap, iv);
-//                 sample0 = ptr[idx_ia];
-//                 sample1 = ptr[idx_ia + 1];
-//                 sample2 = ptr[idx_iap];
-//                 sample3 = ptr[idx_iap + 1];
-//             } else {
-//                 sample0 = ptr[compute_idx_flat(ia, iv)];
-//                 sample1 = ptr[compute_idx_flat(ia, ivp)];
-//                 sample2 = ptr[compute_idx_flat(iap, iv)];
-//                 sample3 = ptr[compute_idx_flat(iap, ivp)];
-//             }
-//         }
-
-//         result = (
-//             ta * (tv * sample0 + tvp * sample1) +
-//             tap * (tv * sample2 + tvp * sample3)
-//         );
-// #endif
-//         return result;
-//     }
-
-    // YAKL_INLINE Voigt_t operator()(T a, T v) const {
-    //     if constexpr (!Complex) {
-    //         v = std::abs(v);
-    //     }
-    //     using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
-    //     return result_t::value(humlicek_voigt(a, v));
-    // }
-
-    // YAKL_INLINE Voigt_t operator()(T a, T v) const {
-    //     if constexpr (!Complex) {
-    //         v = std::abs(v);
-    //     }
-    //     using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
-    //     return result_t::value(humlicek_zpf16_voigt(a, v));
-    // }
-
-    // YAKL_INLINE Voigt_t operator()(T a, T v) const {
-    //     if constexpr (!Complex) {
-    //         v = std::abs(v);
-    //     }
-    //     return abrarov_quine_voigt(a, v);
-    // }
-
+    template <bool InnerUseLut = USE_LUT, std::enable_if_t<!InnerUseLut, bool> = true>
     YAKL_INLINE Voigt_t operator()(T a, T v) const {
         if constexpr (!Complex) {
             v = std::abs(v);

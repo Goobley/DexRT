@@ -7,7 +7,6 @@
 
 namespace CoreAndVoigt {
     struct CoreAndVoigtState {
-        i32 la;
         i64 k;
         const AtmosPointParams& atmos;
         const AtomicData<>& adata;
@@ -25,8 +24,7 @@ namespace CoreAndVoigt {
         const CoreAndVoigtState& args,
         int line_idx
     ) {
-        JasUnpack(args, la, k, atmos, adata, n);
-        const fp_t lambda = adata.wavelength(la);
+        JasUnpack(args, k, atmos, adata, n);
         const auto& l = adata.lines(line_idx);
         const int offset = adata.level_start(l.atom);
         const fp_t nj = n(offset + l.j, k);
@@ -39,8 +37,10 @@ namespace CoreAndVoigt {
 
         using namespace ConstantsFP;
         // [kJ]
-        const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
-        const fp_t a = damping_from_gamma(params.gamma, lambda, params.dop_width);
+        // at lambda0
+        const fp_t hnu_4pi = hc_kJ_nm / (four_pi * l.lambda0);
+        // a_damp at lambda0
+        const fp_t a = damping_from_gamma(params.gamma, l.lambda0, params.dop_width);
         CoreAndVoigtResult result {
             .eta_star = nj * hnu_4pi * l.Aji,
             .chi_star = hnu_4pi * (ni * l.Bij - nj * l.Bji),
@@ -53,9 +53,8 @@ namespace CoreAndVoigt {
 
 struct CavEmisOpacState {
     i64 ks;
-    i32 kr;
+    i32 krl;
     i32 wave;
-    fp_t lambda0;
     fp_t lambda;
     fp_t vel;
     const VoigtProfile<fp_t, false>& phi;
@@ -65,16 +64,21 @@ struct CoreAndVoigtData {
     // NOTE(cmo): Right now these aren't unified over wave, in practice, they
     // probably can be, since most of the wavelength varying parameters are
     // pretty insignificant other than over massive ranges.
-    Fp3d eta_star; // [ks, kr, wave]
-    Fp3d chi_star; // [ks, kr, wave]
-    Fp3d a_damp; // [ks, kr, wave]
-    Fp3d inv_dop_width; // [ks, kr, wave]
+    // krl: local radiative transition index
+    Fp2d eta_star; // [ks, krl]
+    Fp2d chi_star; // [ks, krl]
+    Fp2d a_damp; // [ks, krl]
+    Fp2d inv_dop_width; // [ks, krl]
+    yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> active_set_mapping; // maps from krl to kr
+    yakl::SArray<fp_t, 2, CORE_AND_VOIGT_MAX_LINES, WAVE_BATCH> emis_opac_ratios; // [krl, wave] lambda0 / lambda
+    yakl::SArray<fp_t, 2, CORE_AND_VOIGT_MAX_LINES, WAVE_BATCH> a_damp_ratios; // [krl, wave] (lambda / lambda0)**2
+    yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES> lambda0s; // [krl]
 
-    void init(i64 buffer_len, i32 max_kr, i32 wave_batch) {
-        eta_star = Fp3d("eta_star", buffer_len, max_kr, wave_batch);
-        chi_star = Fp3d("chi_star", buffer_len, max_kr, wave_batch);
-        a_damp = Fp3d("a_damp", buffer_len, max_kr, wave_batch);
-        inv_dop_width = Fp3d("1 / dop_width", buffer_len, max_kr, wave_batch);
+    void init(i64 buffer_len, i32 max_kr) {
+        eta_star = Fp2d("eta_star", buffer_len, max_kr);
+        chi_star = Fp2d("chi_star", buffer_len, max_kr);
+        a_damp = Fp2d("a_damp", buffer_len, max_kr);
+        inv_dop_width = Fp2d("1 / dop_width", buffer_len, max_kr);
     }
 
     /// Fills mip0
@@ -86,18 +90,61 @@ struct CoreAndVoigtData {
         const auto& flatmos = flatten<const fp_t>(atmos);
         const auto& flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
 
-        auto bounds = block_map.loop_bounds();
+        for (int i = 0; i < CORE_AND_VOIGT_MAX_LINES; ++i) {
+            active_set_mapping(i) = -1;
+        }
+
+        // NOTE(cmo): Fill active_set_mapping
+        int fill_idx = 0;
+        for (int la = la_start; la < la_end; ++la) {
+            auto a_set_la = slice_active_set(state.adata_host, la);
+            for (int kri = 0; kri < a_set_la.extent(0); ++kri) {
+                int kr = a_set_la(kri);
+                bool found = false;
+
+                for (int i = 0; i < fill_idx; ++i) {
+                    if (active_set_mapping(i) == kr) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) {
+                    continue;
+                }
+
+                if (fill_idx == CORE_AND_VOIGT_MAX_LINES) {
+                    throw std::runtime_error(fmt::format("For wavelength range [{}, {}], more than {} lines appear active (CoreAndVoigt limitation). Consider increasing CORE_AND_VOIGT_MAX_LINES", la_start, la_end, CORE_AND_VOIGT_MAX_LINES));
+                }
+                active_set_mapping(fill_idx++) = kr;
+            }
+        }
+
+        for (int kri = 0; kri < CORE_AND_VOIGT_MAX_LINES; ++kri) {
+            i32 kr = active_set_mapping(kri);
+            if (kr < 0) {
+                break;
+            }
+
+            const fp_t lambda0 = state.adata_host.lines(kr).lambda0;
+            lambda0s(kri) = lambda0;
+            for (int wave = 0; wave < wave_batch; ++wave) {
+                const i32 la = la_start + wave;
+                const fp_t lambda = state.adata_host.wavelength(la);
+
+                a_damp_ratios(kri, wave) = square(lambda / lambda0);
+                emis_opac_ratios(kri, wave) = lambda0 / lambda;
+            }
+        }
+
+        const auto& active_set_mapping = this->active_set_mapping;
         parallel_for(
             "fill core and voigt",
-            SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+            block_map.loop_bounds(),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
                 IdxGen idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
                 i64 kf = idx_gen.full_flat_idx(coord.x, coord.z);
-                const i32 la = la_start + wave;
-
-                auto a_set = slice_active_set(adata, la);
 
                 AtmosPointParams atmos_point {
                     .temperature = flatmos.temperature(kf),
@@ -108,21 +155,23 @@ struct CoreAndVoigtData {
                 };
 
                 CoreAndVoigt::CoreAndVoigtState line_state {
-                    .la = la,
                     .k = kf,
                     .atmos = atmos_point,
                     .adata = adata,
                     .n = flat_pops
                 };
-                for (int kra = 0; kra < a_set.extent(0); ++kra) {
+                for (int krl = 0; krl < active_set_mapping.size(); ++krl) {
+                    if (active_set_mapping(krl) < 0) {
+                        break;
+                    }
                     CoreAndVoigt::CoreAndVoigtResult line_data = CoreAndVoigt::compute_core_and_voigt(
                         line_state,
-                        a_set(kra)
+                        active_set_mapping(krl)
                     );
-                    eta_star(ks, kra, wave) = line_data.eta_star;
-                    chi_star(ks, kra, wave) = line_data.chi_star;
-                    a_damp(ks, kra, wave) = line_data.a_damp;
-                    inv_dop_width(ks, kra, wave) = FP(1.0) / line_data.dop_width;
+                    eta_star(ks, krl) = line_data.eta_star;
+                    chi_star(ks, krl) = line_data.chi_star;
+                    a_damp(ks, krl) = line_data.a_damp;
+                    inv_dop_width(ks, krl) = FP(1.0) / line_data.dop_width;
                 }
             }
         );
@@ -131,31 +180,38 @@ struct CoreAndVoigtData {
     YAKL_INLINE EmisOpac emis_opac(
         const CavEmisOpacState& args
     ) const {
-        JasUnpack(args, ks, kr, wave, lambda, lambda0, vel, phi);
+        JasUnpack(args, ks, krl, wave, lambda, vel, phi);
 
         using namespace ConstantsFP;
 #ifdef DEXRT_DEBUG
-        const fp_t a = a_damp(ks, kr, wave);
-        const fp_t inv_dop = inv_dop_width(ks, kr, wave);
-        const fp_t v = ((lambda - lambda0) + (vel * lambda0) / c) * inv_dop;
-        const fp_t p = phi(a, v) / sqrt_pi * inv_dop;
-        const fp_t eta_s = eta_star(ks, kr, wave);
-        const fp_t chi_s = chi_star(ks, kr, wave);
+        fp_t a = a_damp(ks, krl);
+        const fp_t inv_dop = inv_dop_width(ks, krl);
+        const fp_t eta_s = eta_star(ks, krl);
+        const fp_t chi_s = chi_star(ks, krl);
 #else
-        constexpr fp_t inv_c = FP(1.0) / c;
-        constexpr fp_t inv_sqrt_pi = FP(1.0) / sqrt_pi;
-        const i64 idx = (ks * a_damp.extent(1) + kr) * a_damp.extent(2) + wave;
-        const fp_t a = a_damp.get_data()[idx];
+        const i64 idx = ks * a_damp.extent(1) + krl;
+
+        fp_t a = a_damp.get_data()[idx];
         const fp_t inv_dop = inv_dop_width.get_data()[idx];
-        const fp_t v = ((lambda - lambda0) + (vel * lambda0) * inv_c) * inv_dop;
-        const fp_t p = phi(a, v) * inv_sqrt_pi * inv_dop;
         const fp_t eta_s = eta_star.get_data()[idx];
         const fp_t chi_s = chi_star.get_data()[idx];
 #endif
+        constexpr fp_t inv_c = FP(1.0) / c;
+        constexpr fp_t inv_sqrt_pi = FP(1.0) / sqrt_pi;
+
+        // const fp_t a_damp_ratio = square(lambda / lambda0);
+        // const fp_t emis_opac_ratio = lambda0 / lambda;
+        const fp_t a_damp_ratio = a_damp_ratios(krl, wave);
+        const fp_t emis_opac_ratio = emis_opac_ratios(krl, wave);
+        const fp_t lambda0 = lambda0s(krl);
+        a *= a_damp_ratio;
+
+        const fp_t v = ((lambda - lambda0) + (vel * lambda0) * inv_c) * inv_dop;
+        const fp_t p = phi(a, v) * inv_sqrt_pi * inv_dop;
 
         EmisOpac result {
-            .eta = eta_s * p,
-            .chi = chi_s * p
+            .eta = emis_opac_ratio * eta_s * p,
+            .chi = emis_opac_ratio * chi_s * p
         };
         return result;
     }
