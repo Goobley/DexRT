@@ -44,78 +44,6 @@ YAKL_INLINE T cexp(const T& x) {
 
 #define FPT(X) T(FP(X))
 template <typename T=fp_t>
-YAKL_INLINE T abrarov_quine_voigt(T a, T v) {
-    // Not convinced this is working correctly.
-    // https://www.ccsenet.org/journal/index.php/jmr/article/view/62103
-    // Real only!
-    constexpr int num_terms = 12;
-    // First column
-    constexpr T A[num_terms] = {
-        FPT(2.307372754308023e-001),
-        FPT(7.760531995854886e-001),
-        FPT(4.235506885098250e-002),
-        FPT(-2.340509255269456e-001),
-        FPT(-4.557204758971222e-002),
-        FPT(5.043797125559205e-003),
-        FPT(1.180179737805654e-003),
-        FPT(1.754770213650354e-005),
-        FPT(-3.325020499631893e-006),
-        FPT(-9.375402319079375e-008),
-        FPT(8.034651067438904e-010),
-        FPT(3.355455275373310e-011)
-    };
-
-    // Second column
-    constexpr T B[num_terms] = {
-        FPT(4.989787261063716e-002),
-        FPT(4.490808534957343e-001),
-        FPT(1.247446815265929e+000),
-        FPT(2.444995757921221e+000),
-        FPT(4.041727681461610e+000),
-        FPT(6.037642585887094e+000),
-        FPT(8.432740471197681e+000),
-        FPT(1.122702133739336e+001),
-        FPT(1.442048518447414e+001),
-        FPT(1.801313201244001e+001),
-        FPT(2.200496182129099e+001),
-        FPT(2.639597461102705e+001)
-    };
-
-    // Third column
-    constexpr T C[num_terms] = {
-        FPT(1.464495070025765e+000),
-        FPT(-3.230894193031240e-001),
-        FPT(-5.397724160374686e-001),
-        FPT(-6.547649406082363e-002),
-        FPT(2.411056013969393e-002),
-        FPT(4.001198804719684e-003),
-        FPT(-5.387428751666454e-005),
-        FPT(-2.451992671326258e-005),
-        FPT(-5.400164289522879e-007),
-        FPT(1.771556420016014e-008),
-        FPT(4.940360170163906e-010),
-        FPT(5.674096644030151e-014)
-    };
-
-    constexpr T varsigma = FPT(2.75);
-    v = std::abs(v) + FPT(0.5) * varsigma;
-
-    const T x1 = square(v) - square(a);
-    const T x2 = square(a) + square(v);
-    const T x3 = square(x2);
-
-    T result = FPT(0.0);
-    #pragma unroll
-    for (int i = 0; i < num_terms; ++i) {
-        result += (
-            (A[i] * (B[i] + x1) + C[i] * v * (B[i] + x2))
-            / (square(B[i]) + 2 * B[i] * x1 + x3)
-        );
-    }
-    return result;
-}
-
-template <typename T=fp_t>
 YAKL_INLINE DexComplex<T> humlicek_voigt(T a, T v) {
     using DexVoigtDetail::cexp;
     DexComplex<T> z(a, -v);
@@ -149,6 +77,7 @@ YAKL_INLINE DexComplex<T> humlicek_voigt(T a, T v) {
 // https://academic.oup.com/mnras/article/479/3/3068/5045263#equ10
 template <typename T=fp_t>
 YAKL_INLINE DexComplex<T> humlicek_zpf16_voigt(T a, T v) {
+    // NOTE(cmo): The accuracy seemed a bit low in regions II and III
     // !   Humlicek zpf16 constants
     const DexComplex<T> ac[16] = {
         {FPT(41445.0374210222), FPT(0.0)},
@@ -197,6 +126,7 @@ YAKL_INLINE DexComplex<T> humlicek_zpf16_voigt(T a, T v) {
 // https://academic.oup.com/mnras/article/479/3/3068/5045263#equ10
 template <typename T=fp_t>
 YAKL_INLINE DexComplex<T> humlicek_wei24_voigt(T a, T v) {
+    // NOTE(cmo): Looks good and pretty fast!
     constexpr T l = FPT(4.1195342878142354); // ! l=sqrt(n/sqrt(2.))  ! L = 2**(-1/4) * N**(1/2)
     constexpr T ac[24] = {
         FPT(-1.5137461654527820e-10), FPT(4.9048215867870488e-09),

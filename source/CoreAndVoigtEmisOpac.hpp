@@ -68,19 +68,19 @@ struct CoreAndVoigtData {
     Fp3d eta_star; // [ks, kr, wave]
     Fp3d chi_star; // [ks, kr, wave]
     Fp3d a_damp; // [ks, kr, wave]
-    Fp3d dop_width; // [ks, kr, wave]
+    Fp3d inv_dop_width; // [ks, kr, wave]
 
     void init(i64 buffer_len, i32 max_kr, i32 wave_batch) {
         eta_star = Fp3d("eta_star", buffer_len, max_kr, wave_batch);
         chi_star = Fp3d("chi_star", buffer_len, max_kr, wave_batch);
         a_damp = Fp3d("a_damp", buffer_len, max_kr, wave_batch);
-        dop_width = Fp3d("dop_width", buffer_len, max_kr, wave_batch);
+        inv_dop_width = Fp3d("1 / dop_width", buffer_len, max_kr, wave_batch);
     }
 
     /// Fills mip0
     void fill(const State& state, i32 la_start, i32 la_end) {
         JasUnpack(state, atmos, pops, adata, mr_block_map);
-        JasUnpack((*this), eta_star, chi_star, a_damp, dop_width);
+        JasUnpack((*this), eta_star, chi_star, a_damp, inv_dop_width);
         i32 wave_batch = la_end - la_start;
         auto& block_map = mr_block_map.block_map;
         const auto& flatmos = flatten<const fp_t>(atmos);
@@ -122,7 +122,7 @@ struct CoreAndVoigtData {
                     eta_star(ks, kra, wave) = line_data.eta_star;
                     chi_star(ks, kra, wave) = line_data.chi_star;
                     a_damp(ks, kra, wave) = line_data.a_damp;
-                    dop_width(ks, kra, wave) = line_data.dop_width;
+                    inv_dop_width(ks, kra, wave) = FP(1.0) / line_data.dop_width;
                 }
             }
         );
@@ -136,17 +136,19 @@ struct CoreAndVoigtData {
         using namespace ConstantsFP;
 #ifdef DEXRT_DEBUG
         const fp_t a = a_damp(ks, kr, wave);
-        const fp_t dop = dop_width(ks, kr, wave);
-        const fp_t v = ((lambda - lambda0) + (vel * lambda0) / c) / dop;
-        const fp_t p = phi(a, v) / (sqrt_pi * dop);
+        const fp_t inv_dop = inv_dop_width(ks, kr, wave);
+        const fp_t v = ((lambda - lambda0) + (vel * lambda0) / c) * inv_dop;
+        const fp_t p = phi(a, v) / sqrt_pi * inv_dop;
         const fp_t eta_s = eta_star(ks, kr, wave);
         const fp_t chi_s = chi_star(ks, kr, wave);
 #else
+        constexpr fp_t inv_c = FP(1.0) / c;
+        constexpr fp_t inv_sqrt_pi = FP(1.0) / sqrt_pi;
         const i64 idx = (ks * a_damp.extent(1) + kr) * a_damp.extent(2) + wave;
         const fp_t a = a_damp.get_data()[idx];
-        const fp_t dop = dop_width.get_data()[idx];
-        const fp_t v = ((lambda - lambda0) + (vel * lambda0) / c) / dop;
-        const fp_t p = phi(a, v) / (sqrt_pi * dop);
+        const fp_t inv_dop = inv_dop_width.get_data()[idx];
+        const fp_t v = ((lambda - lambda0) + (vel * lambda0) * inv_c) * inv_dop;
+        const fp_t p = phi(a, v) * inv_sqrt_pi * inv_dop;
         const fp_t eta_s = eta_star.get_data()[idx];
         const fp_t chi_s = chi_star.get_data()[idx];
 #endif
