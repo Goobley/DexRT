@@ -318,6 +318,10 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         }
     );
     yakl::fence();
+    if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
+        mip_chain.cav_data.fill(state, la_start, la_end);
+    }
+    mip_chain.compute_mips(state);
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = true,
@@ -352,19 +356,15 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             .la_end=la_end,
             .subset_idx=subset_idx
         };
-        if (mip_chain.dir_data.emis_opac_vel.initialized()) {
+        if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
             FlatVelocity vels{
                 .vx = mip_chain.vx,
                 .vy = mip_chain.vy,
                 .vz = mip_chain.vz,
             };
             mip_chain.dir_data.fill<RcModeNoBc>(state, casc_state, subset, vels, lte_scratch);
-            mip_chain.compute_mips(state, subset);
-        } else if (mip_chain.cav_data.a_damp.initialized()) {{
-            mip_chain.cav_data.fill(state, la_start, la_end);
-            // TODO(cmo): This one isn't directionally dependent; split the compute_mips function
-            mip_chain.compute_mips(state, subset);
-        }}
+        }
+        mip_chain.compute_subset_mips(state, subset);
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,

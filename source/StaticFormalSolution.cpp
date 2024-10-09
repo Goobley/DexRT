@@ -381,6 +381,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         }
     );
     yakl::fence();
+    mip_chain.compute_mips(state);
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = false,
@@ -406,7 +407,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
             .la_end=la_end,
             .subset_idx=subset_idx
         };
-        mip_chain.compute_mips(state, subset);
+        mip_chain.compute_subset_mips(state, subset);
 
         std::vector<Fp3d> eta_mips;
         std::vector<Fp3d> chi_mips;
