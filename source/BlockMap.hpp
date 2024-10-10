@@ -118,7 +118,7 @@ struct BlockMap {
             }
         }
         num_active_tiles = grid_idx;
-        fmt::println("Num active tiles: {}/{} ({})", num_active_tiles, num_z_tiles * num_x_tiles, cutoff_temperature);
+        fmt::println("Num active tiles: {}/{} ({:.1f} %)", num_active_tiles, num_z_tiles * num_x_tiles, fp_t(num_active_tiles) / fp_t(num_z_tiles * num_x_tiles) * FP(100.0));
         lookup = lookup_host.createDeviceCopy();
 
         if (all_active) {
@@ -301,9 +301,9 @@ struct MultiLevelLookup {
 /// length of an array for storing all of the mips of the sparse tiles.
 template <int BLOCK_SIZE, int ENTRY_SIZE=3, class Lookup=BlockMapLookup<>, class BlockMap=BlockMap<BLOCK_SIZE, Lookup>>
 struct MultiResBlockMap {
-    static constexpr i32 max_storable_mip_level = (1 << ENTRY_SIZE);
+    static constexpr i32 max_storable_entry = (1 << ENTRY_SIZE) - 1;
     i32 max_mip_level;
-    yakl::SArray<i64, 1, max_storable_mip_level> mip_offsets;
+    yakl::SArray<i64, 1, max_storable_entry> mip_offsets;
     BlockMap block_map;
     MultiLevelLookup<ENTRY_SIZE> lookup;
 
@@ -311,12 +311,13 @@ struct MultiResBlockMap {
         block_map = block_map_;
         lookup.init(block_map);
         max_mip_level = max_mip_level_;
-        if ((max_mip_level + 1) > max_storable_mip_level) {
-            throw std::runtime_error("More mip levels requested than storable in packed data.");
+        fmt::println("Using a max mip level of {}", max_mip_level);
+        if ((max_mip_level + 1) > max_storable_entry) {
+            throw std::runtime_error("More mip levels requested than storable in packed data. Increase ENTRY_SIZE");
         }
 
         i64 buffer_len_acc = 0;
-        for (int i = 0; i < max_mip_level + 1; ++i) {
+        for (int i = 0; i <= max_mip_level; ++i) {
             mip_offsets(i) = buffer_len_acc;
             buffer_len_acc += block_map.buffer_len(1 << i);
         }
@@ -950,7 +951,7 @@ struct MultiLevelDDA {
             if (has_leaves) {
                 // NOTE(cmo): Refine, then return first intersection in refined region with data.
                 update_mip_level(mip_level);
-                if (get_sample_level() < 0) {
+                if (get_sample_level() != mip_level) {
                     // NOTE(cmo): Sometimes we round to just outside the refined
                     // region on resolution change, and may need to take a step
                     continue;

@@ -564,6 +564,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         lambda = dyn_state.adata.wavelength(la);
     }
     do {
+        one_m_edt = FP(0.0);
         if (s.can_sample()) {
             i32 u = s.curr_coord(0);
             i32 v = s.curr_coord(1);

@@ -118,6 +118,8 @@ void dynamic_compute_gamma(
                 vec3 mu;
                 const fp_t cos_theta = incl_quad.muy(probe_idx.incl);
                 const fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
+                // TODO(cmo): Issue may be here, with this mu needing to be flipped too.
+                // VERY VERY STRONGLY HERE
                 mu(0) = ray.dir(0) * sin_theta;
                 mu(1) = cos_theta;
                 mu(2) = ray.dir(1) * sin_theta;
@@ -281,8 +283,10 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             const bool no_lines = (active_set.extent(0) == 0);
             flat_dynamic_opac(k, wave) = static_only || no_lines;
             EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
-            if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
+            if constexpr (BASE_MIP_CONTAINS == BaseMipContents::Continua) {
                 mode = EmisOpacMode::StaticOnly;
+            } else if constexpr (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest) {
+                mode = EmisOpacMode::All;
             }
 
             auto result = emis_opac(

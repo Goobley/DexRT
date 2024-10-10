@@ -23,10 +23,7 @@ struct MultiResMipChain {
         emis = Fp2d("emis_mips", buffer_len, wave_batch);
         opac = Fp2d("opac_mips", buffer_len, wave_batch);
 
-        max_mip_factor = 0;
-        for (int i = 0; i < MAX_CASCADE + 1; ++i) {
-            max_mip_factor += MIPMAP_FACTORS[i];
-        }
+        max_mip_factor = state.mr_block_map.max_mip_level;
 
         if (state.config.mode != DexrtMode::GivenFs) {
             vx = Fp1d("vx_mips", buffer_len);
@@ -231,9 +228,11 @@ struct MultiResMipChain {
 
             if (state.config.mode != DexrtMode::GivenFs) {
                 if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
-                    dir_data.compute_mips(state, mm_state);
+                    dir_data.compute_mip_n(state, mm_state, level_m_1+1);
                 } else if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
-                    cav_data.compute_mips(state, mm_state);
+                    cav_data.compute_mip_n(state, mm_state, level_m_1+1);
+                } else {
+                    throw std::runtime_error("Add your mip handling here");
                 }
             }
 
@@ -260,14 +259,26 @@ struct MultiResMipChain {
     /// compute the mips from mip0 being stored in the start of these arrays.
     /// Currently these aren't allowed to modify state.mr_block_map.
     void compute_subset_mips(const State& state, const CascadeCalcSubset& subset) {
-        MipmapSubsetState mm_state{
-            .max_mip_factor = max_mip_factor,
-            .emis = emis,
-            .opac = opac,
-            .vx = vx,
-            .vy = vy,
-            .vz = vz
-        };
+        if (state.config.mode == DexrtMode::GivenFs) {
+            return;
+        }
+        for (i32 level_m_1 = 0; level_m_1 < max_mip_factor; ++level_m_1) {
+            MipmapSubsetState mm_state{
+                .max_mip_factor = max_mip_factor,
+                .emis = emis,
+                .opac = opac,
+                .vx = vx,
+                .vy = vy,
+                .vz = vz
+            };
+            if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
+                dir_data.compute_subset_mip_n(state, mm_state, subset, level_m_1 + 1);
+            } else if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
+                cav_data.compute_subset_mip_n(state, mm_state, subset, level_m_1 + 1);
+            } else {
+                throw std::runtime_error("Add your mip handling here");
+            }
+        }
     }
 };
 

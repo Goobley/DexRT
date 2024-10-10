@@ -151,6 +151,12 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
         state.J = Fp3d("J", state.adata.wavelength.extent(0), space_x, space_y);
     }
     state.J = FP(0.0);
+    state.max_block_mip = decltype(state.max_block_mip)(
+        "max_block_mip",
+        (state.adata.wavelength.extent(0) + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
+        block_map.num_z_tiles,
+        block_map.num_x_tiles
+    );
     return c0_rays;
 }
 
@@ -236,6 +242,12 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
         st->J = Fp3d("J", wave_dim, z_dim, x_dim);
     }
     st->J = FP(0.0);
+    st->max_block_mip = decltype(st->max_block_mip)(
+        "max_block_mip",
+        (wave_dim + c0_rays.wave_batch-1) / c0_rays.wave_batch-1,
+        block_map.num_z_tiles,
+        block_map.num_x_tiles
+    );
     yakl::fence();
     return c0_rays;
 }
@@ -437,6 +449,21 @@ void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
     if (state.config.store_J_on_cpu) {
         copy_J_plane_to_host(state, la_start, la_end);
     }
+
+    const i32 wave_batch_idx = la_start / state.c0_size.wave_batch;
+    JasUnpack(state, max_block_mip, mr_block_map);
+    parallel_for(
+        "Copy max mip",
+        state.mr_block_map.block_map.loop_bounds().dim(0),
+        YAKL_LAMBDA (i64 tile_idx) {
+            MRIdxGen idx_gen(mr_block_map);
+            Coord2 coord = idx_gen.loop_coord(0, tile_idx, 0);
+            Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+            i32 mip_level = idx_gen.get_sample_level(coord.x, coord.z);
+            max_block_mip(wave_batch_idx, tile_coord.z, tile_coord.x) = mip_level;
+        }
+    );
+    yakl::fence();
 }
 
 /// Add Dex's metadata to the file using attributes. The netcdf layer needs extending to do this, so I'm just throwing it in manually.
@@ -630,6 +657,7 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         } else {
             nc.write(state.J, "J", {"wavelength", "z", "x"});
         }
+        nc.write(state.max_block_mip, "max_mip_block", {"wavelength_batch", "tile_z", "tile_x"});
     }
 
     if (out_cfg.wavelength && state.adata.wavelength.initialized()) {
@@ -702,6 +730,8 @@ int main(int argc, char** argv) {
         init_state(&state, config);
         CascadeState casc_state = CascadeState_new(state.c0_size, MAX_CASCADE);
         yakl::timer_start("DexRT");
+        state.max_block_mip = -1;
+        yakl::fence();
 
         // NOTE(cmo): Provided emissivity and opacity in file: static solution.
         if (config.mode == DexrtMode::GivenFs) {
@@ -860,7 +890,7 @@ int main(int argc, char** argv) {
                 }
                 yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
-                    // la_start = 53;
+                    // la_start = 40;
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                     setup_wavelength_batch(state, la_start, la_end);
                     fmt::println(

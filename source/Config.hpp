@@ -54,7 +54,7 @@ constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::CoreAndVoigt;
 constexpr int INTERPOLATE_DIRECTIONAL_BINS = 21;
 // NOTE(cmo): Code will warn if insufficient bins to provide less than this
 constexpr fp_t INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH = FP(2.0);
-constexpr int CORE_AND_VOIGT_MAX_LINES = 8;
+constexpr int CORE_AND_VOIGT_MAX_LINES = 4;
 enum class BaseMipContents {
     Continua,
     LinesAtRest
@@ -89,13 +89,13 @@ static_assert(
 
 constexpr int BLOCK_SIZE = 16;
 constexpr bool HYPERBLOCK2x2 = true;
-constexpr int ENTRY_SIZE = 2;
+constexpr int ENTRY_SIZE = 3;
 
 constexpr bool USE_MIPMAPS = true;
-// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
-// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
-constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
-constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
+constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
+constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
+// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
+// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
 
 constexpr bool PINGPONG_BUFFERS = true;
 
