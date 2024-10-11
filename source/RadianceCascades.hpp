@@ -9,6 +9,7 @@
 template <typename DynamicState>
 struct RaymarchParams {
     fp_t distance_scale; // [m]
+    vec3 mu; // mu from ray traversal perspective
     fp_t incl; // cos(theta) - polar
     fp_t incl_weight;
     int la;
@@ -44,6 +45,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                 .casc_state_bc = casc_state,
                 .ray = ray,
                 .distance_scale = params.distance_scale,
+                .mu = params.mu,
                 .incl = params.incl,
                 .incl_weight = params.incl_weight,
                 .wave = this_probe.wave,
@@ -62,6 +64,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                 .casc_state_bc = casc_state,
                 .ray = ray,
                 .distance_scale = params.distance_scale,
+                .mu = params.mu,
                 .incl = params.incl,
                 .incl_weight = params.incl_weight,
                 .wave = this_probe.wave,
@@ -683,13 +686,7 @@ Raymarch2dDynamicState get_dyn_state(
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const MultiResMipChain& mip_chain
 ) {
-    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
-    vec3 mu;
-    mu(0) = -ray.dir(0) * sin_theta;
-    mu(1) = -incl;
-    mu(2) = -ray.dir(1) * sin_theta;
     return Raymarch2dDynamicState{
-        .mu = mu,
         .active_set = slice_active_set(adata, la),
         .dynamic_opac = dynamic_opac,
         .atmos = atmos,
@@ -713,14 +710,7 @@ Raymarch2dDynamicInterpState get_dyn_state(
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const MultiResMipChain& mip_chain
 ) {
-    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
-    vec3 mu;
-    mu(0) = -ray.dir(0) * sin_theta;
-    mu(1) = -incl;
-    mu(2) = -ray.dir(1) * sin_theta;
-
     return Raymarch2dDynamicInterpState{
-        .mu = mu,
     };
 }
 
@@ -737,12 +727,6 @@ Raymarch2dDynamicCoreAndVoigtState get_dyn_state(
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const MultiResMipChain& mip_chain
 ) {
-    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
-    vec3 mu;
-    mu(0) = -ray.dir(0) * sin_theta;
-    mu(1) = -incl;
-    mu(2) = -ray.dir(1) * sin_theta;
-
     auto basic_a_set = slice_active_set(adata, la);
     yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> local_active_set; // These are krl indices for CoreAndVoigt
     const auto& krl_mapping = mip_chain.cav_data.active_set_mapping;
@@ -759,10 +743,7 @@ Raymarch2dDynamicCoreAndVoigtState get_dyn_state(
         local_active_set(l_idx) = -1;
     }
 
-    // TODO(cmo): compute the wavelength ratios here?
-
     return Raymarch2dDynamicCoreAndVoigtState{
-        .mu = mu,
         .active_set = local_active_set,
         .profile = profile,
         .adata = adata
@@ -909,6 +890,7 @@ void cascade_i_25d(
                 );
                 RaymarchParams<DynamicState> params {
                     .distance_scale = atmos.voxel_scale,
+                    .mu = inverted_mu(ray, incl_quad.muy(theta_idx)),
                     .incl = incl_quad.muy(theta_idx),
                     .incl_weight = incl_quad.wmuy(theta_idx),
                     .la = la,

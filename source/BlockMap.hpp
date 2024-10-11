@@ -950,10 +950,11 @@ struct MultiLevelDDA {
 
             if (has_leaves) {
                 // NOTE(cmo): Refine, then return first intersection in refined region with data.
+                // TODO(cmo): Push t into the expected box so we can remove the check after?
                 update_mip_level(mip_level);
                 if (get_sample_level() != mip_level) {
                     // NOTE(cmo): Sometimes we round to just outside the refined
-                    // region on resolution change, and may need to take a step
+                    // region on resolution change, and may need to take a very small step
                     continue;
                 }
                 return true;

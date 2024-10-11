@@ -467,6 +467,8 @@ struct AtomicData {
 
 struct MipmapComputeState {
     i32 max_mip_factor;
+    i32 la_start;
+    i32 la_end;
     const yakl::Array<i32, 1, yakl::memDevice>& mippable_entries;
     const Fp2d& emis;
     const Fp2d& opac;
@@ -477,6 +479,8 @@ struct MipmapComputeState {
 
 struct MipmapSubsetState {
     i32 max_mip_factor;
+    i32 la_start;
+    i32 la_end;
     const Fp2d& emis;
     const Fp2d& opac;
     const Fp1d& vx;

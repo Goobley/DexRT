@@ -115,14 +115,7 @@ void dynamic_compute_gamma(
                 }
                 const fp_t wl_ray_weight = wl_weight / fp_t(c0_dirs_to_average<RcMode>());
 
-                vec3 mu;
-                const fp_t cos_theta = incl_quad.muy(probe_idx.incl);
-                const fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
-                // TODO(cmo): Issue may be here, with this mu needing to be flipped too.
-                // VERY VERY STRONGLY HERE
-                mu(0) = ray.dir(0) * sin_theta;
-                mu(1) = cos_theta;
-                mu(2) = ray.dir(1) * sin_theta;
+                vec3 mu = inverted_mu(ray, incl_quad.muy(probe_idx.incl));
 
                 AtmosPointParams local_atmos;
                 local_atmos.temperature = flat_atmos.temperature(k);
@@ -325,7 +318,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
         mip_chain.cav_data.fill(state, la_start, la_end);
     }
-    mip_chain.compute_mips(state);
+    mip_chain.compute_mips(state, la_start, la_end);
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = true,
@@ -368,7 +361,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             };
             mip_chain.dir_data.fill<RcModeNoBc>(state, casc_state, subset, vels, lte_scratch);
         }
-        mip_chain.compute_subset_mips(state, subset);
+        mip_chain.compute_subset_mips(state, subset, la_start, la_end);
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,

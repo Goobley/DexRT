@@ -219,10 +219,10 @@ struct CoreAndVoigtData {
     void compute_mip_n(const State& state, const MipmapComputeState& mm_state, i32 level) {
         JasUnpack(state, mr_block_map, adata, phi);
         const auto& block_map = mr_block_map.block_map;
-        JasUnpack(mm_state, max_mip_factor, mippable_entries, emis, opac);
+        JasUnpack(mm_state, max_mip_factor, mippable_entries, emis, opac, vx, vy, vz, la_start, la_end);
         constexpr i32 mip_block = 4;
         const fp_t vox_scale = state.atmos.voxel_scale;
-        const i32 wave_batch = emis.extent(1);
+        const i32 wave_batch = la_end - la_start;
 
         const i32 level_m_1 = level - 1;
         const i32 vox_size = (1 << level);
@@ -232,6 +232,7 @@ struct CoreAndVoigtData {
             SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
             YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
                 const fp_t ds = vox_scale;
+                const fp_t lambda = adata.wavelength(la_start + wave);
                 MRIdxGen idx_gen(mr_block_map);
 
                 const i64 ks = idx_gen.loop_idx(level, tile_idx, block_idx);
@@ -275,18 +276,35 @@ struct CoreAndVoigtData {
                     i64 idx = idxs[i];
                     fp_t tot_emis = emis(idx, wave) + FP(1e-15);
                     fp_t tot_opac = opac(idx, wave) + FP(1e-15);
+                    const fp_t max_vel = std::sqrt(
+                        square(vx(idx))
+                        + square(vy(idx))
+                        + square(vz(idx))
+                    );
+                    const fp_t max_c_ratio = max_vel / ConstantsFP::c;
 
                     for (int kri = 0; kri < CORE_AND_VOIGT_MAX_LINES; ++kri) {
                         i32 kr = active_set_mapping(kri);
                         if (kr < 0) {
                             break;
                         }
-                        // NOTE(cmo): Evaluate at line core as an overestimate
+                        // NOTE(cmo): Evaluate at closest possible wavelength to line centre
+                        const fp_t max_dop_shift = max_c_ratio * lambda0s(kri);
+                        fp_t lambda_sample = lambda0s(kri);
+                        const fp_t wl_dist_from_core = lambda - lambda0s(kri);
+                        if (std::abs(wl_dist_from_core) > max_dop_shift) {
+                            if (wl_dist_from_core < FP(0.0)) {
+                                lambda_sample = lambda + max_dop_shift;
+                            } else {
+                                lambda_sample = lambda - max_dop_shift;
+                            }
+                        }
+
                         EmisOpac line = emis_opac(CavEmisOpacState{
                             .ks = idx,
                             .krl = kri,
                             .wave = wave,
-                            .lambda = lambda0s(kri),
+                            .lambda = lambda_sample,
                             .vel = FP(0.0),
                             .phi = phi
                         });

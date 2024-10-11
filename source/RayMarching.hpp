@@ -51,24 +51,6 @@ struct Box {
     vec2 dims[NUM_DIM];
 };
 
-template <int NumAz=NUM_INCL>
-struct Raymarch2dStaticArgs {
-    FpConst3d eta = Fp3d();
-    FpConst3d chi = Fp3d();
-    vec2 ray_start;
-    vec2 ray_end;
-    vec2 centre;
-    yakl::SArray<fp_t, 1, NumAz> az_rays;
-    yakl::SArray<fp_t, 1, NumAz> az_weights;
-    yakl::SArray<fp_t, 1, 2> direction;
-    int la = -1; /// sentinel value of -1 to ignore bc
-    const PwBc<>& bc;
-    Fp3d alo = Fp3d();
-    fp_t distance_scale = FP(1.0);
-    vec3 offset = {};
-};
-
-
 /** Clips a ray to the specified box
  * \param ray the start/end points of the ray
  * \param box the box dimensions
@@ -307,7 +289,6 @@ YAKL_INLINE RadianceInterval<Alo> merge_intervals(
 }
 
 struct Raymarch2dDynamicState {
-    vec3 mu;
     const yakl::Array<const u16, 1, yakl::memDevice> active_set;
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
     const Atmosphere& atmos;
@@ -318,11 +299,9 @@ struct Raymarch2dDynamicState {
 };
 
 struct Raymarch2dDynamicInterpState {
-    vec3 mu;
 };
 
 struct Raymarch2dDynamicCoreAndVoigtState {
-    vec3 mu;
     const yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> active_set;
     const VoigtProfile<fp_t, false>& profile;
     const AtomicData<fp_t>& adata;
@@ -333,6 +312,7 @@ struct Raymarch2dArgs {
     const CascadeStateAndBc<Bc>& casc_state_bc;
     RayProps ray;
     fp_t distance_scale = FP(1.0);
+    vec3 mu;
     fp_t incl;
     fp_t incl_weight;
     int wave;
@@ -354,7 +334,7 @@ template <
 YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
-    JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
+    JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic = RcMode & RC_DYNAMIC;
     constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (LINE_SCHEME == LineCoeffCalc::VelocityInterp);
@@ -378,12 +358,6 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
     if ((RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped)) {
         // NOTE(cmo): Check the ray is going up along z.
         if ((ray.dir(1) > FP(0.0)) && la != -1) {
-            const fp_t cos_theta = incl;
-            const fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
-            vec3 mu;
-            mu(0) = -ray.dir(0) * sin_theta;
-            mu(1) = cos_theta;
-            mu(2) = -ray.dir(1) * sin_theta;
             vec3 pos;
             pos(0) = ray.centre(0) * distance_scale + offset(0);
             pos(1) = offset(1);
@@ -399,6 +373,9 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
 
     RayMarchState2d s = *marcher;
 
+    // NOTE(cmo): implicit assumption muy != 1.0
+    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
+    const fp_t inv_sin_theta = FP(1.0) / sin_theta;
     // NOTE(cmo): one_m_edt is also the ALO
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
     do {
@@ -427,7 +404,6 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
                 dyn_state.dynamic_opac(v, u, wave)
                 && dyn_state.active_set.extent(0) > 0
             ) {
-                const auto& mu = dyn_state.mu;
                 fp_t vel = (
                     atmos.vx.get_data()[k] * mu(0)
                     + atmos.vy.get_data()[k] * mu(1)
@@ -465,7 +441,6 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
                 // const int ks = dyn_state.active_map(v, u);
                 const int ks = idx_gen.idx(u, v);
                 if (ks != -1) {
-                    const auto& mu = dyn_state.mu;
                     const fp_t vel = (
                         dyn_state.vx(v, u) * mu(0)
                         + dyn_state.vy(v, u) * mu(1)
@@ -484,9 +459,7 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
         fp_t tau = chi_s * s.dt * distance_scale;
         fp_t source_fn = eta_s / chi_s;
 
-        // NOTE(cmo): implicit assumption muy != 1.0
-        fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
-        fp_t tau_mu = tau / sin_theta;
+        fp_t tau_mu = tau * inv_sin_theta;
         fp_t edt;
         if (tau_mu < FP(1e-2)) {
             edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
@@ -522,7 +495,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
     static_assert(std::is_same_v<DynamicState, Raymarch2dDynamicInterpState> || std::is_same_v<DynamicState, DexEmpty> || std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>, "Only supporting interp state in block marcher");
-    JasUnpack(args, casc_state_bc, ray, distance_scale, incl, incl_weight, wave, la, offset, dyn_state);
+    JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(args, mip_chain);
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic = (RcMode & RC_DYNAMIC);
@@ -536,12 +509,6 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     if ((RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped)) {
         // NOTE(cmo): Check the ray is going up along z.
         if ((ray.dir(1) > FP(0.0)) && la != -1) {
-            const fp_t cos_theta = incl;
-            const fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
-            vec3 mu;
-            mu(0) = -ray.dir(0) * sin_theta;
-            mu(1) = cos_theta;
-            mu(2) = -ray.dir(1) * sin_theta;
             vec3 pos;
             pos(0) = ray.centre(0) * distance_scale + offset(0);
             pos(1) = offset(1);
@@ -574,7 +541,6 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             //     chi_s = dyn_state.sparse_stores.opac(ks, wave) + FP(1e-15);
             // } else {
             if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
-                const auto& mu = dyn_state.mu;
                 const fp_t vel = (
                     mip_chain.vx(ks) * mu(0)
                     + mip_chain.vy(ks) * mu(1)
@@ -584,7 +550,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
             } else if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
-                JasUnpack(dyn_state, mu, active_set, profile, adata);
+                JasUnpack(dyn_state, active_set, profile, adata);
                 i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
                 eta_s = mip_chain.emis.get_data()[ks_wave];
                 chi_s = mip_chain.opac.get_data()[ks_wave] + FP(1e-15);

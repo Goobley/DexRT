@@ -530,6 +530,16 @@ YAKL_INLINE RayProps invert_direction(RayProps props) {
     return invert;
 }
 
+/// Compute mu for traversing this ray from end to start
+YAKL_INLINE vec3 inverted_mu(const RayProps& ray, fp_t incl) {
+    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
+    vec3 mu;
+    mu(0) = -ray.dir(0) * sin_theta;
+    mu(1) = -incl;
+    mu(2) = -ray.dir(1) * sin_theta;
+    return mu;
+}
+
 /// Returns the fractional index associated with a direction. Note that this is
 /// in the range [-num_flat_dirs/2, num_flat_dirs/2] and needs to be remapped
 /// accordingly.

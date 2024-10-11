@@ -43,7 +43,7 @@ struct MultiResMipChain {
     /// compute the mips from mip0 (stored in the start of the arrays), for
     /// direction independent terms. Also update state.mr_block_map as
     /// necessary.
-    void compute_mips(const State& state) {
+    void compute_mips(const State& state, int la_start, int la_end) {
         JasUnpack(state, mr_block_map);
         const auto& block_map = mr_block_map.block_map;
         JasUnpack((*this), vx, vy, vz, emis, opac, dir_data);
@@ -218,6 +218,8 @@ struct MultiResMipChain {
 
             MipmapComputeState mm_state{
                 .max_mip_factor = max_mip_factor,
+                .la_start = la_start,
+                .la_end = la_end,
                 .mippable_entries = mippable_entries,
                 .emis = emis,
                 .opac = opac,
@@ -258,13 +260,15 @@ struct MultiResMipChain {
 
     /// compute the mips from mip0 being stored in the start of these arrays.
     /// Currently these aren't allowed to modify state.mr_block_map.
-    void compute_subset_mips(const State& state, const CascadeCalcSubset& subset) {
+    void compute_subset_mips(const State& state, const CascadeCalcSubset& subset, int la_start, int la_end) {
         if (state.config.mode == DexrtMode::GivenFs) {
             return;
         }
         for (i32 level_m_1 = 0; level_m_1 < max_mip_factor; ++level_m_1) {
             MipmapSubsetState mm_state{
                 .max_mip_factor = max_mip_factor,
+                .la_start = la_start,
+                .la_end = la_end,
                 .emis = emis,
                 .opac = opac,
                 .vx = vx,
