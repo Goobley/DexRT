@@ -57,9 +57,13 @@ constexpr fp_t INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH = FP(2.0);
 constexpr int CORE_AND_VOIGT_MAX_LINES = 4;
 enum class BaseMipContents {
     Continua,
-    LinesAtRest
+    LinesAtRest,
+    VelocityDependent
 };
-constexpr BaseMipContents BASE_MIP_CONTAINS = (LINE_SCHEME == LineCoeffCalc::VelocityInterp) ? BaseMipContents::LinesAtRest : BaseMipContents::Continua;
+constexpr BaseMipContents BASE_MIP_CONTAINS =
+    (LINE_SCHEME == LineCoeffCalc::VelocityInterp) ? BaseMipContents::LinesAtRest
+        : (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) ? BaseMipContents::Continua
+        : BaseMipContents::VelocityDependent;
 
 enum class RcConfiguration {
     Vanilla,

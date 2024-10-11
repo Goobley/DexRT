@@ -66,59 +66,6 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         };
         mip_chain.compute_subset_mips(state, subset, la_start, la_end);
 
-        std::vector<Fp3d> eta_mips;
-        std::vector<Fp3d> chi_mips;
-        yakl::Array<i32, 2, yakl::memDevice> max_mip_level("max mip level reshape", state.J.extent(1) / BLOCK_SIZE, state.J.extent(2) / BLOCK_SIZE);
-        // std::vector<Fp4d> eta_a_mips;
-        // std::vector<Fp4d> chi_a_mips;
-        for (int mip_level=0; mip_level <= state.mr_block_map.max_mip_level; ++mip_level) {
-            const int vox_size = (1 << mip_level);
-            Fp3d emis_entry("eta", state.J.extent(1) / vox_size, state.J.extent(2) / vox_size, wave_batch);
-            Fp3d opac_entry("chi", state.J.extent(1) / vox_size, state.J.extent(2) / vox_size, wave_batch);
-
-            auto bounds = block_map.loop_bounds(vox_size);
-            parallel_for(
-                SimpleBounds<3>(
-                    bounds.dim(0),
-                    bounds.dim(1),
-                    wave_batch
-                ),
-                YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
-                    MRIdxGen idx_gen(mr_block_map);
-                    i64 ks = idx_gen.loop_idx(mip_level, tile_idx, block_idx);
-                    Coord2 coord = idx_gen.loop_coord(mip_level, tile_idx, block_idx);
-
-                    emis_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_chain.emis(ks, wave);
-                    opac_entry(coord.z / vox_size, coord.x / vox_size, wave) = mip_chain.opac(ks, wave);
-                }
-            );
-            parallel_for(
-                SimpleBounds<1>(
-                    bounds.dim(0)
-                ),
-                YAKL_LAMBDA (i64 tile_idx) {
-                    MRIdxGen idx_gen(mr_block_map);
-                    Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
-
-                    max_mip_level(tile_coord.z, tile_coord.x) = mr_block_map.lookup.get(tile_coord.x, tile_coord.z);
-                }
-            );
-            yakl::fence();
-            eta_mips.push_back(emis_entry);
-            chi_mips.push_back(opac_entry);
-        }
-        yakl::SimpleNetCDF nc;
-        // NOTE(cmo): Mips are being generated, but max_mip_level, i.e. mr_block_map not being filled
-        nc.create("mip_data.nc", yakl::NETCDF_MODE_REPLACE);
-        for (int mip_level = 0; mip_level < eta_mips.size(); ++mip_level) {
-            std::string zn = fmt::format("z{}", mip_level);
-            std::string xn = fmt::format("x{}", mip_level);
-            nc.write(eta_mips[mip_level], fmt::format("emis_{}", mip_level), {zn, xn, "wave"});
-            nc.write(chi_mips[mip_level], fmt::format("opac_{}", mip_level), {zn, xn, "wave"});
-        }
-        nc.write(max_mip_level, "max_mip_level", {"z_tiles", "x_tiles"});
-        nc.close();
-
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,

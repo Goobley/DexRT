@@ -205,7 +205,7 @@ struct DirectionalEmisOpacInterp {
         wave_batch = std::min(wave_batch, ray_subset.wave_batch);
 
         JasUnpack((*this), emis_opac_vel, vel_start, vel_step);
-        JasUnpack(state, adata, dynamic_opac, phi, pops);
+        JasUnpack(state, adata, phi, pops);
         const auto flatmos = flatten<const fp_t>(atmos);
         // NOTE(cmo): Was getting segfaults with ScalarLiveOuts
         Fp1d max_thermal_vel_frac("max_thermal_vel_frac", 1);

@@ -211,11 +211,7 @@ void dynamic_compute_gamma(
 }
 
 void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
-    auto& atmos = state.atmos;
-    auto& phi = state.phi;
-    auto& pops = state.pops;
-    auto& adata = state.adata;
-    auto& dynamic_opac = state.dynamic_opac;
+    JasUnpack(state, atmos, phi, pops, adata);
 
     const bool sparse_calc = state.config.sparse_calculation;
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
@@ -232,19 +228,17 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     int wave_batch = la_end - la_start;
     MultiResMipChain mip_chain;
     mip_chain.init(state, state.mr_block_map.buffer_len(), wave_batch);
+    const auto& flat_dynamic_opac = mip_chain.classic_data.dynamic_opac;
+    const bool fill_dynamic_opac = flat_dynamic_opac.initialized();
 
     const auto flatmos = flatten<const fp_t>(atmos);
     auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
     auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
-    auto flat_dynamic_opac = dynamic_opac.reshape<2>(
-        Dims(
-            dynamic_opac.extent(0) * dynamic_opac.extent(1),
-            dynamic_opac.extent(2)
-        )
-    );
     auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0) * state.active.extent(1)));
     const auto& block_map = state.mr_block_map.block_map;
     auto bounds = block_map.loop_bounds();
+
+    // TODO(cmo): This -> mip_chain.fill_emis_opac?
     parallel_for(
         "Compute eta, chi",
         SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
@@ -268,13 +262,15 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             const int la = la_start + wave;
             int governing_atom = adata.governing_trans(la).atom;
 
-            bool static_only = v_norm >= (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
+            const bool static_only = v_norm >= (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
                 adata.mass(governing_atom),
                 local_atmos.temperature
             ));
             auto active_set = slice_active_set(adata, la);
-            const bool no_lines = (active_set.extent(0) == 0);
-            flat_dynamic_opac(k, wave) = static_only || no_lines;
+            if (fill_dynamic_opac) {
+                const bool no_lines = (active_set.extent(0) == 0);
+                flat_dynamic_opac(ks, wave) = static_only || no_lines;
+            }
             EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
             if constexpr (BASE_MIP_CONTAINS == BaseMipContents::Continua) {
                 mode = EmisOpacMode::StaticOnly;
@@ -300,6 +296,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             mip_chain.opac(ks, wave) = result.chi;
         }
     );
+
     parallel_for(
         "Copy vels",
         SimpleBounds<2>(bounds),
@@ -315,6 +312,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         }
     );
     yakl::fence();
+    /// NOTE(cmo): Split out mip_chain.fill_mip0 and fill_subset_mip0, exactly same as mips?
     if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
         mip_chain.cav_data.fill(state, la_start, la_end);
     }

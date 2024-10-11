@@ -710,8 +710,7 @@ Raymarch2dDynamicInterpState get_dyn_state(
     const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const MultiResMipChain& mip_chain
 ) {
-    return Raymarch2dDynamicInterpState{
-    };
+    return Raymarch2dDynamicInterpState{};
 }
 
 template <>

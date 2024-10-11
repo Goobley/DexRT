@@ -8,12 +8,21 @@
 #include "DirectionalEmisOpacInterp.hpp"
 #include "CoreAndVoigtEmisOpac.hpp"
 
+struct ClassicEmisOpacData {
+    Fp2d dynamic_opac; // [ks, wave_batch] -- whether this cell needs its lines to be computed separately.
+
+    void init(i64 buffer_len, i32 wave_batch) {
+        dynamic_opac = Fp2d("dynamic_opac", buffer_len, wave_batch);
+    }
+};
+
 struct MultiResMipChain {
     i32 max_mip_factor;
     Fp2d emis; // [ks, wave_batch]
     Fp2d opac; // [ks, wave_batch]
     DirectionalEmisOpacInterp dir_data;
     CoreAndVoigtData cav_data;
+    ClassicEmisOpacData classic_data;
     Fp1d vx; // [ks]
     Fp1d vy; // [ks]
     Fp1d vz; // [ks]
@@ -26,15 +35,20 @@ struct MultiResMipChain {
         max_mip_factor = state.mr_block_map.max_mip_level;
 
         if (state.config.mode != DexrtMode::GivenFs) {
-            vx = Fp1d("vx_mips", buffer_len);
-            vy = Fp1d("vy_mips", buffer_len);
-            vz = Fp1d("vz_mips", buffer_len);
+            // NOTE(cmo): Classic doesn't use mips
+            if constexpr (LINE_SCHEME != LineCoeffCalc::Classic) {
+                vx = Fp1d("vx_mips", buffer_len);
+                vy = Fp1d("vy_mips", buffer_len);
+                vz = Fp1d("vz_mips", buffer_len);
+            }
 
             if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
                 dir_data.init(buffer_len, wave_batch);
             } else if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
                 cav_data.init(buffer_len, CORE_AND_VOIGT_MAX_LINES);
-            } else if constexpr (LINE_SCHEME != LineCoeffCalc::Classic) {
+            } else if constexpr (LINE_SCHEME == LineCoeffCalc::Classic) {
+                classic_data.init(buffer_len, wave_batch);
+            } else {
                 throw std::runtime_error("It appears you've added a LineCoeffCalc, but nothing to Mipmaps. Do you need to?");
             }
         }

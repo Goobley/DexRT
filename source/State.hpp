@@ -30,7 +30,6 @@ struct State {
     AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
-    yakl::Array<bool, 3, yakl::memDevice> dynamic_opac; // [z, x, wave] -- whether this cell needs its lines to be computed separately
     yakl::Array<bool, 2, yakl::memDevice> active; // [z, x]  -- whether this cell should be considered
     yakl::Array<i64, 2, yakl::memDevice> active_map; // [z, x] -- index of this cell in an array only allocated for active cells (-1 if not allocated)
     Fp3d wphi; /// [kr, z, x]
