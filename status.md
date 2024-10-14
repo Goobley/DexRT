@@ -60,12 +60,14 @@ Features/ToDo
     - This is now available as .full_flat_index()
 - [ ] Finish migrating Classic emis/opac method to MRBlockMap
     - [ ] Remove old DDA infrastructure (after dexrt_ray updated)
+        - Not if we leave `dexrt_ray` as-is
     - [ ] Propagate `mip_chain` allocation into main -- can store in State
 - [ ] Output sparse data by default, but have bool to rehydrate before saving (and support doing so in dexrt_py)
     - [x] Output `max_mip_level` for each wave_batch
     - [ ] Output active map: sufficient information to reconstruct the tiles and their locations from flat buffers. probably just block_map.active_tiles that we can morton decode.
     - [ ] Add extra attrs for sparse config (e.g. BLOCK_SIZE)
-- [ ] Load sparse output into dexrt_ray
+- [ ] Load sparse output into `dexrt_ray`
+    - [ ] Just rehydrate the atmosphere and leave as-is
     - [ ] Will need to create own `mr_block_map` but with `max_mip_level` 0 from data in output.
 - [ ] Add extra attrs for emis/opac config
 - [ ] Support ANGLE_INVARIANT_THERMAL_VEL_FRAC for CoreAndVoigt?
@@ -88,9 +90,6 @@ Features/ToDo
     - Paletou 1995 method?
 
 
-
-
-
 Ideas
 =====
 
@@ -108,6 +107,7 @@ Ideas
     - This is done on a velocity-dependent basis in DirectionalEmisOpacInterp... remains quite memory intensive for low error
     - Other mipmappable option is CoreAndVoigt --  we store the line core parameters (eta*, chi*, a_damp, inv_dop_width), and modulate them with the Voigt.
 - [ ] Sparse line quadratures that fit entirely inside a WAVE_BATCH (can be increased). Ensure whole line is done in one go, them use a higher order scheme to evaluate the wavelength integral over I?
+- [ ] If we stick with such a simple ALO, it can actually be computed in-situ when computing Gamma, saving the memory.
 
 
 Notes

@@ -35,47 +35,24 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 ) {
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri;
-    if constexpr (
-       std::is_same_v<DynamicState, DexEmpty>
-       || std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>
-       || std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>
-    ) {
-        ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
-            Raymarch2dArgs<Bc, DynamicState>{
-                .casc_state_bc = casc_state,
-                .ray = ray,
-                .distance_scale = params.distance_scale,
-                .mu = params.mu,
-                .incl = params.incl,
-                .incl_weight = params.incl_weight,
-                .wave = this_probe.wave,
-                .la = params.la,
-                .offset = params.offset,
-                .max_mip_to_sample = params.max_mip_to_sample,
-                .block_map = params.block_map,
-                .mr_block_map = params.mr_block_map,
-                .mip_chain = params.mip_chain,
-                .dyn_state = params.dyn_state
-            }
-        );
-    } else {
-        ri = dda_raymarch_2d<RcMode, Bc>(
-            Raymarch2dArgs<Bc, DynamicState>{
-                .casc_state_bc = casc_state,
-                .ray = ray,
-                .distance_scale = params.distance_scale,
-                .mu = params.mu,
-                .incl = params.incl,
-                .incl_weight = params.incl_weight,
-                .wave = this_probe.wave,
-                .la = params.la,
-                .offset = params.offset,
-                .block_map = params.block_map,
-                .mip_chain = params.mip_chain,
-                .dyn_state = params.dyn_state
-            }
-        );
-    }
+    ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
+        Raymarch2dArgs<Bc, DynamicState>{
+            .casc_state_bc = casc_state,
+            .ray = ray,
+            .distance_scale = params.distance_scale,
+            .mu = params.mu,
+            .incl = params.incl,
+            .incl_weight = params.incl_weight,
+            .wave = this_probe.wave,
+            .la = params.la,
+            .offset = params.offset,
+            .max_mip_to_sample = params.max_mip_to_sample,
+            .block_map = params.block_map,
+            .mr_block_map = params.mr_block_map,
+            .mip_chain = params.mip_chain,
+            .dyn_state = params.dyn_state
+        }
+    );
 
     constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
     // const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
@@ -155,17 +132,21 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
             const fp_t dir_len = std::sqrt(square(ray.dir(0)) + square(ray.dir(1)));
             ray.dir(0) /= dir_len;
             ray.dir(1) /= dir_len;
-            RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
+            RadianceInterval<Alo> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
                 Raymarch2dArgs<Bc, DynamicState>{
                     .casc_state_bc = casc_state,
                     .ray = ray,
                     .distance_scale = params.distance_scale,
+                    .mu = params.mu,
                     .incl = params.incl,
                     .incl_weight = params.incl_weight,
                     .wave = this_probe.wave,
                     .la = params.la,
                     .offset = params.offset,
-                    .active = params.active,
+                    .max_mip_to_sample = params.max_mip_to_sample,
+                    .block_map = params.block_map,
+                    .mr_block_map = params.mr_block_map,
+                    .mip_chain = params.mip_chain,
                     .dyn_state = params.dyn_state
                 }
             );
@@ -190,17 +171,21 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
             interp.tau += weights(bilin) * merged.tau;
         }
     } else {
-        interp = dda_raymarch_2d<RcMode, Bc>(
+        interp = multi_level_dda_raymarch_2d<RcMode, Bc>(
             Raymarch2dArgs<Bc, DynamicState>{
                 .casc_state_bc = casc_state,
                 .ray = ray,
                 .distance_scale = params.distance_scale,
+                .mu = params.mu,
                 .incl = params.incl,
                 .incl_weight = params.incl_weight,
                 .wave = this_probe.wave,
                 .la = params.la,
                 .offset = params.offset,
-                .active = params.active,
+                .max_mip_to_sample = params.max_mip_to_sample,
+                .block_map = params.block_map,
+                .mr_block_map = params.mr_block_map,
+                .mip_chain = params.mip_chain,
                 .dyn_state = params.dyn_state
             }
         );
@@ -262,17 +247,21 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
     const RaymarchParams<DynamicState>& params
 ) {
     ray = invert_direction(ray);
-    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
+    RadianceInterval<Alo> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
         Raymarch2dArgs<Bc, DynamicState>{
             .casc_state_bc = casc_state,
             .ray = ray,
             .distance_scale = params.distance_scale,
+            .mu = params.mu,
             .incl = params.incl,
             .incl_weight = params.incl_weight,
             .wave = this_probe.wave,
             .la = params.la,
             .offset = params.offset,
-            .active = params.active,
+            .max_mip_to_sample = params.max_mip_to_sample,
+            .block_map = params.block_map,
+            .mr_block_map = params.mr_block_map,
+            .mip_chain = params.mip_chain,
             .dyn_state = params.dyn_state
         }
     );
@@ -361,17 +350,21 @@ YAKL_INLINE RadianceInterval<Alo> march_parallax_fix_inner(
     const RaymarchParams<DynamicState>& params
 ) {
     ray = invert_direction(ray);
-    RadianceInterval<Alo> ri = dda_raymarch_2d<RcMode, Bc>(
+    RadianceInterval<Alo> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
         Raymarch2dArgs<Bc, DynamicState>{
             .casc_state_bc = casc_state,
             .ray = ray,
             .distance_scale = params.distance_scale,
+            .mu = params.mu,
             .incl = params.incl,
             .incl_weight = params.incl_weight,
             .wave = this_probe.wave,
             .la = params.la,
             .offset = params.offset,
-            .active = params.active,
+            .max_mip_to_sample = params.max_mip_to_sample,
+            .block_map = params.block_map,
+            .mr_block_map = params.mr_block_map,
+            .mip_chain = params.mip_chain,
             .dyn_state = params.dyn_state
         }
     );
@@ -667,7 +660,6 @@ DynamicState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const MultiResMipChain& mip_chain
 ) {
     return DynamicState{};
@@ -683,12 +675,10 @@ Raymarch2dDynamicState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const MultiResMipChain& mip_chain
 ) {
     return Raymarch2dDynamicState{
         .active_set = slice_active_set(adata, la),
-        .dynamic_opac = dynamic_opac,
         .atmos = atmos,
         .adata = adata,
         .profile = profile,
@@ -707,7 +697,6 @@ Raymarch2dDynamicInterpState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const MultiResMipChain& mip_chain
 ) {
     return Raymarch2dDynamicInterpState{};
@@ -723,7 +712,6 @@ Raymarch2dDynamicCoreAndVoigtState get_dyn_state(
     const AtomicData<fp_t>& adata,
     const VoigtProfile<fp_t>& profile,
     const Fp2d& flat_pops,
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac,
     const MultiResMipChain& mip_chain
 ) {
     auto basic_a_set = slice_active_set(adata, la);
@@ -757,7 +745,7 @@ void cascade_i_25d(
     const CascadeCalcSubset& subset,
     const MultiResMipChain& mip_chain = MultiResMipChain()
 ) {
-    JasUnpack(state, atmos, incl_quad, adata, pops, dynamic_opac, active, active_map);
+    JasUnpack(state, atmos, incl_quad, adata, pops, active, active_map);
     JasUnpack(subset, la_start, la_end, subset_idx);
     const auto& profile = state.phi;
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
@@ -832,7 +820,7 @@ void cascade_i_25d(
 
     JasUnpack(state, mr_block_map);
     const auto& block_map = mr_block_map.block_map;
-    const int max_mip_to_sample = MIP_LEVEL[cascade_idx];
+    const int max_mip_to_sample = std::min(MIP_LEVEL[cascade_idx], mip_chain.max_mip_factor);
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());
     parallel_for(
@@ -884,7 +872,6 @@ void cascade_i_25d(
                     adata,
                     profile,
                     flat_pops,
-                    dynamic_opac,
                     mip_chain
                 );
                 RaymarchParams<DynamicState> params {
@@ -901,6 +888,7 @@ void cascade_i_25d(
                     .dyn_state = dyn_state
                 };
 
+
                 RadianceInterval<AloType> ri;
                 auto& casc_rays = ray_set;
 #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
@@ -908,34 +896,8 @@ void cascade_i_25d(
 #else
                 const auto& boundaries = boundaries_h;
 #endif
-                if constexpr (RcMode & RC_SAMPLE_BC) {
-                    switch (boundaries.boundary) {
-                        case BoundaryType::Zero: {
-                            auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
-                            ri = march_and_merge_dispatch<RcMode>(
-                                casc_and_bc,
-                                casc_rays,
-                                probe_idx,
-                                ray,
-                                params
-                            );
-                        } break;
-                        case BoundaryType::Promweaver: {
-                            auto casc_and_bc = get_bc<PwBc<>>(dev_casc_state, boundaries);
-                            ri = march_and_merge_dispatch<RcMode>(
-                                casc_and_bc,
-                                casc_rays,
-                                probe_idx,
-                                ray,
-                                params
-                            );
-                        } break;
-                        default: {
-                            assert(false && "Unknown BC type");
-                        }
-                    }
-                } else {
-                    auto casc_and_bc = get_bc<ZeroBc>(dev_casc_state, boundaries);
+                auto dispatch_outer = [&]<typename BcType>(BcType bc_type){
+                    auto casc_and_bc = get_bc<BcType>(dev_casc_state, boundaries);
                     ri = march_and_merge_dispatch<RcMode>(
                         casc_and_bc,
                         casc_rays,
@@ -943,6 +905,26 @@ void cascade_i_25d(
                         ray,
                         params
                     );
+                };
+
+                if constexpr (RcMode & RC_SAMPLE_BC) {
+                    switch (boundaries.boundary) {
+                        case BoundaryType::Zero: {
+                            // NOTE(cmo): lambdas aren't templated... they're
+                            // essentially structs with a template on
+                            // operator(), so we have to put the "template" in
+                            // as an arg
+                            dispatch_outer(ZeroBc{});
+                        } break;
+                        case BoundaryType::Promweaver: {
+                            dispatch_outer(PwBc<>{});
+                        } break;
+                        default: {
+                            yakl::yakl_throw("Unknown BC type");
+                        }
+                    }
+                } else {
+                    dispatch_outer(ZeroBc{});
                 }
                 average_ri.I += sample_weight * ri.I;
                 average_ri.tau += sample_weight * ri.tau;
@@ -963,7 +945,6 @@ void cascade_i_25d(
             dev_casc_state.cascade_I(lin_idx) = average_ri.I;
             dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
             if constexpr (dev_compute_alo) {
-                // dev_casc_state.alo(v, u, phi_idx, wave, theta_idx) = average_ri.alo;
                 dev_casc_state.alo(lin_idx) = average_ri.alo;
             }
         },

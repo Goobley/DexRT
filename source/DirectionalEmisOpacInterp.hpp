@@ -183,7 +183,6 @@ struct DirectionalEmisOpacInterp {
     template <int RcMode>
     void fill(
         const State& state,
-        const CascadeState& casc_state,
         const CascadeCalcSubset& subset,
         const FlatVelocity& vels,
         const Fp3d& n_star

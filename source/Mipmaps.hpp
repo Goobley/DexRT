@@ -23,9 +23,9 @@ struct MultiResMipChain {
     DirectionalEmisOpacInterp dir_data;
     CoreAndVoigtData cav_data;
     ClassicEmisOpacData classic_data;
-    Fp1d vx; // [ks]
-    Fp1d vy; // [ks]
-    Fp1d vz; // [ks]
+    Fp1d vx; // [ks], present if not LineCoeffCalc::Classic
+    Fp1d vy; // [ks], present if not LineCoeffCalc::Classic
+    Fp1d vz; // [ks], present if not LineCoeffCalc::Classic
 
     /// buffer_len is expected to be the one from mr_block_map, i.e. to hold all the mips.
     void init(const State& state, i64 buffer_len, i32 wave_batch) {
@@ -54,6 +54,114 @@ struct MultiResMipChain {
         }
     }
 
+    void fill_mip0_atomic(const State& state, const Fp3d& lte_scratch, int la_start, int la_end) {
+        JasUnpack(state, atmos, pops, phi, adata);
+        int wave_batch = la_end - la_start;
+
+        const auto& flat_dynamic_opac = classic_data.dynamic_opac;
+        const bool fill_dynamic_opac = flat_dynamic_opac.initialized();
+        const auto flatmos = flatten<const fp_t>(atmos);
+        auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
+        auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
+        auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0) * state.active.extent(1)));
+
+        JasUnpack((*this), emis, opac);
+        const auto& block_map = state.mr_block_map.block_map;
+        auto bounds = block_map.loop_bounds();
+        parallel_for(
+            "Compute eta, chi",
+            SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int wave) {
+                IndexGen<BLOCK_SIZE> idx_gen(block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                i64 k = idx_gen.full_flat_idx(coord.x, coord.z);
+
+                AtmosPointParams local_atmos;
+                local_atmos.temperature = flatmos.temperature(k);
+                local_atmos.ne = flatmos.ne(k);
+                local_atmos.vturb = flatmos.vturb(k);
+                local_atmos.nhtot = flatmos.nh_tot(k);
+                local_atmos.nh0 = flatmos.nh0(k);
+                const fp_t v_norm = std::sqrt(
+                        square(flatmos.vx(k))
+                        + square(flatmos.vy(k))
+                        + square(flatmos.vz(k))
+                );
+                const int la = la_start + wave;
+                int governing_atom = adata.governing_trans(la).atom;
+
+                const bool static_only = v_norm >= (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
+                    adata.mass(governing_atom),
+                    local_atmos.temperature
+                ));
+                auto active_set = slice_active_set(adata, la);
+                if (fill_dynamic_opac) {
+                    const bool no_lines = (active_set.extent(0) == 0);
+                    flat_dynamic_opac(ks, wave) = static_only || no_lines;
+                }
+                EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
+                if constexpr (BASE_MIP_CONTAINS == BaseMipContents::Continua) {
+                    mode = EmisOpacMode::StaticOnly;
+                } else if constexpr (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest) {
+                    mode = EmisOpacMode::All;
+                }
+
+                auto result = emis_opac(
+                    EmisOpacState<fp_t>{
+                        .adata = adata,
+                        .profile = phi,
+                        .la = la,
+                        .n = flat_pops,
+                        .n_star_scratch = flat_n_star,
+                        .k = k,
+                        .atmos = local_atmos,
+                        .active_set = active_set,
+                        .active_set_cont = slice_active_cont_set(adata, la),
+                        .mode = mode
+                    }
+                );
+                emis(ks, wave) = result.eta;
+                opac(ks, wave) = result.chi;
+            }
+        );
+
+        if (vx.initialized()) {
+            JasUnpack((*this), vx, vy, vz);
+            parallel_for(
+                "Copy vels",
+                SimpleBounds<2>(bounds),
+                YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+                    IndexGen<BLOCK_SIZE> idx_gen(block_map);
+                    i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                    Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                    i64 k = idx_gen.full_flat_idx(coord.x, coord.z);
+
+                    vx(ks) = flatmos.vx(k);
+                    vy(ks) = flatmos.vy(k);
+                    vz(ks) = flatmos.vz(k);
+                }
+            );
+        }
+
+        if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
+            cav_data.fill(state, la_start, la_end);
+        }
+
+        yakl::fence();
+    }
+
+    void fill_subset_mip0_atomic(const State& state, const CascadeCalcSubset& subset, const Fp3d& n_star) {
+        if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
+            FlatVelocity vels{
+                .vx = vx,
+                .vy = vy,
+                .vz = vz
+            };
+            dir_data.fill<RC_flags_storage()>(state, subset, vels, n_star);
+        }
+    }
+
     /// compute the mips from mip0 (stored in the start of the arrays), for
     /// direction independent terms. Also update state.mr_block_map as
     /// necessary.
@@ -64,7 +172,7 @@ struct MultiResMipChain {
 
         constexpr i32 mip_block = 4;
         const fp_t vox_scale = state.atmos.voxel_scale;
-        const i32 wave_batch = emis.extent(1);
+        const i32 wave_batch = la_end - la_start;
 
         // NOTE(cmo): mippable entries is used as an accumulator during each round
         // of mipping, and then divided by the number of sub blocks and placed into
@@ -274,15 +382,15 @@ struct MultiResMipChain {
 
     /// compute the mips from mip0 being stored in the start of these arrays.
     /// Currently these aren't allowed to modify state.mr_block_map.
-    void compute_subset_mips(const State& state, const CascadeCalcSubset& subset, int la_start, int la_end) {
+    void compute_subset_mips(const State& state, const CascadeCalcSubset& subset) {
         if (state.config.mode == DexrtMode::GivenFs) {
             return;
         }
         for (i32 level_m_1 = 0; level_m_1 < max_mip_factor; ++level_m_1) {
             MipmapSubsetState mm_state{
                 .max_mip_factor = max_mip_factor,
-                .la_start = la_start,
-                .la_end = la_end,
+                .la_start = subset.la_start,
+                .la_end = subset.la_end,
                 .emis = emis,
                 .opac = opac,
                 .vx = vx,

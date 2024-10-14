@@ -290,7 +290,6 @@ YAKL_INLINE RadianceInterval<Alo> merge_intervals(
 
 struct Raymarch2dDynamicState {
     const yakl::Array<const u16, 1, yakl::memDevice> active_set;
-    const yakl::Array<bool, 3, yakl::memDevice>& dynamic_opac;
     const Atmosphere& atmos;
     const AtomicData<fp_t>& adata;
     const VoigtProfile<fp_t, false>& profile;
@@ -433,7 +432,8 @@ YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
                 eta_s += lines.eta;
                 chi_s += lines.chi;
             }
-        } else if constexpr (dynamic && dynamic_interp) {
+        }
+         else if constexpr (dynamic && dynamic_interp) {
             // NOTE(cmo): dyn_state is Raymarch2dDynamicInterpState
             // if (dyn_state.dynamic_opac(v, u, wave)) {
             IndexGen<BLOCK_SIZE> idx_gen(dyn_state.block_map);
@@ -494,11 +494,12 @@ template <
 YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
-    static_assert(std::is_same_v<DynamicState, Raymarch2dDynamicInterpState> || std::is_same_v<DynamicState, DexEmpty> || std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>, "Only supporting interp state in block marcher");
     JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(args, mip_chain);
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic = (RcMode & RC_DYNAMIC);
+    constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>;
+    constexpr bool dynmaic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
     bool start_clipped;
@@ -536,11 +537,8 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             i32 u = s.curr_coord(0);
             i32 v = s.curr_coord(1);
             i64 ks = idx_gen.idx(s.current_mip_level, u, v);
-            // if (!dyn_state.sparse_stores.dynamic(ks, wave)) {
-            //     eta_s = dyn_state.sparse_stores.emis(ks, wave);
-            //     chi_s = dyn_state.sparse_stores.opac(ks, wave) + FP(1e-15);
-            // } else {
-            if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>) {
+
+            if constexpr (dynamic_interp) {
                 const fp_t vel = (
                     mip_chain.vx(ks) * mu(0)
                     + mip_chain.vy(ks) * mu(1)
@@ -549,7 +547,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
-            } else if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
+            } else if constexpr (dynmaic_cav) {
                 JasUnpack(dyn_state, active_set, profile, adata);
                 i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
                 eta_s = mip_chain.emis.get_data()[ks_wave];
@@ -587,10 +585,45 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             } else {
                 eta_s = mip_chain.emis(ks, wave);
                 chi_s = mip_chain.opac(ks, wave) + FP(1e-15);
+                if constexpr (dynamic) {
+                    // TODO(cmo): Migrate this to flatmos
+                    const Atmosphere& atmos = dyn_state.atmos;
+                    const i64 k = v * atmos.temperature.extent(1) + u;
+                    if (
+                        mip_chain.classic_data.dynamic_opac(ks, wave)
+                        && dyn_state.active_set.extent(0) > 0
+                    ) {
+                        fp_t vel = (
+                            atmos.vx.get_data()[k] * mu(0)
+                            + atmos.vy.get_data()[k] * mu(1)
+                            + atmos.vz.get_data()[k] * mu(2)
+                        );
+                        AtmosPointParams local_atmos{
+                            .temperature = atmos.temperature.get_data()[k],
+                            .ne = atmos.ne.get_data()[k],
+                            .vturb = atmos.vturb.get_data()[k],
+                            .nhtot = atmos.nh_tot.get_data()[k],
+                            .vel = vel,
+                            .nh0 = dyn_state.nh0.get_data()[k]
+                        };
+                        auto lines = emis_opac(
+                            EmisOpacState<fp_t>{
+                                .adata = dyn_state.adata,
+                                .profile = dyn_state.profile,
+                                .la = la,
+                                .n = dyn_state.n,
+                                .k = k,
+                                .atmos = local_atmos,
+                                .active_set = dyn_state.active_set,
+                                .mode = EmisOpacMode::DynamicOnly
+                            }
+                        );
+
+                        eta_s += lines.eta;
+                        chi_s += lines.chi;
+                    }
+                }
             }
-
-            // }
-
 
             fp_t tau = chi_s * s.dt * distance_scale;
             fp_t source_fn = eta_s / chi_s;

@@ -63,6 +63,9 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
             max_mip_level += MIPMAP_FACTORS[i];
         }
     }
+    if constexpr (LINE_SCHEME == LineCoeffCalc::Classic) {
+        max_mip_level = 0;
+    }
     state.mr_block_map.init(block_map, max_mip_level);
 
     state.phi = VoigtProfile<fp_t>(
@@ -254,7 +257,6 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
 
 void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
-
         if (config.mode == DexrtMode::NonLte) {
             i64 alo_size = cascade_entries(state->c0_size);
             state->alo = Fp1d(
@@ -262,12 +264,6 @@ void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
                 alo_size
             );
         }
-        state->dynamic_opac = decltype(state->dynamic_opac)(
-            "Dynamic Emis/Opac",
-            state->c0_size.num_probes(1),
-            state->c0_size.num_probes(0),
-            state->c0_size.wave_batch
-        );
     }
 }
 

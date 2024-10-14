@@ -64,7 +64,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
             .la_end=la_end,
             .subset_idx=subset_idx
         };
-        mip_chain.compute_subset_mips(state, subset, la_start, la_end);
+        mip_chain.compute_subset_mips(state, subset);
 
         cascade_i_25d<RcModeBc>(
             state,

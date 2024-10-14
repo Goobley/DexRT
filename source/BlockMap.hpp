@@ -185,10 +185,10 @@ struct BlockMap {
 
 template <u8 entry_size=3, int mem_space=yakl::memDevice>
 struct MultiLevelLookup {
-    static constexpr u8 packed_entries_per_u64 = sizeof(u64) / entry_size;
+    static constexpr u8 packed_entries_per_u64 = (sizeof(u64) * CHAR_BIT) / entry_size;
     static constexpr u64 lowest_entry_mask = ((1 << entry_size) - 1);
     static_assert(entry_size <= 8, "Entry size must be <= 8");
-    /// The number of hyper-tiles if HYPER_BLOCK_SIZE > 0
+    /// The number of hyper-tiles if HYPERBLOCK2x2 is true
     i32 num_x_tiles;
     i32 num_z_tiles;
     // NOTE(cmo): We're still laying out these tiles linearly here (unless
@@ -316,6 +316,9 @@ struct MultiResBlockMap {
             throw std::runtime_error("More mip levels requested than storable in packed data. Increase ENTRY_SIZE");
         }
 
+        for (int i = 0; i < mip_offsets.size(); ++i) {
+            mip_offsets(i) = 0;
+        }
         i64 buffer_len_acc = 0;
         for (int i = 0; i <= max_mip_level; ++i) {
             mip_offsets(i) = buffer_len_acc;

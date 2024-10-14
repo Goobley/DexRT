@@ -228,94 +228,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     int wave_batch = la_end - la_start;
     MultiResMipChain mip_chain;
     mip_chain.init(state, state.mr_block_map.buffer_len(), wave_batch);
-    const auto& flat_dynamic_opac = mip_chain.classic_data.dynamic_opac;
-    const bool fill_dynamic_opac = flat_dynamic_opac.initialized();
-
-    const auto flatmos = flatten<const fp_t>(atmos);
-    auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
-    auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
-    auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0) * state.active.extent(1)));
-    const auto& block_map = state.mr_block_map.block_map;
-    auto bounds = block_map.loop_bounds();
-
-    // TODO(cmo): This -> mip_chain.fill_emis_opac?
-    parallel_for(
-        "Compute eta, chi",
-        SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int wave) {
-            IndexGen<BLOCK_SIZE> idx_gen(block_map);
-            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            i64 k = idx_gen.full_flat_idx(coord.x, coord.z);
-
-            AtmosPointParams local_atmos;
-            local_atmos.temperature = flatmos.temperature(k);
-            local_atmos.ne = flatmos.ne(k);
-            local_atmos.vturb = flatmos.vturb(k);
-            local_atmos.nhtot = flatmos.nh_tot(k);
-            local_atmos.nh0 = flatmos.nh0(k);
-            const fp_t v_norm = std::sqrt(
-                    square(flatmos.vx(k))
-                    + square(flatmos.vy(k))
-                    + square(flatmos.vz(k))
-            );
-            const int la = la_start + wave;
-            int governing_atom = adata.governing_trans(la).atom;
-
-            const bool static_only = v_norm >= (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
-                adata.mass(governing_atom),
-                local_atmos.temperature
-            ));
-            auto active_set = slice_active_set(adata, la);
-            if (fill_dynamic_opac) {
-                const bool no_lines = (active_set.extent(0) == 0);
-                flat_dynamic_opac(ks, wave) = static_only || no_lines;
-            }
-            EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
-            if constexpr (BASE_MIP_CONTAINS == BaseMipContents::Continua) {
-                mode = EmisOpacMode::StaticOnly;
-            } else if constexpr (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest) {
-                mode = EmisOpacMode::All;
-            }
-
-            auto result = emis_opac(
-                EmisOpacState<fp_t>{
-                    .adata = adata,
-                    .profile = phi,
-                    .la = la,
-                    .n = flat_pops,
-                    .n_star_scratch = flat_n_star,
-                    .k = k,
-                    .atmos = local_atmos,
-                    .active_set = active_set,
-                    .active_set_cont = slice_active_cont_set(adata, la),
-                    .mode = mode
-                }
-            );
-            mip_chain.emis(ks, wave) = result.eta;
-            mip_chain.opac(ks, wave) = result.chi;
-        }
-    );
-
-    parallel_for(
-        "Copy vels",
-        SimpleBounds<2>(bounds),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
-            IndexGen<BLOCK_SIZE> idx_gen(block_map);
-            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            i64 k = idx_gen.full_flat_idx(coord.x, coord.z);
-
-            mip_chain.vx(ks) = flatmos.vx(k);
-            mip_chain.vy(ks) = flatmos.vy(k);
-            mip_chain.vz(ks) = flatmos.vz(k);
-        }
-    );
-    yakl::fence();
-    /// NOTE(cmo): Split out mip_chain.fill_mip0 and fill_subset_mip0, exactly same as mips?
-    if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
-        mip_chain.cav_data.fill(state, la_start, la_end);
-    }
+    mip_chain.fill_mip0_atomic(state, lte_scratch, la_start, la_end);
     mip_chain.compute_mips(state, la_start, la_end);
 
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
@@ -351,15 +264,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             .la_end=la_end,
             .subset_idx=subset_idx
         };
-        if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
-            FlatVelocity vels{
-                .vx = mip_chain.vx,
-                .vy = mip_chain.vy,
-                .vz = mip_chain.vz,
-            };
-            mip_chain.dir_data.fill<RcModeNoBc>(state, casc_state, subset, vels, lte_scratch);
-        }
-        mip_chain.compute_subset_mips(state, subset, la_start, la_end);
+        mip_chain.fill_subset_mip0_atomic(state, subset, lte_scratch);
+        mip_chain.compute_subset_mips(state, subset);
         cascade_i_25d<RcModeBc>(
             state,
             casc_state,
