@@ -49,7 +49,7 @@ enum class LineCoeffCalc {
     VelocityInterp,
     CoreAndVoigt
 };
-constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::CoreAndVoigt;
+constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::Classic;
 
 constexpr int INTERPOLATE_DIRECTIONAL_BINS = 21;
 // NOTE(cmo): Code will warn if insufficient bins to provide less than this
@@ -90,6 +90,8 @@ static_assert(
     ),
     "Parallax (reprojection) methods cannot be used with DIR_BY_DIR"
 );
+constexpr bool STORE_TAU_CASCADES = false;
+static_assert(! (!STORE_TAU_CASCADES && RC_CONFIG == RcConfiguration::ParallaxFixInner), "Need to store tau cascades for the inner parallax fix");
 
 constexpr int BLOCK_SIZE = 16;
 constexpr bool HYPERBLOCK2x2 = true;

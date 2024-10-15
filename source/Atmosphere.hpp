@@ -131,7 +131,7 @@ inline Atmosphere load_atmos(const std::string& path) {
     return result;
 }
 
-template <typename T=fp_t>
+template <typename T=fp_t, class Atmosphere>
 FlatAtmosphere<T> flatten(const Atmosphere& atmos) {
     FlatAtmosphere<T> result;
     result.voxel_scale = atmos.voxel_scale;
@@ -160,6 +160,7 @@ YAKL_INLINE fp_t compute_vnorm(const FlatAtmosphere<T>& atmos, i64 k) {
     );
 }
 
+template <class Atmosphere>
 YAKL_INLINE vec3 get_offsets(const Atmosphere& atmos) {
     vec3 result;
     result(0) = atmos.offset_x;

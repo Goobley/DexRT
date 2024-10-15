@@ -2,14 +2,15 @@
 #define DEXRT_COLLISIONS_HPP
 #include "Types.hpp"
 #include "Utils.hpp"
+#include "State.hpp"
+#include "Populations.hpp"
 #include "LteHPops.hpp"
 
 YAKL_INLINE fp_t interp_rates(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    int x,
-    int y
+    i64 ks
 ) {
     yakl::Array<fp_t const, 1, yakl::memDevice> temp_view(
         "temp_view",
@@ -21,227 +22,177 @@ YAKL_INLINE fp_t interp_rates(
         &atom.coll_rates(coll.start_idx),
         coll.end_idx - coll.start_idx
     );
-    return interp(atmos.temperature(x, y), temp_view, rate_view);
+    return interp(atmos.temperature(ks), temp_view, rate_view);
 }
 
 YAKL_INLINE void collision_omega(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp4d& C,
-    const FpConst3d& n_star,
+    const Fp3d& C,
+    const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
-    int x,
-    int y
+    i64 ks
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, x, y);
-    const fp_t Cdown = seaton_c0 * atmos.ne(x, y) * rate / (atom.g(coll.j) * std::sqrt(atmos.temperature(x, y)));
-    const fp_t Cup = Cdown * n_star(coll.j, x, y) / n_star(coll.i, x, y);
-    C(coll.i, coll.j, x, y) += Cdown;
-    C(coll.j, coll.i, x, y) += Cup;
+    const fp_t rate = interp_rates(atmos, atom, coll, ks);
+    const fp_t Cdown = seaton_c0 * atmos.ne(ks) * rate / (atom.g(coll.j) * std::sqrt(atmos.temperature(ks)));
+    const fp_t Cup = Cdown * n_star(coll.j, ks) / n_star(coll.i, ks);
+    C(coll.i, coll.j, ks) += Cdown;
+    C(coll.j, coll.i, ks) += Cup;
 }
 
 YAKL_INLINE void collision_ci(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp4d& C,
-    const FpConst3d& n_star,
+    const Fp3d& C,
+    const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
-    int x,
-    int y
+    i64 ks
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, x, y);
+    const fp_t rate = interp_rates(atmos, atom, coll, ks);
     const fp_t dE = atom.energy(coll.j) - atom.energy(coll.i);
     const fp_t Cup = (
-        (rate * atmos.ne(x, y))
+        (rate * atmos.ne(ks))
         * (
-            std::exp(-dE / (k_B_eV * atmos.temperature(x, y)))
-            * std::sqrt(atmos.temperature(x, y))
+            std::exp(-dE / (k_B_eV * atmos.temperature(ks)))
+            * std::sqrt(atmos.temperature(ks))
         )
     );
-    const fp_t Cdown = Cup * n_star(coll.i, x, y) / n_star(coll.j, x, y);
-    C(coll.i, coll.j, x, y) += Cdown;
-    C(coll.j, coll.i, x, y) += Cup;
+    const fp_t Cdown = Cup * n_star(coll.i, ks) / n_star(coll.j, ks);
+    C(coll.i, coll.j, ks) += Cdown;
+    C(coll.j, coll.i, ks) += Cup;
 }
 
 YAKL_INLINE void collision_ce(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp4d& C,
-    const FpConst3d& n_star,
+    const Fp3d& C,
+    const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
-    int x,
-    int y
+    i64 ks
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, x, y);
+    const fp_t rate = interp_rates(atmos, atom, coll, ks);
     const fp_t gij = atom.g(coll.i) / atom.g(coll.j);
-    const fp_t Cdown = (rate * atmos.ne(x, y)) * gij * std::sqrt(atmos.temperature(x, y));
-    const fp_t Cup = Cdown * n_star(coll.j, x, y) / n_star(coll.i, x, y);
-    C(coll.i, coll.j, x, y) += Cdown;
-    C(coll.j, coll.i, x, y) += Cup;
+    const fp_t Cdown = (rate * atmos.ne(ks)) * gij * std::sqrt(atmos.temperature(ks));
+    const fp_t Cup = Cdown * n_star(coll.j, ks) / n_star(coll.i, ks);
+    C(coll.i, coll.j, ks) += Cdown;
+    C(coll.j, coll.i, ks) += Cup;
 }
 
 YAKL_INLINE void collision_cp(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp4d& C,
-    const FpConst3d& n_star,
+    const Fp3d& C,
+    const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
-    int x,
-    int y
+    i64 ks
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, x, y);
+    const fp_t rate = interp_rates(atmos, atom, coll, ks);
     // TODO(cmo): This is only LTE!
     fp_t n_hii;
-    nh_lte(atmos.temperature(x, y), atmos.ne(x, y), atmos.nh_tot(x, y), &n_hii);
+    nh_lte(atmos.temperature(ks), atmos.ne(ks), atmos.nh_tot(ks), &n_hii);
     const fp_t Cdown = rate * n_hii;
-    const fp_t Cup = Cdown * n_star(coll.j, x, y) / n_star(coll.i, x, y);
-    C(coll.i, coll.j, x, y) += Cdown;
-    C(coll.j, coll.i, x, y) += Cup;
+    const fp_t Cup = Cdown * n_star(coll.j, ks) / n_star(coll.i, ks);
+    C(coll.i, coll.j, ks) += Cdown;
+    C(coll.j, coll.i, ks) += Cup;
 }
 
 YAKL_INLINE void collision_ch(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp4d& C,
-    const FpConst3d& n_star,
+    const Fp3d& C,
+    const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
-    int x,
-    int y
+    i64 ks
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, x, y);
-    const fp_t nh0 = atmos.nh0(x, y);
+    const fp_t rate = interp_rates(atmos, atom, coll, ks);
+    const fp_t nh0 = atmos.nh0(ks);
     const fp_t Cup = rate * nh0;
-    const fp_t Cdown = Cup * n_star(coll.i, x, y) / n_star(coll.j, x, y);
-    C(coll.i, coll.j, x, y) += Cdown;
-    C(coll.j, coll.i, x, y) += Cup;
+    const fp_t Cdown = Cup * n_star(coll.i, ks) / n_star(coll.j, ks);
+    C(coll.i, coll.j, ks) += Cdown;
+    C(coll.j, coll.i, ks) += Cup;
 }
 
 YAKL_INLINE void collision_charge_exc_h(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp4d& C,
-    const FpConst3d& n_star,
+    const Fp3d& C,
+    const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
-    int x,
-    int y
+    i64 ks
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, x, y);
-    const fp_t nh0 = atmos.nh0(x, y);
+    const fp_t rate = interp_rates(atmos, atom, coll, ks);
+    const fp_t nh0 = atmos.nh0(ks);
     const fp_t Cdown = rate * nh0;
-    C(coll.i, coll.j, x, y) += Cdown;
+    C(coll.i, coll.j, ks) += Cdown;
 }
 
 YAKL_INLINE void collision_charge_exc_p(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp4d& C,
-    const FpConst3d& n_star,
+    const Fp3d& C,
+    const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
-    int x,
-    int y
+    i64 ks
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, x, y);
+    const fp_t rate = interp_rates(atmos, atom, coll, ks);
     // TODO(cmo): This is only LTE!
     fp_t n_hii;
-    nh_lte(atmos.temperature(x, y), atmos.ne(x, y), atmos.nh_tot(x, y), &n_hii);
+    nh_lte(atmos.temperature(ks), atmos.ne(ks), atmos.nh_tot(ks), &n_hii);
     const fp_t Cup = rate * n_hii;
-    C(coll.j, coll.i, x, y) += Cup;
+    C(coll.j, coll.i, ks) += Cup;
 }
 
 YAKL_INLINE void compute_collisions(
-    const Atmosphere& atmos,
+    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
-    const Fp4d& C,
-    const FpConst3d& n_star,
+    const Fp3d& C,
+    const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
-    int x,
-    int y
+    i64 ks
 ) {
     for (int i = 0; i < atom.collisions.extent(0); ++i) {
         const auto& coll = atom.collisions(i);
         switch (coll.type) {
             case CollRateType::Omega: {
-                collision_omega(atmos, atom, coll, C, n_star, nh_lte, x, y);
+                collision_omega(atmos, atom, coll, C, n_star, nh_lte, ks);
             } break;
             case CollRateType::CI: {
-                collision_ci(atmos, atom, coll, C, n_star, nh_lte, x, y);
+                collision_ci(atmos, atom, coll, C, n_star, nh_lte, ks);
             } break;
             case CollRateType::CE: {
-                collision_ce(atmos, atom, coll, C, n_star, nh_lte, x, y);
+                collision_ce(atmos, atom, coll, C, n_star, nh_lte, ks);
             } break;
             case CollRateType::CP: {
-                collision_cp(atmos, atom, coll, C, n_star, nh_lte, x, y);
+                collision_cp(atmos, atom, coll, C, n_star, nh_lte, ks);
             } break;
             case CollRateType::CH: {
-                collision_ch(atmos, atom, coll, C, n_star, nh_lte, x, y);
+                collision_ch(atmos, atom, coll, C, n_star, nh_lte, ks);
             } break;
             case CollRateType::ChargeExcH: {
-                collision_charge_exc_h(atmos, atom, coll, C, n_star, nh_lte, x, y);
+                collision_charge_exc_h(atmos, atom, coll, C, n_star, nh_lte, ks);
             } break;
             case CollRateType::ChargeExcP: {
-                collision_charge_exc_p(atmos, atom, coll, C, n_star, nh_lte, x, y);
+                collision_charge_exc_p(atmos, atom, coll, C, n_star, nh_lte, ks);
             } break;
         }
     }
 }
 
-inline void compute_collisions_to_gamma(State* state) {
-    const auto& atmos = state->atmos;
-    const auto& Gamma_store = state->Gamma;
-    const auto& nh_lte = state->nh_lte;
-    const auto atmos_dims = atmos.temperature.get_dimensions();
-
-    // TODO(cmo): Get rid of this!
-    auto n_star = state->pops.createDeviceObject();
-    auto n_star_flat = n_star.reshape<2>(Dims(n_star.extent(0), n_star.extent(1) * n_star.extent(2)));
-    // NOTE(cmo): Zero Gamma before we start to refill it.
-    for (int i = 0; i < Gamma_store.size(); ++i) {
-        Gamma_store[i] = FP(0.0);
-    }
-    compute_lte_pops(state, n_star);
-    yakl::fence();
-
-    for (int ia = 0; ia < state->atoms_with_gamma.size(); ++ia) {
-        auto& Gamma = Gamma_store[ia];
-        auto& atom = state->atoms_with_gamma[ia];
-        const auto n_star_slice = slice_pops(
-            n_star,
-            state->adata_host,
-            state->atoms_with_gamma_mapping[ia]
-        );
-
-        parallel_for(
-            "collisions",
-            SimpleBounds<2>(atmos_dims(0), atmos_dims(1)),
-            YAKL_LAMBDA (int x, int y) {
-                compute_collisions(
-                    atmos,
-                    atom,
-                    Gamma,
-                    n_star_slice,
-                    nh_lte,
-                    x,
-                    y
-                );
-            }
-        );
-        yakl::fence();
-    }
-}
+void compute_collisions_to_gamma(State* state);
 
 #else
 #endif

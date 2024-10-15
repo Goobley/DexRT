@@ -3,7 +3,6 @@
 #include "Types.hpp"
 #include "Utils.hpp"
 #include "State.hpp"
-#include "CascadeState.hpp"
 #include "EmisOpac.hpp"
 #include "Atmosphere.hpp"
 
@@ -34,7 +33,7 @@ inline void compute_min_max_vel(
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
 
-    JasUnpack(state, incl_quad, atmos, mr_block_map);
+    JasUnpack(state, incl_quad, mr_block_map);
     const auto& block_map = mr_block_map.block_map;
 
     assert(min_vel.extent(0) == max_vel.extent(0));
@@ -185,7 +184,7 @@ struct DirectionalEmisOpacInterp {
         const State& state,
         const CascadeCalcSubset& subset,
         const FlatVelocity& vels,
-        const Fp3d& n_star
+        const Fp2d& n_star
     ) const {
         Fp1d max_vel("max_vel", emis_opac_vel.extent(0));
         Fp1d min_vel("min_vel", emis_opac_vel.extent(0));
@@ -212,8 +211,6 @@ struct DirectionalEmisOpacInterp {
         max_thermal_vel_frac = FP(0.0);
         thermal_vel_frac_over_count = 0;
         yakl::fence();
-        auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
-        auto flat_n_star = n_star.reshape<2>(Dims(n_star.extent(0), n_star.extent(1) * n_star.extent(2)));
 
         auto block_bounds = block_map.loop_bounds();
         parallel_for(
@@ -231,7 +228,6 @@ struct DirectionalEmisOpacInterp {
                 int u = coord.x;
                 int v = coord.z;
 
-                const int kf = v * atmos.temperature.extent(1) + u;
                 const fp_t vmin = min_vel(ks);
                 const fp_t vmax = max_vel(ks);
                 const fp_t dv = (vmax - vmin) / fp_t(INTERPOLATE_DIRECTIONAL_BINS - 1);
@@ -242,7 +238,7 @@ struct DirectionalEmisOpacInterp {
                     vel_step(ks) = dv;
                     // NOTE(cmo): Compare with thermal vel, and have a warning
                     int governing_atom = adata.governing_trans(la).atom;
-                    const fp_t vtherm = thermal_vel(adata.mass(governing_atom), flatmos.temperature(kf));
+                    const fp_t vtherm = thermal_vel(adata.mass(governing_atom), flatmos.temperature(ks));
                     const fp_t vtherm_frac = dv / vtherm;
 
                     if (vtherm_frac > INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH) {
@@ -251,11 +247,11 @@ struct DirectionalEmisOpacInterp {
                     }
                 }
                 AtmosPointParams local_atmos;
-                local_atmos.temperature = flatmos.temperature(kf);
-                local_atmos.ne = flatmos.ne(kf);
-                local_atmos.vturb = flatmos.vturb(kf);
-                local_atmos.nhtot = flatmos.nh_tot(kf);
-                local_atmos.nh0 = flatmos.nh0(kf);
+                local_atmos.temperature = flatmos.temperature(ks);
+                local_atmos.ne = flatmos.ne(ks);
+                local_atmos.vturb = flatmos.vturb(ks);
+                local_atmos.nhtot = flatmos.nh_tot(ks);
+                local_atmos.nh0 = flatmos.nh0(ks);
                 local_atmos.vel = vel;
 
                 // fp_t chi_s = chi(v, u, wave);
@@ -267,9 +263,9 @@ struct DirectionalEmisOpacInterp {
                         .adata = adata,
                         .profile = phi,
                         .la = la,
-                        .n = flat_pops,
-                        .n_star_scratch = flat_n_star,
-                        .k = kf,
+                        .n = pops,
+                        .n_star_scratch = n_star,
+                        .k = ks,
                         .atmos = local_atmos,
                         .active_set = slice_active_set(adata, la),
                         // .mode = EmisOpacMode::DynamicOnly
@@ -334,7 +330,7 @@ struct DirectionalEmisOpacInterp {
     ) {
         JasUnpack(state, mr_block_map);
         const auto& block_map = mr_block_map.block_map;
-        JasUnpack(mm_state, max_mip_factor, vx, vy, vz, emis, opac);
+        JasUnpack(mm_state, vx, vy, vz);
         const i32 wave_batch = emis_opac_vel.extent(3);
         constexpr i32 mip_block = 4;
         const i32 level_m_1 = level - 1;

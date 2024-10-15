@@ -26,15 +26,6 @@ YAKL_INLINE uint32_t compact_1_by_1(uint32_t x)
   return x;
 }
 
-struct Coord2 {
-    i32 x;
-    i32 z;
-
-    YAKL_INLINE bool operator==(const Coord2& other) const {
-        return (x == other.x) && (z == other.z);
-    }
-};
-
 YAKL_INLINE uint32_t encode_morton_2(const Coord2& coord) {
   return (part_1_by_1(uint32_t(coord.z)) << 1) + part_1_by_1(uint32_t(coord.x));
 }

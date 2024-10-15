@@ -14,19 +14,13 @@
 void dynamic_compute_gamma(
     const State& state,
     const CascadeState& casc_state,
-    const Fp3d& lte_scratch,
+    const Fp2d& lte_scratch,
     const CascadeCalcSubset& subset
 ) {
     JasUnpack(subset, la_start, la_end, subset_idx);
+    JasUnpack(state, phi, pops, adata, wphi);
     using namespace ConstantsFP;
     const auto flat_atmos = flatten<const fp_t>(state.atmos);
-    const auto& phi = state.phi;
-    const auto& pops = state.pops;
-    const auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
-    const auto flat_lte_pops = lte_scratch.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
-    const auto& adata = state.adata;
-    const auto& wphi = state.wphi.reshape<2>(Dims(state.wphi.extent(0), state.wphi.extent(1) * state.wphi.extent(2)));
-    const bool sparse_calc = state.config.sparse_calculation;
 
     constexpr int RcMode = RC_flags_storage();
     if constexpr (RcMode & RC_PREAVERAGE) {
@@ -34,30 +28,20 @@ void dynamic_compute_gamma(
     }
 
     CascadeStorage dims = state.c0_size;
-    CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
+    CascadeRays ray_set = cascade_compute_size<RcMode>(dims, 0);
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset_idx);
+    DeviceProbesToCompute probe_coord_lookup = casc_state.probes_to_compute.bind(0);
     const int num_cascades = casc_state.num_cascades;
 
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
-        const auto flat_Gamma = Gamma.reshape<3>(Dims(
-            Gamma.extent(0),
-            Gamma.extent(1),
-            Gamma.extent(2) * Gamma.extent(3)
-        ));
         const auto& alo = state.alo;
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
         int wave_batch = la_end - la_start;
         wave_batch = std::min(wave_batch, ray_subset.wave_batch);
 
-        i64 num_active_space = flat_atmos.temperature.extent(0);
-        yakl::Array<i32, 2, yakl::memDevice> probe_spatial_lookup;
-        if (sparse_calc) {
-            probe_spatial_lookup = casc_state.probes_to_compute[0];
-            num_active_space = probe_spatial_lookup.extent(0);
-        }
-
+        i64 num_active_space = probe_coord_lookup.num_active_probes();
         const auto& wavelength = adata.wavelength;
         parallel_for(
             "compute Gamma",
@@ -67,24 +51,10 @@ void dynamic_compute_gamma(
                 wave_batch,
                 ray_subset.num_incl
             ),
-            YAKL_LAMBDA (i64 k_active, /*i64 k, */ int phi_idx, int wave, int theta_idx) {
+            YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
                 // k_active may or may not be k. For sparse calculation, it's
                 // the index into the active probe array, otherwise, it is k.
-                i64 k = k_active;
-                if (sparse_calc) {
-                    int u = probe_spatial_lookup(k_active, 0);
-                    int v = probe_spatial_lookup(k_active, 1);
-                    k = v * dims.num_probes(0) + u;
-                }
-
-                // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
-                // fast-running), but index as [u, v], i.e. dims.num_probes(0) =
-                // dim(u). Typical definition of k = u * Nv + v, but here we do
-                // loop index k = v * Nu + u where Nu = dims.num_probes(0). This
-                // preserves our iteration ordering
-                ivec2 probe_coord;
-                probe_coord(0) = k % dims.num_probes(0);
-                probe_coord(1) = k / dims.num_probes(0);
+                ivec2 probe_coord = probe_coord_lookup(ks);
 
                 phi_idx += ray_subset.start_flat_dirs;
                 wave += ray_subset.start_wave_batch;
@@ -118,15 +88,15 @@ void dynamic_compute_gamma(
                 vec3 mu = inverted_mu(ray, incl_quad.muy(probe_idx.incl));
 
                 AtmosPointParams local_atmos;
-                local_atmos.temperature = flat_atmos.temperature(k);
-                local_atmos.ne = flat_atmos.ne(k);
-                local_atmos.vturb = flat_atmos.vturb(k);
-                local_atmos.nhtot = flat_atmos.nh_tot(k);
-                local_atmos.nh0 = flat_atmos.nh0(k);
+                local_atmos.temperature = flat_atmos.temperature(ks);
+                local_atmos.ne = flat_atmos.ne(ks);
+                local_atmos.vturb = flat_atmos.vturb(ks);
+                local_atmos.nhtot = flat_atmos.nh_tot(ks);
+                local_atmos.nh0 = flat_atmos.nh0(ks);
                 local_atmos.vel = (
-                        flat_atmos.vx(k) * mu(0)
-                        + flat_atmos.vy(k) * mu(1)
-                        + flat_atmos.vz(k) * mu(2)
+                        flat_atmos.vx(ks) * mu(0)
+                        + flat_atmos.vy(ks) * mu(1)
+                        + flat_atmos.vz(ks) * mu(2)
                 );
 
                 const int kr_base = adata.line_start(ia);
@@ -141,17 +111,17 @@ void dynamic_compute_gamma(
                             .adata = adata,
                             .profile = phi,
                             .la = la,
-                            .n = flat_pops,
-                            .n_star_scratch = flat_lte_pops,
-                            .k = k,
+                            .n = pops,
+                            .n_star_scratch = lte_scratch,
+                            .k = ks,
                             .atmos = local_atmos
                         },
                         kr
                     );
 
                     const int offset = adata.level_start(ia);
-                    const fp_t eta = flat_pops(offset + l.j, k) * uv.Uji;
-                    const fp_t chi = flat_pops(offset + l.i, k) * uv.Vij - flat_pops(offset + l.j, k) * uv.Vji + FP(1e-20);
+                    const fp_t eta = pops(offset + l.j, ks) * uv.Uji;
+                    const fp_t chi = pops(offset + l.i, ks) * uv.Vij - pops(offset + l.j, ks) * uv.Vji + FP(1e-20);
 
                     add_to_gamma<true>(GammaAccumState{
                         .eta = eta,
@@ -159,11 +129,11 @@ void dynamic_compute_gamma(
                         .uv = uv,
                         .I = intensity,
                         .alo = alo_entry,
-                        .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx) * wphi(kr, k),
-                        .Gamma = flat_Gamma,
+                        .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx) * wphi(kr, ks),
+                        .Gamma = Gamma,
                         .i = l.i,
                         .j = l.j,
-                        .k = k
+                        .k = ks
                     });
                 }
                 const int kr_base_c = adata.cont_start(ia);
@@ -179,17 +149,17 @@ void dynamic_compute_gamma(
                             .adata = adata,
                             .profile = phi,
                             .la = la,
-                            .n = flat_pops,
-                            .n_star_scratch = flat_lte_pops,
-                            .k = k,
+                            .n = pops,
+                            .n_star_scratch = lte_scratch,
+                            .k = ks,
                             .atmos = local_atmos
                         },
                         kr
                     );
 
                     const int offset = adata.level_start(ia);
-                    const fp_t eta = flat_pops(offset + cont.j, k) * uv.Uji;
-                    const fp_t chi = flat_pops(offset + cont.i, k) * uv.Vij - flat_pops(offset + cont.j, k) * uv.Vji + FP(1e-20);
+                    const fp_t eta = pops(offset + cont.j, ks) * uv.Uji;
+                    const fp_t chi = pops(offset + cont.i, ks) * uv.Vij - pops(offset + cont.j, ks) * uv.Vji + FP(1e-20);
 
                     add_to_gamma<true>(GammaAccumState{
                         .eta = eta,
@@ -198,10 +168,10 @@ void dynamic_compute_gamma(
                         .I = intensity,
                         .alo = alo_entry,
                         .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx),
-                        .Gamma = flat_Gamma,
+                        .Gamma = Gamma,
                         .i = cont.i,
                         .j = cont.j,
-                        .k = k
+                        .k = ks
                     });
                 }
             }
@@ -211,13 +181,10 @@ void dynamic_compute_gamma(
 }
 
 void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
-    JasUnpack(state, atmos, phi, pops, adata);
-
-    const bool sparse_calc = state.config.sparse_calculation;
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
     // it, for now, trust the pool allocator
-    auto pops_dims = pops.get_dimensions();
-    Fp3d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1), pops_dims(2));
+    auto pops_dims = state.pops.get_dimensions();
+    Fp2d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1));
 
     if (la_end == -1) {
         la_end = la_start + 1;
@@ -309,8 +276,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
             );
         }
         merge_c0_to_J(
-            casc_state.i_cascades[0],
-            state.c0_size,
+            casc_state,
+            state.mr_block_map,
             state.J,
             state.incl_quad,
             la_start,

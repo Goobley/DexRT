@@ -85,8 +85,8 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
             yakl::fence();
         }
         merge_c0_to_J(
-            casc_state.i_cascades[0],
-            state.c0_size,
+            casc_state,
+            state.mr_block_map,
             state.J,
             state.incl_quad,
             la_start,

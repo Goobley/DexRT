@@ -3,7 +3,6 @@
 #include "Types.hpp"
 #include "Utils.hpp"
 #include "State.hpp"
-#include "CascadeState.hpp"
 #include "BlockMap.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
 #include "CoreAndVoigtEmisOpac.hpp"
@@ -54,16 +53,13 @@ struct MultiResMipChain {
         }
     }
 
-    void fill_mip0_atomic(const State& state, const Fp3d& lte_scratch, int la_start, int la_end) {
+    void fill_mip0_atomic(const State& state, const Fp2d& lte_scratch, int la_start, int la_end) {
         JasUnpack(state, atmos, pops, phi, adata);
         int wave_batch = la_end - la_start;
 
         const auto& flat_dynamic_opac = classic_data.dynamic_opac;
         const bool fill_dynamic_opac = flat_dynamic_opac.initialized();
         const auto flatmos = flatten<const fp_t>(atmos);
-        auto flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
-        auto flat_n_star = lte_scratch.reshape<2>(Dims(lte_scratch.extent(0), lte_scratch.extent(1) * lte_scratch.extent(2)));
-        auto flat_active = state.active.reshape<1>(Dims(state.active.extent(0) * state.active.extent(1)));
 
         JasUnpack((*this), emis, opac);
         const auto& block_map = state.mr_block_map.block_map;
@@ -75,18 +71,17 @@ struct MultiResMipChain {
                 IndexGen<BLOCK_SIZE> idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-                i64 k = idx_gen.full_flat_idx(coord.x, coord.z);
 
                 AtmosPointParams local_atmos;
-                local_atmos.temperature = flatmos.temperature(k);
-                local_atmos.ne = flatmos.ne(k);
-                local_atmos.vturb = flatmos.vturb(k);
-                local_atmos.nhtot = flatmos.nh_tot(k);
-                local_atmos.nh0 = flatmos.nh0(k);
+                local_atmos.temperature = flatmos.temperature(ks);
+                local_atmos.ne = flatmos.ne(ks);
+                local_atmos.vturb = flatmos.vturb(ks);
+                local_atmos.nhtot = flatmos.nh_tot(ks);
+                local_atmos.nh0 = flatmos.nh0(ks);
                 const fp_t v_norm = std::sqrt(
-                        square(flatmos.vx(k))
-                        + square(flatmos.vy(k))
-                        + square(flatmos.vz(k))
+                        square(flatmos.vx(ks))
+                        + square(flatmos.vy(ks))
+                        + square(flatmos.vz(ks))
                 );
                 const int la = la_start + wave;
                 int governing_atom = adata.governing_trans(la).atom;
@@ -112,9 +107,9 @@ struct MultiResMipChain {
                         .adata = adata,
                         .profile = phi,
                         .la = la,
-                        .n = flat_pops,
-                        .n_star_scratch = flat_n_star,
-                        .k = k,
+                        .n = pops,
+                        .n_star_scratch = lte_scratch,
+                        .k = ks,
                         .atmos = local_atmos,
                         .active_set = active_set,
                         .active_set_cont = slice_active_cont_set(adata, la),
@@ -151,7 +146,7 @@ struct MultiResMipChain {
         yakl::fence();
     }
 
-    void fill_subset_mip0_atomic(const State& state, const CascadeCalcSubset& subset, const Fp3d& n_star) {
+    void fill_subset_mip0_atomic(const State& state, const CascadeCalcSubset& subset, const Fp2d& n_star) {
         if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
             FlatVelocity vels{
                 .vx = vx,

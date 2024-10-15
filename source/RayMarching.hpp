@@ -2,9 +2,9 @@
 #define DEXRT_RAY_MARCHING_2_HPP
 #include "Types.hpp"
 #include "Utils.hpp"
+#include "RcUtilsModes.hpp"
 #include "JasPP.hpp"
 #include "State.hpp"
-#include "CascadeState.hpp"
 #include "EmisOpac.hpp"
 #include "BlockMap.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
@@ -164,6 +164,7 @@ YAKL_INLINE fp_t step_marcher(RayMarchState2d* state) {
             return step_marcher<1>(state);
         } break;
     }
+    return step_marcher<0>(state);
 }
 
 YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
@@ -284,16 +285,19 @@ YAKL_INLINE RadianceInterval<Alo> merge_intervals(
 ) {
     fp_t transmission = std::exp(-closer.tau);
     closer.I += transmission * further.I;
-    closer.tau += further.tau;
+    if constexpr (STORE_TAU_CASCADES) {
+        // NOTE(cmo): There will be nonsense in further.tau, so it's just not useful -- we're not storing anyway
+        closer.tau += further.tau;
+    }
     return closer;
 }
 
 struct Raymarch2dDynamicState {
     const yakl::Array<const u16, 1, yakl::memDevice> active_set;
-    const Atmosphere& atmos;
+    const SparseAtmosphere& atmos;
     const AtomicData<fp_t>& adata;
     const VoigtProfile<fp_t, false>& profile;
-    const Fp2d& nh0;
+    const Fp1d& nh0;
     const Fp2d& n; // flattened
 };
 
@@ -586,25 +590,23 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 eta_s = mip_chain.emis(ks, wave);
                 chi_s = mip_chain.opac(ks, wave) + FP(1e-15);
                 if constexpr (dynamic) {
-                    // TODO(cmo): Migrate this to flatmos
-                    const Atmosphere& atmos = dyn_state.atmos;
-                    const i64 k = v * atmos.temperature.extent(1) + u;
+                    const SparseAtmosphere& atmos = dyn_state.atmos;
                     if (
                         mip_chain.classic_data.dynamic_opac(ks, wave)
                         && dyn_state.active_set.extent(0) > 0
                     ) {
                         fp_t vel = (
-                            atmos.vx.get_data()[k] * mu(0)
-                            + atmos.vy.get_data()[k] * mu(1)
-                            + atmos.vz.get_data()[k] * mu(2)
+                            atmos.vx.get_data()[ks] * mu(0)
+                            + atmos.vy.get_data()[ks] * mu(1)
+                            + atmos.vz.get_data()[ks] * mu(2)
                         );
                         AtmosPointParams local_atmos{
-                            .temperature = atmos.temperature.get_data()[k],
-                            .ne = atmos.ne.get_data()[k],
-                            .vturb = atmos.vturb.get_data()[k],
-                            .nhtot = atmos.nh_tot.get_data()[k],
+                            .temperature = atmos.temperature.get_data()[ks],
+                            .ne = atmos.ne.get_data()[ks],
+                            .vturb = atmos.vturb.get_data()[ks],
+                            .nhtot = atmos.nh_tot.get_data()[ks],
                             .vel = vel,
-                            .nh0 = dyn_state.nh0.get_data()[k]
+                            .nh0 = dyn_state.nh0.get_data()[ks]
                         };
                         auto lines = emis_opac(
                             EmisOpacState<fp_t>{
@@ -612,7 +614,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                                 .profile = dyn_state.profile,
                                 .la = la,
                                 .n = dyn_state.n,
-                                .k = k,
+                                .k = ks,
                                 .atmos = local_atmos,
                                 .active_set = dyn_state.active_set,
                                 .mode = EmisOpacMode::DynamicOnly

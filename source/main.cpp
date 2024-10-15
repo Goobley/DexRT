@@ -3,7 +3,6 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "State.hpp"
-#include "CascadeState.hpp"
 #include "Utils.hpp"
 #include "Atmosphere.hpp"
 #include "Populations.hpp"
@@ -20,6 +19,7 @@
 #include "PromweaverBoundary.hpp"
 #include "DexrtConfig.hpp"
 #include "BlockMap.hpp"
+#include "MiscSparse.hpp"
 #ifdef HAVE_MPI
     #include "YAKL_pnetcdf.h"
 #else
@@ -31,6 +31,32 @@
 #include <fmt/core.h>
 #include <argparse/argparse.hpp>
 #include <sstream>
+
+void allocate_J(State* state) {
+    JasUnpack((*state), config, mr_block_map, c0_size, adata);
+    const auto& block_map = mr_block_map.block_map;
+    const bool sparse = config.sparse_calculation;
+    state->sparse_J = sparse;
+    i64 num_cells = mr_block_map.block_map.get_num_active_cells();
+    i32 wave_dim = adata.wavelength.extent(0);
+    if (config.mode == DexrtMode::GivenFs) {
+        wave_dim = state->given_state.emis.extent(2);
+    }
+
+    if (!sparse) {
+        num_cells = block_map.num_x_tiles * block_map.num_z_tiles * square(BLOCK_SIZE);
+    }
+
+    if (config.store_J_on_cpu) {
+        state->J = Fp2d("J", c0_size.wave_batch, num_cells);
+        state->J_cpu = Fp2dHost("JHost", wave_dim, num_cells);
+    } else {
+        state->J = Fp2d("J", wave_dim, num_cells);
+    }
+    state->J = FP(0.0);
+    // TODO(cmo): If we have scattering terms and are updating J, the old
+    // contents should probably be moved first, but we don't have these terms yet.
+}
 
 CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     if (!(config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte)) {
@@ -53,7 +79,6 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     GammaAtomsAndMapping gamma_atoms = extract_atoms_with_gamma_and_mapping(atomic_data.device, atomic_data.host);
     state.atoms_with_gamma = gamma_atoms.atoms;
     state.atoms_with_gamma_mapping = gamma_atoms.mapping;
-    state.atmos = atmos;
 
     BlockMap<BLOCK_SIZE> block_map;
     block_map.init(atmos, config.threshold_temperature);
@@ -63,97 +88,48 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
             max_mip_level += MIPMAP_FACTORS[i];
         }
     }
-    if constexpr (LINE_SCHEME == LineCoeffCalc::Classic) {
+    if (state.config.mode != DexrtMode::GivenFs && LINE_SCHEME == LineCoeffCalc::Classic) {
         max_mip_level = 0;
     }
     state.mr_block_map.init(block_map, max_mip_level);
+
+    state.atmos = sparsify_atmosphere(atmos, block_map);
 
     state.phi = VoigtProfile<fp_t>(
         VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
         VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
     );
-    // TODO(cmo): Check range of Voigt terms against model
     state.nh_lte = HPartFn();
     fmt::println("Scale: {} m", state.atmos.voxel_scale);
 
-    const auto space_dims = atmos.temperature.get_dimensions();
-    int space_x = space_dims(0);
-    int space_y = space_dims(1);
-    int cascade_0_x_probes = space_dims(1) / PROBE0_SPACING;
-    int cascade_0_z_probes = space_dims(0) / PROBE0_SPACING;
-    // TODO(cmo): Need to decide whether to allow non-probe 1 spacing... it
-    // probably doesn't make sense for us to have any interest in the level
-    // populations not on a probe - we don't have any way to compute this outside LTE.
+    i64 num_active_cells = block_map.get_num_active_cells();
+
     const int n_level_total = state.adata.energy.extent(0);
-    state.pops = Fp3d("pops", n_level_total, space_x, space_y);
+    state.pops = Fp2d("pops", n_level_total, num_active_cells);
 
     if (config.mode == DexrtMode::NonLte) {
         for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
             const int n_level = state.adata_host.num_level(ia);
             state.Gamma.emplace_back(
-                Fp4d("Gamma", n_level, n_level, space_x, space_y)
+                Fp3d("Gamma", n_level, n_level, num_active_cells)
             );
         }
-        state.wphi = Fp3d("wphi", state.adata.lines.extent(0), space_x, space_y);
+        state.wphi = Fp2d("wphi", state.adata.lines.extent(0), num_active_cells);
     }
-    state.active = decltype(state.active)("active", space_x, space_y);
-    const auto& temperature = state.atmos.temperature;
-    const auto& active = state.active;
-    const fp_t threshold = config.threshold_temperature;
-    const bool sparse_calculation = config.sparse_calculation;
-    parallel_for(
-        "Active bits",
-        SimpleBounds<2>(temperature.extent(0), temperature.extent(1)),
-        YAKL_LAMBDA (int z, int x) {
-            if (!sparse_calculation || threshold == FP(0.0)) {
-                active(z, x) = true;
-            } else {
-                active(z, x) = (temperature(z, x) <= threshold);
-            }
-        }
-    );
-    yakl::fence();
-    const auto& cpu_active = active.createHostCopy();
-    yakl::fence();
-    i64 active_count = 0;
-    for (int z = 0; z < cpu_active.extent(0); ++z) {
-        for (int x = 0; x < cpu_active.extent(1); ++x) {
-            active_count += cpu_active(z, x);
-        }
-    }
-    fmt::println("Active cells: {}/{}", active_count, active.extent(0) * active.extent(1));
-    // TODO(cmo): Do this parallel on GPU
-    yakl::Array<i64, 2, yakl::memHost> active_map("active_map", space_x, space_y);
-    i64 active_idx = 0;
-    for (int z = 0; z < active_map.extent(0); ++z) {
-        for (int x = 0; x < active_map.extent(1); ++x) {
-            if (!cpu_active(z, x)) {
-                active_map(z, x) = -1;
-            } else {
-                active_map(z, x) = active_idx++;
-            }
-        }
-    }
-    state.active_map = active_map.createDeviceCopy();
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
     state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary);
     state.boundary = config.boundary;
 
+    // NOTE(cmo): This doesn't actually know that things will be allocated sparse
     CascadeRays c0_rays;
-    c0_rays.num_probes(0) = cascade_0_x_probes;
-    c0_rays.num_probes(1) = cascade_0_z_probes;
+    const auto space_dims = atmos.temperature.get_dimensions();
+    c0_rays.num_probes(0) = space_dims(1);
+    c0_rays.num_probes(1) = space_dims(0);
     c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
     c0_rays.num_incl = NUM_INCL;
     c0_rays.wave_batch = WAVE_BATCH;
 
-    if (config.store_J_on_cpu) {
-        state.J = Fp3d("J", c0_rays.wave_batch, space_x, space_y);
-        state.J_cpu = Fp3dHost("JHost", state.adata.wavelength.extent(0), space_x, space_y);
-    } else {
-        state.J = Fp3d("J", state.adata.wavelength.extent(0), space_x, space_y);
-    }
-    state.J = FP(0.0);
     state.max_block_mip = decltype(state.max_block_mip)(
         "max_block_mip",
         (state.adata.wavelength.extent(0) + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
@@ -195,6 +171,7 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
             max_mip_level += MIPMAP_FACTORS[i];
         }
     }
+    // NOTE(cmo): Everything is assumed active
     st->mr_block_map.init(block_map, max_mip_level);
 
 #ifdef DEXRT_SINGLE_PREC
@@ -225,10 +202,6 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     st->given_state.opac = opac;
 #endif
 
-    // NOTE(cmo): The raymarcher checks whether cells are active, we could remove, but this is a mode used infrequently, so set everything active.
-    st->active = yakl::Array<bool, 2, yakl::memDevice>("active cells", eta.extent(0), eta.extent(1));
-    st->active = true;
-
     // NOTE(cmo): Only zero boundaries are supported here.
     st->boundary = BoundaryType::Zero;
     CascadeRays c0_rays;
@@ -238,13 +211,6 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     c0_rays.num_incl = NUM_INCL;
     c0_rays.wave_batch = WAVE_BATCH;
 
-    if (config.store_J_on_cpu) {
-        st->J = Fp3d("J", c0_rays.wave_batch, z_dim, x_dim);
-        st->J_cpu = Fp3dHost("JHost", wave_dim, z_dim, x_dim);
-    } else {
-        st->J = Fp3d("J", wave_dim, z_dim, x_dim);
-    }
-    st->J = FP(0.0);
     st->max_block_mip = decltype(st->max_block_mip)(
         "max_block_mip",
         (wave_dim + c0_rays.wave_batch-1) / c0_rays.wave_batch-1,
@@ -256,14 +222,13 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
 }
 
 void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
-    if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
-        if (config.mode == DexrtMode::NonLte) {
-            i64 alo_size = cascade_entries(state->c0_size);
-            state->alo = Fp1d(
-                "ALO",
-                alo_size
-            );
-        }
+    if (config.mode == DexrtMode::NonLte) {
+
+        i64 alo_size = state->mr_block_map.get_num_active_cells() * single_probe_storage(state->c0_size);
+        state->alo = Fp1d(
+            "ALO",
+            alo_size
+        );
     }
 }
 
@@ -279,6 +244,7 @@ void init_state (State* state, const DexrtConfig& config) {
     constexpr int RcMode = RC_flags_storage();
     state->c0_size = cascade_rays_to_storage<RcMode>(c0_rays);
 
+    allocate_J(state);
     init_cascade_sized_arrays(state, config);
 
     Fp1dHost muy("muy", NUM_INCL);
@@ -303,133 +269,14 @@ void finalize_state(State* state) {
 #endif
 }
 
-void init_active_probes(const State& state, CascadeState* casc) {
-    // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if
-    // Really this function is backwards. We can loop over each probe of i+1 and
-    // check the dependents in i, in parallel. The merge process remains the
-    // same.
-    // NOTE(cmo): Active probes in c_0
-    CascadeState& casc_state = *casc;
-    auto& active_bool = state.active;
-    yakl::Array<u64, 2, yakl::memDevice> prev_active(
-        "casc_active",
-        state.active.extent(0),
-        state.active.extent(1)
-    );
-    parallel_for(
-        SimpleBounds<2>(prev_active.extent(0), prev_active.extent(1)),
-        YAKL_LAMBDA (int z, int x) {
-            if (active_bool(z, x)) {
-                prev_active(z, x) = 1;
-            } else {
-                prev_active(z, x) = 0;
-            }
-        }
-    );
-    yakl::fence();
-    u64 num_active = yakl::intrinsics::sum(prev_active);
-    auto prev_active_h = prev_active.createHostCopy();
-    yakl::fence();
-    yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("c0 to compute", num_active, 2);
-    i32 idx = 0;
-    for (int z = 0; z < prev_active_h.extent(0); ++z) {
-        for (int x = 0; x < prev_active_h.extent(1); ++x) {
-            if (prev_active_h(z, x)) {
-                probes_to_compute_h(idx, 0) = x;
-                probes_to_compute_h(idx, 1) = z;
-                idx += 1;
-            }
-        }
-    }
-    auto probes_to_compute = probes_to_compute_h.createDeviceCopy();
-    casc_state.probes_to_compute.emplace_back(probes_to_compute);
-    fmt::println(
-        "C0 Active Probes {}/{} ({}%)",
-        num_active,
-        prev_active.extent(0)*prev_active.extent(1),
-        fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
-    );
-
-
-    for (int cascade_idx = 1; cascade_idx <= casc_state.num_cascades; ++cascade_idx) {
-        CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
-        yakl::Array<u64, 2, yakl::memDevice> curr_active(
-            "casc_active",
-            dims.num_probes(1),
-            dims.num_probes(0)
-        );
-        curr_active = 0;
-        yakl::fence();
-        auto my_atomic_max = YAKL_LAMBDA (u64& ref, unsigned long long int val) {
-            yakl::atomicMax(
-                *reinterpret_cast<unsigned long long int*>(&ref),
-                val
-            );
-        };
-        parallel_for(
-            SimpleBounds<2>(prev_active.extent(0), prev_active.extent(1)),
-            YAKL_LAMBDA (int z, int x) {
-                int z_bc = std::max(int((z - 1) / 2), 0);
-                int x_bc = std::max(int((x - 1) / 2), 0);
-                const bool z_clamp = (z_bc == 0) || (z_bc == (curr_active.extent(0) - 1));
-                const bool x_clamp = (x_bc == 0) || (x_bc == (curr_active.extent(1) - 1));
-
-                if (!prev_active(z, x)) {
-                    return;
-                }
-
-                // NOTE(cmo): Atomically set the (up-to) 4 valid
-                // probes for this active probe of cascade_idx-1
-                my_atomic_max(curr_active(z_bc, x_bc), 1);
-                if (!x_clamp) {
-                    my_atomic_max(curr_active(z_bc, x_bc+1), 1);
-                }
-                if (!z_clamp) {
-                    my_atomic_max(curr_active(z_bc+1, x_bc), 1);
-                }
-                if (!(z_clamp || x_clamp)) {
-                    my_atomic_max(curr_active(z_bc+1, x_bc+1), 1);
-                }
-            }
-        );
-        yakl::fence();
-        i64 num_active = yakl::intrinsics::sum(curr_active);
-        auto curr_active_h = curr_active.createHostCopy();
-        yakl::fence();
-        yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("probes to compute", num_active, 2);
-        i32 idx = 0;
-        for (int z = 0; z < curr_active_h.extent(0); ++z) {
-            for (int x = 0; x < curr_active_h.extent(1); ++x) {
-                if (curr_active_h(z, x)) {
-                    probes_to_compute_h(idx, 0) = x;
-                    probes_to_compute_h(idx, 1) = z;
-                    idx += 1;
-                }
-            }
-        }
-        auto probes_to_compute = probes_to_compute_h.createDeviceCopy();
-        casc_state.probes_to_compute.emplace_back(probes_to_compute);
-        prev_active = curr_active;
-        fmt::println(
-            "C{} Active Probes {}/{} ({}%)",
-            cascade_idx,
-            num_active,
-            prev_active.extent(0)*prev_active.extent(1),
-            fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
-        );
-    }
-}
-
 /// Called to copy J from GPU to plane of host array if config.store_J_on_cpu
 void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
     int wave_batch = la_end - la_start;
-    const Fp3dHost J_copy = state.J.createHostCopy();
+    const Fp2dHost J_copy = state.J.createHostCopy();
     // TODO(cmo): Replace with a memcpy?
     for (int wave = 0; wave < wave_batch; ++wave) {
-        for (int z = 0; z < J_copy.extent(1); ++z) {
-            for (int x = 0; x < J_copy.extent(2); ++x) {
-                state.J_cpu(la_start + wave, z, x) = J_copy(wave, z, x);
-            }
+        for (i64 ks = 0; ks < J_copy.extent(1); ++ks) {
+            state.J_cpu(la_start + wave, ks) = J_copy(wave, ks);
         }
     }
 }
@@ -646,12 +493,25 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     nc.create(config.output_path, yakl::NETCDF_MODE_REPLACE);
     fmt::println("Saving output to {}...", config.output_path);
     add_netcdf_attributes(state, nc, num_iter);
+    const auto& block_map = state.mr_block_map.block_map;
 
     if (out_cfg.J) {
         if (config.store_J_on_cpu) {
-            nc.write(state.J_cpu, "J", {"wavelength", "z", "x"});
+            if (state.sparse_J) {
+                Fp3dHost J_full = rehydrate_sparse_quantity(block_map, state.J_cpu);
+                nc.write(J_full, "J", {"wavelength", "z", "x"});
+            } else {
+                Fp3dHost J_full = state.J_cpu.reshape(state.J_cpu.extent(0), block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
+                nc.write(J_full, "J", {"wavelength", "z", "x"});
+            }
         } else {
-            nc.write(state.J, "J", {"wavelength", "z", "x"});
+            if (state.sparse_J) {
+                Fp3dHost J_full = rehydrate_sparse_quantity(block_map, state.J);
+                nc.write(J_full, "J", {"wavelength", "z", "x"});
+            } else {
+                Fp3d J_full = state.J.reshape(state.J.extent(0), block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
+                nc.write(J_full, "J", {"wavelength", "z", "x"});
+            }
         }
         nc.write(state.max_block_mip, "max_mip_block", {"wavelength_batch", "tile_z", "tile_x"});
     }
@@ -660,31 +520,29 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
     }
     if (out_cfg.pops && state.pops.initialized()) {
-        nc.write(state.pops, "pops", {"level", "z", "x"});
+        Fp3dHost pops_full = rehydrate_sparse_quantity(block_map, state.pops);
+        nc.write(pops_full, "pops", {"level", "z", "x"});
     }
     if (out_cfg.lte_pops) {
-        Fp3d lte_pops = state.pops.createDeviceObject();
+        Fp2d lte_pops = state.pops.createDeviceObject();
         compute_lte_pops(&state, lte_pops);
         yakl::fence();
-        nc.write(lte_pops, "lte_pops", {"level", "z", "x"});
+        Fp3dHost lte_pops_full = rehydrate_sparse_quantity(block_map, state.pops);
+        nc.write(lte_pops_full, "lte_pops", {"level", "z", "x"});
     }
     if (out_cfg.ne && state.atmos.ne.initialized()) {
-        nc.write(state.atmos.ne, "ne", {"z", "x"});
+        Fp2dHost ne_out = rehydrate_sparse_quantity(block_map, state.atmos.ne);
+        nc.write(ne_out, "ne", {"z", "x"});
     }
     if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
-        nc.write(state.atmos.nh_tot, "nh_tot", {"z", "x"});
+        Fp2dHost nh_tot_out = rehydrate_sparse_quantity(block_map, state.atmos.nh_tot);
+        nc.write(nh_tot_out, "nh_tot", {"z", "x"});
     }
     if (out_cfg.alo && state.alo.initialized()) {
         nc.write(state.alo, "alo", {"casc_shape"});
     }
-    if (out_cfg.active && state.active.initialized()) {
-        const auto& active_copy = state.active.createHostCopy();
-        yakl::Array<unsigned char, 2, yakl::memHost> active_char(
-            "active_char",
-            (unsigned char*)active_copy.get_data(),
-            active_copy.extent(0),
-            active_copy.extent(1)
-        );
+    if (out_cfg.active) {
+        const auto& active_char = reify_active_c0(state.mr_block_map.block_map);
         nc.write(active_char, "active", {"z", "x"});
     }
     for (int casc : out_cfg.cascades) {
@@ -724,7 +582,8 @@ int main(int argc, char** argv) {
         // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if
         // not using an atmosphere
         init_state(&state, config);
-        CascadeState casc_state = CascadeState_new(state.c0_size, MAX_CASCADE);
+        CascadeState casc_state;
+        casc_state.init(state, MAX_CASCADE);
         yakl::timer_start("DexRT");
         state.max_block_mip = -1;
         yakl::fence();
@@ -749,14 +608,9 @@ int main(int argc, char** argv) {
                 finalise_wavelength_batch(state, la_start, la_end);
             }
 
-            Fp1d dummy_wavelengths;
-            Fp3d dummy_pops;
             yakl::timer_stop("DexRT");
             save_results(state, casc_state, 1);
         } else {
-            if (config.sparse_calculation) {
-                init_active_probes(state, &casc_state);
-            }
             compute_lte_pops(&state);
             const bool non_lte = config.mode == DexrtMode::NonLte;
             const bool conserve_charge = config.conserve_charge;
@@ -850,6 +704,9 @@ int main(int argc, char** argv) {
                 }
                 if (state.config.sparse_calculation) {
                     state.config.sparse_calculation = false;
+                    allocate_J(&state);
+                    casc_state.probes_to_compute.init(state, casc_state.num_cascades);
+
                     fmt::println("Final FS (dense)");
                     compute_nh0(state);
                     state.J = FP(0.0);
@@ -886,7 +743,7 @@ int main(int argc, char** argv) {
                 }
                 yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
-                    // la_start = 40;
+                    la_start = 53;
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                     setup_wavelength_batch(state, la_start, la_end);
                     fmt::println(
@@ -899,7 +756,7 @@ int main(int argc, char** argv) {
                     bool lambda_iterate = true;
                     fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
                     finalise_wavelength_batch(state, la_start, la_end);
-                    // break;
+                    break;
                 }
             }
             yakl::timer_stop("DexRT");

@@ -5,6 +5,7 @@
 #include "Utils.hpp"
 #include "Atmosphere.hpp"
 #include "MortonCodes.hpp"
+#include <fmt/core.h>
 
 struct GridBbox {
     yakl::SArray<i32, 1, NUM_DIM> min;
@@ -135,6 +136,11 @@ struct BlockMap {
             }
             active_tiles = active_tiles_host.createDeviceCopy();
         }
+    }
+
+    YAKL_INLINE
+    i64 get_num_active_cells() const {
+        return num_active_tiles * square(BLOCK_SIZE);
     }
 
     /// Everything active, no atmosphere, used for given fs
@@ -329,6 +335,11 @@ struct MultiResBlockMap {
     YAKL_INLINE i64 buffer_len() const {
         return mip_offsets(max_mip_level) + block_map.buffer_len(1 << max_mip_level);
     }
+
+    YAKL_INLINE
+    i64 get_num_active_cells() const {
+        return block_map.get_num_active_cells();
+    }
 };
 
 
@@ -348,7 +359,7 @@ struct IndexGen {
         refined_size(refined_size_)
     {}
 
-    template <u8 entry_size>
+    template <int entry_size>
     YAKL_INLINE
     IndexGen(const MultiResBlockMap<BLOCK_SIZE, entry_size>& mr_block_map, i32 refined_size_=1) :
         tile_key({.x = -1, .z = -1}),

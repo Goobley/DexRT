@@ -20,7 +20,12 @@ list(APPEND DEX_SOURCE_FILES
     "source/main.cpp"
     "source/StaticFormalSolution.cpp"
     "source/DynamicFormalSolution.cpp"
+    "source/CascadeState.cpp"
     "source/PromweaverBoundary.cpp"
+    "source/MiscSparse.cpp"
+    "source/Collisions.cpp"
+    "source/ProfileNormalisation.cpp"
+    "source/Populations.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"

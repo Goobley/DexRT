@@ -171,9 +171,9 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
         out.nh_tot = false;
         out.lte_pops = false;
         out.alo = false;
-        out.active = config.sparse_calculation;
+        out.active = true;
     } else if (config.mode == DexrtMode::NonLte) {
-        out.active = config.sparse_calculation;
+        out.active = true;
         if (!(config.conserve_charge && config.conserve_pressure)) {
             out.ne = false;
             out.nh_tot = false;

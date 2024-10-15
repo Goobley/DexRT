@@ -36,9 +36,19 @@ typedef yakl::SArray<fp_t, 2, 2, 2> mat2x2;
 typedef yakl::SArray<int, 2, 2, 2> imat2x2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
 
+struct Coord2 {
+    i32 x;
+    i32 z;
+
+    YAKL_INLINE bool operator==(const Coord2& other) const {
+        return (x == other.x) && (z == other.z);
+    }
+};
+
 using yakl::c::parallel_for;
 using yakl::c::SimpleBounds;
 using yakl::Dims;
+struct State;
 
 enum class DexrtMode {
     Lte,
@@ -96,21 +106,82 @@ struct RayProps {
     vec2 centre;
 };
 
+struct DeviceProbesToCompute {
+    bool sparse;
+    ivec2 num_probes;
+    yakl::Array<i32, 2, yakl::memDevice> active_probes; // [n, 2 (u, v)]
+
+    YAKL_INLINE ivec2 operator()(i64 ks) const {
+        if (!sparse) {
+            // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
+            // fast-running), but index as [u, v], i.e. dims.num_probes(0) =
+            // dim(u). Typical definition of k = u * Nv + v, but here we do
+            // loop index k = v * Nu + u where Nu = dims.num_probes(0). This
+            // preserves our iteration ordering
+            ivec2 probe_coord;
+            probe_coord(0) = ks % num_probes(0);
+            probe_coord(1) = ks / num_probes(0);
+            return probe_coord;
+        }
+
+        ivec2 probe_coord;
+        probe_coord(0) = active_probes(ks, 0);
+        probe_coord(1) = active_probes(ks, 1);
+        return probe_coord;
+    }
+
+    YAKL_INLINE i64 num_active_probes() const {
+        if (sparse) {
+            return active_probes.extent(0);
+        }
+        return num_probes(0) * num_probes(1);
+    }
+};
+
+struct ProbesToCompute {
+    bool sparse;
+    CascadeStorage c0_size;
+    std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes; // [n, 2 (u, v)]
+
+    /// Setup object, low-level
+    void init(
+        const CascadeStorage& c0,
+        bool sparse,
+        std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes = decltype(active_probes)()
+    );
+
+    /// Setup object, high-level, from state
+    void init(
+        const State& state,
+        int max_cascade
+    );
+
+    /// Bind cascade n to device type
+    DeviceProbesToCompute bind(int cascade_idx) const;
+
+    /// Number of probes to compute in cascade n
+    i64 num_active_probes(int cascade_idx) const;
+};
+
 struct CascadeState {
     int num_cascades;
     std::vector<Fp1d> i_cascades;
     std::vector<Fp1d> tau_cascades;
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> probes_to_compute; // [n, 2 (u, v)]
+    ProbesToCompute probes_to_compute;
+
+    bool init(const State& state, int max_cascade);
 };
 
 struct DeviceCascadeState {
     int num_cascades;
     int n;
+    CascadeStorage casc_dims;
+    CascadeStorage upper_dims;
     Fp1d cascade_I;
     Fp1d cascade_tau;
     FpConst1d upper_I;
     FpConst1d upper_tau;
-    Fp1d alo; /// [z, x, phi, wave, theta], but flattened. Index using Cascade operators (probe_lin_index) -- you need to fetch intensity at the same time anyway.
+    Fp1d alo; /// [ks, phi, wave, theta], but flattened. Index using Cascade operators (probe_lin_index) -- you need to fetch intensity at the same time anyway.
 };
 
 template <typename Bc>
@@ -140,6 +211,26 @@ struct Atmosphere {
     Fp2d vx;
     Fp2d vy;
     Fp2d vz;
+};
+
+struct SparseAtmosphere {
+    fp_t voxel_scale;
+    fp_t offset_x = FP(0.0);
+    fp_t offset_y = FP(0.0);
+    fp_t offset_z = FP(0.0);
+    i32 num_x;
+    i32 num_y;
+    i32 num_z;
+    bool moving = false;
+    Fp1d temperature;
+    Fp1d pressure;
+    Fp1d ne;
+    Fp1d nh_tot;
+    Fp1d nh0;
+    Fp1d vturb;
+    Fp1d vx;
+    Fp1d vy;
+    Fp1d vz;
 };
 
 template <typename T=fp_t>

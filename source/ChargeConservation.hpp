@@ -17,31 +17,24 @@ template <typename T=fp_t>
 inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions()) {
     yakl::timer_start("Charge conservation");
     JasUnpack(args, ignore_change_below_ntot_frac);
-    constexpr bool print_debug = false;
-    // NOTE(cmo): Here be big angry dragons. The implementation is disgusting and hard to follow. This needs to be redone.
-    // TODO(cmo): There's too many fences in here!
     // TODO(cmo): Add background n_e term like in Lw.
     // NOTE(cmo): Only considers H for now
     // TODO(cmo): He contribution?
     assert(state->have_h && "Need to have H active for non-lte EOS");
     const auto& pops = state->pops.reshape<2>(Dims(state->pops.extent(0), state->pops.extent(1) * state->pops.extent(2)));
-    const auto& active = state->active.collapse();
     const auto& GammaH = state->Gamma[0];
     const int num_level = GammaH.extent(0);
     const int num_eqn = GammaH.extent(0) + 1;
-    const auto& ne_flat = state->atmos.ne.collapse();
-    const auto& nhtot = state->atmos.nh_tot.collapse();
+    const auto& ne_flat = state->atmos.ne;
+    const auto& nhtot = state->atmos.nh_tot;
     // NOTE(cmo): GammaH_flat is how we access Gamma/C in the following
-    const auto& GammaH_flat = state->Gamma[0].reshape<3>(Dims(
-        GammaH.extent(0),
-        GammaH.extent(1),
-        GammaH.extent(2) * GammaH.extent(3)
-    ));
+    const auto& GammaH_flat = state->Gamma[0];
     // NOTE(cmo): Sort out the diagonal before we copy into the transpose (full Gamma)
     fixup_gamma(GammaH_flat);
     yakl::fence();
+
     const auto& H_atom = extract_atom(state->adata, state->adata_host, 0);
-    // NOTE(cmo): Immediately transposed
+    // NOTE(cmo): Immediately transposed -- we can reduce the memory requirements here if really needed
     yakl::Array<T, 2, yakl::memDevice> F("F", GammaH_flat.extent(2), num_eqn);
     yakl::Array<T, 3, yakl::memDevice> GammaT("GammaH^T", GammaH_flat.extent(2), num_level, num_level);
     yakl::Array<T, 3, yakl::memDevice> dF("dF", GammaH_flat.extent(2), num_eqn, num_eqn);
@@ -87,7 +80,7 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
     fixup_gamma(GammaH_flat);
     yakl::fence();
     const auto C = GammaH.createDeviceCopy();
-    const auto C_flat = C.createDeviceCopy().reshape<3>(Dims(C.extent(0), C.extent(1), C.extent(2) * C.extent(3)));
+    const auto C_flat = C.createDeviceCopy();
     auto ne_copy = state->atmos.ne.createDeviceCopy();
     auto ne_pert = state->atmos.ne.createDeviceCopy();
     yakl::fence();
@@ -98,10 +91,10 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
     constexpr fp_t pert_size = FP(1e-2);
     parallel_for(
         "Perturb ne",
-        SimpleBounds<2>(ne.extent(0), ne.extent(1)),
-        YAKL_LAMBDA (int z, int x) {
-            ne_pert(z, x) = ne(z, x) * pert_size;
-            ne(z, x) += ne_pert(z, x);
+        SimpleBounds<1>(ne.extent(0)),
+        YAKL_LAMBDA (i64 ks) {
+            ne_pert(ks) = ne(ks) * pert_size;
+            ne(ks) += ne_pert(ks);
         }
     );
     yakl::fence();
@@ -110,17 +103,18 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
     yakl::fence();
     parallel_for(
         "Compute dC",
-        SimpleBounds<4>(C.extent(0), C.extent(1), C.extent(2), C.extent(3)),
-        YAKL_LAMBDA (int i, int j, int z, int x) {
-            C(i, j, z, x) = (GammaH(i, j, z, x) - C(i, j, z, x)) / ne_pert(z, x);
+        SimpleBounds<3>(C.extent(0), C.extent(1), C.extent(2)),
+        YAKL_LAMBDA (int i, int j, i64 ks) {
+            C(i, j, ks) = (GammaH(i, j, ks) - C(i, j, ks)) / ne_pert(ks);
         }
     );
-    const auto& dC = C.reshape<3>(Dims(C.extent(0), C.extent(1), C.extent(2) * C.extent(3)));
+    // NOTE(cmo): Rename for clarity
+    const auto& dC = C;
     parallel_for(
         "Restore n_e",
-        SimpleBounds<2>(ne.extent(0), ne.extent(1)),
-        YAKL_LAMBDA (int z, int x) {
-            ne(z, x) = ne_copy(z, x);
+        SimpleBounds<1>(ne.extent(0)),
+        YAKL_LAMBDA (i64 ks) {
+            ne(ks) = ne_copy(ks);
         }
     );
     yakl::fence();
@@ -173,7 +167,7 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
                     }
                 }
                 if (i < num_level) {
-                    // TODO(cmo): This can be atomicised and done over j.
+                    // TODO(cmo): This can be atomicised and done over j, but it works
                     for (int jj = 0; jj < num_level; ++jj) {
                         yakl::atomicAdd(
                             dF(k, num_eqn-1, i),
@@ -198,39 +192,6 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
             }
         }
     );
-    yakl::fence();
-
-    // z * Nx + x
-    int print_idx = std::min(369 * state->pops.extent(2) + 587, F.extent(0)-1);
-    if (print_debug) {
-        const auto dF_host = dF.createHostCopy();
-        // const auto dC_host = dC.createHostCopy();
-        const auto F_host = F.createHostCopy();
-        const auto ne_host = ne_flat.createHostCopy();
-        const auto pops_host = pops.createHostCopy();
-
-        fmt::print("Before ");
-        for (int i = 0; i < num_level; ++i) {
-            fmt::print("{:e}, ", pops_host(i, print_idx));
-        }
-        fmt::print("{:e}, ", ne_host(print_idx));
-        fmt::print("\n");
-
-        fmt::println("-------- dF ----------");
-        for (int i = 0; i < dF_host.extent(2); ++i) {
-            for (int j = 0; j < dF_host.extent(1); ++j) {
-                fmt::print("{:e}, ", dF_host(print_idx, j, i));
-            }
-            fmt::print("\n");
-        }
-        fmt::print("\n");
-
-        fmt::print("F pre\n");
-        for (int i = 0; i < F.extent(1); ++i) {
-            fmt::print("{:e}, ", F_host(print_idx, i));
-        }
-        fmt::print("\n");
-    }
     yakl::fence();
 
     yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", F.extent(0), F.extent(1));
@@ -285,47 +246,18 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
     magma_queue_sync(state->magma_queue);
     yakl::fence();
     // NOTE(cmo): F is now the absolute update to apply to Hpops and ne
-    if (print_debug) {
-        const auto F_host = F.createHostCopy();
-
-        fmt::print("F post ");
-        for (int i = 0; i < F.extent(1); ++i) {
-            fmt::print("{:e}, ", F_host(print_idx, i));
-        }
-        fmt::print("\n");
-    }
-
     parallel_for(
         "info check",
         SimpleBounds<1>(info.extent(0)),
         YAKL_LAMBDA (int k) {
             if (info(k) != 0) {
-                printf("%d: %d\n", k, info(k));
+                printf("LINEAR SOLVER PROBLEM (charge conservation) ks: %d, info: %d\n", k, info(k));
             }
         }
     );
 
-    if (print_debug) {
-        const auto F_host = F.createHostCopy();
-        const auto ne_host = ne_flat.createHostCopy();
-        const auto pops_host = pops.createHostCopy();
-        fmt::print("Updated ");
-        for (int i = 0; i < num_level; ++i) {
-            fmt::print("{:e}, ", pops_host(i, print_idx) + F_host(print_idx, i));
-        }
-        fmt::print("{:e}, ", ne_host(print_idx) + F_host(print_idx, num_eqn-1));
-        fmt::print("\n");
-        fmt::print("Rel Change ");
-        for (int i = 0; i < num_level; ++i) {
-            fmt::print("{:e}, ", F_host(print_idx, i) / (pops_host(i, print_idx)));
-        }
-        fmt::print("{:e}, ", F_host(print_idx, num_eqn-1) / (ne_host(print_idx)));
-        fmt::print("\n");
-    }
-
     Fp2d max_rel_change("max rel change", F.extent(0), F.extent(1));
     Fp1d nr_step_size("step size", F.extent(0));
-    // NOTE(cmo): This is just desperation
     max_rel_change = FP(0.0);
     nr_step_size = FP(0.0);
     yakl::fence();
@@ -333,37 +265,35 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
         "Update & transpose pops",
         SimpleBounds<1>(F.extent(0)),
         YAKL_LAMBDA (int64_t k) {
-            if (active(k)) {
-                fp_t step_size = FP(1.0);
-                constexpr bool clamp_step_size = true;
-                if (clamp_step_size) {
-                    for (int i = 0; i < num_level; ++i) {
-                        fp_t update = F(k, i);
-                        fp_t updated = pops(i, k) + update;
-                        if (updated < FP(0.0)) {
-                            fp_t local_step_size = FP(0.99) * pops(i, k) / std::abs(update);
-                            step_size = std::max(std::min(step_size, local_step_size), FP(1e-4));
-                        }
-                    }
-                    fp_t ne_update = F(k, num_eqn-1);
-                    fp_t ne_updated = ne_flat(k) + ne_update;
-                    if (ne_updated < FP(0.0)) {
-                        fp_t local_step_size = FP(0.95) * ne_flat(k) / std::abs(ne_update);
+            fp_t step_size = FP(1.0);
+            constexpr bool clamp_step_size = true;
+            if (clamp_step_size) {
+                for (int i = 0; i < num_level; ++i) {
+                    fp_t update = F(k, i);
+                    fp_t updated = pops(i, k) + update;
+                    if (updated < FP(0.0)) {
+                        fp_t local_step_size = FP(0.99) * pops(i, k) / std::abs(update);
                         step_size = std::max(std::min(step_size, local_step_size), FP(1e-4));
                     }
                 }
-                for (int i = 0; i < num_level; ++i) {
-                    fp_t update = step_size * F(k, i);
-                    if (pops(i, k) > ignore_change_below_ntot_frac * nhtot(k)) {
-                        max_rel_change(k, i) = std::abs(update / (pops(i, k)));
-                    }
-                    pops(i, k) += update;
+                fp_t ne_update = F(k, num_eqn-1);
+                fp_t ne_updated = ne_flat(k) + ne_update;
+                if (ne_updated < FP(0.0)) {
+                    fp_t local_step_size = FP(0.95) * ne_flat(k) / std::abs(ne_update);
+                    step_size = std::max(std::min(step_size, local_step_size), FP(1e-4));
                 }
-                fp_t ne_update = step_size * F(k, num_eqn-1);
-                max_rel_change(k, num_eqn-1) = std::abs(ne_update / (ne_flat(k)));
-                ne_flat(k) += ne_update;
-                nr_step_size(k) = step_size;
             }
+            for (int i = 0; i < num_level; ++i) {
+                fp_t update = step_size * F(k, i);
+                if (pops(i, k) > ignore_change_below_ntot_frac * nhtot(k)) {
+                    max_rel_change(k, i) = std::abs(update / (pops(i, k)));
+                }
+                pops(i, k) += update;
+            }
+            fp_t ne_update = step_size * F(k, num_eqn-1);
+            max_rel_change(k, num_eqn-1) = std::abs(ne_update / (ne_flat(k)));
+            ne_flat(k) += ne_update;
+            nr_step_size(k) = step_size;
         }
     );
     yakl::fence();
@@ -377,24 +307,20 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
 
     int max_change_level = max_change_acc % F.extent(1);
     max_change_acc /= F.extent(1);
-    int max_change_x = max_change_acc % state->pops.extent(2);
-    max_change_acc /= state->pops.extent(2);
-    int max_change_z = max_change_acc;
+    i64 max_change_ks = max_change_acc;
     fmt::println(
-        "NR Update Max Change (level: {}): {} (@ {}, {}), step_size: {} [[{}]]",
+        "NR Update Max Change (level: {}): {} (@ {}), step_size: {}",
         max_change_level == (num_eqn - 1) ? "n_e": std::to_string(max_change_level),
         max_change,
-        max_change_z,
-        max_change_x,
-        step_size_host(max_change_loc / F.extent(1)),
-        max_change_loc
+        max_change_ks,
+        step_size_host(max_change_loc / F.extent(1))
     );
     yakl::timer_stop("Charge conservation");
     return max_change;
 }
 #else
 template <typename T=fp_t>
-inline fp_t nr_post_update(State* state) { return FP(0.0); };
+inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions()) { return FP(0.0); };
 #endif
 
 

@@ -219,7 +219,7 @@ struct CoreAndVoigtData {
     void compute_mip_n(const State& state, const MipmapComputeState& mm_state, i32 level) {
         JasUnpack(state, mr_block_map, adata, phi);
         const auto& block_map = mr_block_map.block_map;
-        JasUnpack(mm_state, max_mip_factor, mippable_entries, emis, opac, vx, vy, vz, la_start, la_end);
+        JasUnpack(mm_state, mippable_entries, emis, opac, vx, vy, vz, la_start, la_end);
         constexpr i32 mip_block = 4;
         const fp_t vox_scale = state.atmos.voxel_scale;
         const i32 wave_batch = la_end - la_start;
