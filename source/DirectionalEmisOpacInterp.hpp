@@ -24,11 +24,6 @@ inline void compute_min_max_vel(
     max_vel = -FP(1e8);
     yakl::fence();
 
-    // TODO(cmo): This needs to support flat mipped velocity arrays.
-    // Handle min and max vel being the length of the mip, or of the mip chain.
-    // Compare with mr_block_map.buffer_len and block_map.buffer_len(1 << mip_level)
-    // Exception if neither
-
     constexpr i32 RcMode = RC_flags_storage();
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
@@ -190,7 +185,6 @@ struct DirectionalEmisOpacInterp {
         Fp1d min_vel("min_vel", emis_opac_vel.extent(0));
 
         // assert(emis_opac_vel.extent(0) == state.block_map.buffer_len() && "Sparse sizes don't match");
-        const auto& incl_quad = state.incl_quad;
         const auto& atmos = state.atmos;
         // const auto& active_map = state.active_map;
         const auto& block_map = state.mr_block_map.block_map;
@@ -225,8 +219,6 @@ struct DirectionalEmisOpacInterp {
                 IndexGen<BLOCK_SIZE> idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-                int u = coord.x;
-                int v = coord.z;
 
                 const fp_t vmin = min_vel(ks);
                 const fp_t vmax = max_vel(ks);
@@ -254,8 +246,6 @@ struct DirectionalEmisOpacInterp {
                 local_atmos.nh0 = flatmos.nh0(ks);
                 local_atmos.vel = vel;
 
-                // fp_t chi_s = chi(v, u, wave);
-                // fp_t eta_s = eta(v, u, wave);
                 fp_t chi_s = FP(0.0);
                 fp_t eta_s = FP(0.0);
                 auto line_terms = emis_opac(

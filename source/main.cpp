@@ -222,14 +222,6 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
 }
 
 void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
-    if (config.mode == DexrtMode::NonLte) {
-
-        i64 alo_size = state->mr_block_map.get_num_active_cells() * single_probe_storage(state->c0_size);
-        state->alo = Fp1d(
-            "ALO",
-            alo_size
-        );
-    }
 }
 
 void init_state (State* state, const DexrtConfig& config) {
@@ -538,8 +530,8 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         Fp2dHost nh_tot_out = rehydrate_sparse_quantity(block_map, state.atmos.nh_tot);
         nc.write(nh_tot_out, "nh_tot", {"z", "x"});
     }
-    if (out_cfg.alo && state.alo.initialized()) {
-        nc.write(state.alo, "alo", {"casc_shape"});
+    if (out_cfg.alo && casc_state.alo.initialized()) {
+        nc.write(casc_state.alo, "alo", {"casc_shape"});
     }
     if (out_cfg.active) {
         const auto& active_char = reify_active_c0(state.mr_block_map.block_map);
@@ -615,7 +607,13 @@ int main(int argc, char** argv) {
             const bool non_lte = config.mode == DexrtMode::NonLte;
             const bool conserve_charge = config.conserve_charge;
             const bool actually_conserve_charge = state.have_h && conserve_charge;
+            if (!actually_conserve_charge && conserve_charge) {
+                throw std::runtime_error("Charge conservation enabled without a model H!");
+            }
             const bool conserve_pressure = config.conserve_pressure;
+            if (conserve_pressure && !conserve_charge) {
+                throw std::runtime_error("Cannot enable pressure conservation without charge conservation.");
+            }
             const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
             const int initial_lambda_iterations = config.initial_lambda_iterations;
             const int max_iters = config.max_iter;
@@ -623,9 +621,6 @@ int main(int argc, char** argv) {
             const fp_t non_lte_tol = config.pop_tol;
             auto& waves = state.adata_host.wavelength;
             auto fs_fn = dynamic_formal_sol_rc;
-            // if (static_soln) {
-            //     fs_fn = static_formal_sol_rc;
-            // }
             fp_t max_change = FP(1.0);
             int num_iter = 1;
             if (non_lte) {
@@ -665,12 +660,16 @@ int main(int argc, char** argv) {
                 while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
                     fmt::println("FS {}", i);
                     compute_nh0(state);
+                    fmt::println("nh0");
                     compute_collisions_to_gamma(&state);
-                    state.J = FP(0.0);
+                    fmt::println("colls");
                     compute_profile_normalisation(state, casc_state);
+                    fmt::println("wphi");
+                    state.J = FP(0.0);
                     if (config.store_J_on_cpu) {
                         state.J_cpu = FP(0.0);
                     }
+                    fmt::println("zero J");
                     yakl::fence();
                     for (
                         int la_start = 0;
@@ -743,7 +742,7 @@ int main(int argc, char** argv) {
                 }
                 yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
-                    la_start = 53;
+                    // la_start = 53;
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                     setup_wavelength_batch(state, la_start, la_end);
                     fmt::println(
@@ -756,7 +755,7 @@ int main(int argc, char** argv) {
                     bool lambda_iterate = true;
                     fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
                     finalise_wavelength_batch(state, la_start, la_end);
-                    break;
+                    // break;
                 }
             }
             yakl::timer_stop("DexRT");

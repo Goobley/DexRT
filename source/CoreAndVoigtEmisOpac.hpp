@@ -88,7 +88,6 @@ struct CoreAndVoigtData {
         i32 wave_batch = la_end - la_start;
         auto& block_map = mr_block_map.block_map;
         const auto& flatmos = flatten<const fp_t>(atmos);
-        const auto& flat_pops = pops.reshape<2>(Dims(pops.extent(0), pops.extent(1) * pops.extent(2)));
 
         for (int i = 0; i < CORE_AND_VOIGT_MAX_LINES; ++i) {
             active_set_mapping(i) = -1;
@@ -144,21 +143,20 @@ struct CoreAndVoigtData {
                 IdxGen idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-                i64 kf = idx_gen.full_flat_idx(coord.x, coord.z);
 
                 AtmosPointParams atmos_point {
-                    .temperature = flatmos.temperature(kf),
-                    .ne = flatmos.ne(kf),
-                    .vturb = flatmos.vturb(kf),
-                    .nhtot = flatmos.nh_tot(kf),
-                    .nh0 = flatmos.nh0(kf)
+                    .temperature = flatmos.temperature(ks),
+                    .ne = flatmos.ne(ks),
+                    .vturb = flatmos.vturb(ks),
+                    .nhtot = flatmos.nh_tot(ks),
+                    .nh0 = flatmos.nh0(ks)
                 };
 
                 CoreAndVoigt::CoreAndVoigtState line_state {
-                    .k = kf,
+                    .k = ks,
                     .atmos = atmos_point,
                     .adata = adata,
-                    .n = flat_pops
+                    .n = pops
                 };
                 for (int krl = 0; krl < active_set_mapping.size(); ++krl) {
                     if (active_set_mapping(krl) < 0) {

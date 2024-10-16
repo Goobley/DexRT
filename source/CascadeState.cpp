@@ -49,5 +49,8 @@ bool CascadeState::init(const State& state, int max_cascades) {
             tau_cascades.push_back(tau_entry);
         }
     }
+    if (state.config.mode == DexrtMode::NonLte) {
+        alo = Fp1d("ALO", i_cascades[0].extent(0));
+    }
     return true;
 }

@@ -18,7 +18,7 @@ void dynamic_compute_gamma(
     const CascadeCalcSubset& subset
 ) {
     JasUnpack(subset, la_start, la_end, subset_idx);
-    JasUnpack(state, phi, pops, adata, wphi);
+    JasUnpack(state, phi, pops, adata, wphi, mr_block_map);
     using namespace ConstantsFP;
     const auto flat_atmos = flatten<const fp_t>(state.atmos);
 
@@ -30,31 +30,34 @@ void dynamic_compute_gamma(
     CascadeStorage dims = state.c0_size;
     CascadeRays ray_set = cascade_compute_size<RcMode>(dims, 0);
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset_idx);
-    DeviceProbesToCompute probe_coord_lookup = casc_state.probes_to_compute.bind(0);
     const int num_cascades = casc_state.num_cascades;
+    const auto spatial_bounds = mr_block_map.block_map.loop_bounds();
 
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
-        const auto& alo = state.alo;
+        const auto& alo = casc_state.alo;
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
         int wave_batch = la_end - la_start;
         wave_batch = std::min(wave_batch, ray_subset.wave_batch);
 
-        i64 num_active_space = probe_coord_lookup.num_active_probes();
         const auto& wavelength = adata.wavelength;
         parallel_for(
             "compute Gamma",
-            SimpleBounds<4>(
-                num_active_space,
+            SimpleBounds<5>(
+                spatial_bounds.dim(0),
+                spatial_bounds.dim(1),
                 ray_subset.num_flat_dirs,
                 wave_batch,
                 ray_subset.num_incl
             ),
-            YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
-                // k_active may or may not be k. For sparse calculation, it's
-                // the index into the active probe array, otherwise, it is k.
-                ivec2 probe_coord = probe_coord_lookup(ks);
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int phi_idx, int wave, int theta_idx) {
+                IdxGen idx_gen(mr_block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 cell_coord = idx_gen.loop_coord(tile_idx, block_idx);
+                ivec2 probe_coord;
+                probe_coord(0) = cell_coord.x;
+                probe_coord(1) = cell_coord.z;
 
                 phi_idx += ray_subset.start_flat_dirs;
                 wave += ray_subset.start_wave_batch;
@@ -223,8 +226,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
-        if (state.alo.initialized()) {
-            state.alo = FP(0.0);
+        if (casc_state.alo.initialized()) {
+            casc_state.alo = FP(0.0);
         }
         CascadeCalcSubset subset{
             .la_start=la_start,
@@ -249,7 +252,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 mip_chain
             );
         }
-        if (state.alo.initialized() && !lambda_iterate) {
+        if (casc_state.alo.initialized() && !lambda_iterate) {
             cascade_i_25d<RcModeAlo>(
                 state,
                 casc_state,
@@ -266,7 +269,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 mip_chain
             );
         }
-        if (state.alo.initialized()) {
+        if (casc_state.alo.initialized()) {
             // NOTE(cmo): Add terms to Gamma
             dynamic_compute_gamma(
                 state,

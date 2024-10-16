@@ -9,7 +9,6 @@ void compute_collisions_to_gamma(State* state) {
 
     // TODO(cmo): Get rid of this!
     auto n_star = state->pops.createDeviceObject();
-    auto n_star_flat = n_star.reshape<2>(Dims(n_star.extent(0), n_star.extent(1) * n_star.extent(2)));
     // NOTE(cmo): Zero Gamma before we start to refill it.
     for (int i = 0; i < Gamma_store.size(); ++i) {
         Gamma_store[i] = FP(0.0);

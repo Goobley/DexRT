@@ -130,11 +130,10 @@ struct MultiResMipChain {
                     IndexGen<BLOCK_SIZE> idx_gen(block_map);
                     i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                     Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-                    i64 k = idx_gen.full_flat_idx(coord.x, coord.z);
 
-                    vx(ks) = flatmos.vx(k);
-                    vy(ks) = flatmos.vy(k);
-                    vz(ks) = flatmos.vz(k);
+                    vx(ks) = flatmos.vx(ks);
+                    vy(ks) = flatmos.vy(ks);
+                    vz(ks) = flatmos.vz(ks);
                 }
             );
         }

@@ -743,7 +743,7 @@ void cascade_i_25d(
         .upper_tau = tau_cascade_ip
     };
     if constexpr (compute_alo) {
-        dev_casc_state.alo = state.alo;
+        dev_casc_state.alo = casc_state.alo;
     }
 
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);

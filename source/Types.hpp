@@ -167,6 +167,7 @@ struct CascadeState {
     int num_cascades;
     std::vector<Fp1d> i_cascades;
     std::vector<Fp1d> tau_cascades;
+    Fp1d alo;
     ProbesToCompute probes_to_compute;
 
     bool init(const State& state, int max_cascade);

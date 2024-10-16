@@ -21,7 +21,7 @@ inline fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPos
     // NOTE(cmo): Only considers H for now
     // TODO(cmo): He contribution?
     assert(state->have_h && "Need to have H active for non-lte EOS");
-    const auto& pops = state->pops.reshape<2>(Dims(state->pops.extent(0), state->pops.extent(1) * state->pops.extent(2)));
+    const auto& pops = state->pops;
     const auto& GammaH = state->Gamma[0];
     const int num_level = GammaH.extent(0);
     const int num_eqn = GammaH.extent(0) + 1;

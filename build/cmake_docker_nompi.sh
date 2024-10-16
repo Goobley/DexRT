@@ -11,13 +11,14 @@ MAGMA_LIB="-lmagma"
       # -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v" \
       # -DYAKL_DEBUG="On"               \
       # -DYAKL_B4B="On"                  \
+      # -DYAKL_VERBOSE="On" \
 cmake -DCMAKE_CXX_COMPILER=g++     \
       -DCMAKE_CUDA_COMPILER=nvcc    \
       -DCMAKE_C_COMPILER=gcc        \
       -DCMAKE_Fortran_COMPILER=gfortran \
       -DYAKL_ARCH="CUDA"              \
       -DYAKL_AUTO_PROFILE="On"         \
-      -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v --generate-line-info" \
+      -DYAKL_CUDA_FLAGS="-O3 -g --ptxas-options=-v --generate-line-info" \
       -DYAKL_DEBUG="On"               \
       -DYAKL_INT64_RESHAPE="On"       \
       -DDEXRT_CUDA_ARCHITECTURES="86" \

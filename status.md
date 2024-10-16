@@ -48,7 +48,7 @@ Features/ToDo
         - [x] Not done properly, but key attributes added by shoving through netcdf-c functions directly.
 - [x] Control dexrt output
 - [ ] Allow loading populations into "lte" mode.
-- [ ] Avoid writing nonsense from non-active probes in C0 into J when pingponging
+- [x] Avoid writing nonsense from non-active probes in C0 into J when pingponging
     - We will get this for free when the sparsity propagates there.
 - [ ] Add groups to netcdf layer
 - [ ] Save/Restart from snapshot
