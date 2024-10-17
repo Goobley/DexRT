@@ -51,13 +51,13 @@ struct EmisOpacState {
     const AtomicData<T, mem_space>& adata;
     const VoigtProfile<T, false, mem_space>& profile;
     int la;
-    // const yakl::Array<fp_t const, 2, mem_space>& n;
     const yakl::Array<fp_t, 2, mem_space>& n;
     const yakl::Array<fp_t, 2, mem_space>& n_star_scratch = {};
     int64_t k;
     const AtmosPointParams& atmos;
     const yakl::Array<u16 const, 1, mem_space>& active_set = {};
     const yakl::Array<u16 const, 1, mem_space>& active_set_cont = {};
+    bool update_n_star = true;
     EmisOpacMode mode = EmisOpacMode::All;
 };
 
@@ -268,6 +268,12 @@ YAKL_INLINE UV compute_uv_cont(
 }
 
 
+/// Computes the emissivity and opacity for for all relevant transitions in the
+/// model. Lines are selected for mode All or DynamicOnly, continua for All or
+/// StaticOnly. N.B. This is not thread-safe for continua if multiple threads
+/// could be in the same spatial cell k at a time (e.g. multiple angles). If the
+/// LTE populations are precomputed, and provided it can be made thread-safe
+/// (and a little faster), by setting args.update_n_star = false
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacState<T, mem_space>& args
@@ -326,23 +332,25 @@ YAKL_INLINE EmisOpac emis_opac(
             return result;
         }
 
-        for (int ia = 0; ia < adata.num_level.extent(0); ++ia) {
-            const auto n_star = slice_pops(
-                n_star_scratch,
-                adata,
-                ia
-            );
-            const auto lte_data = extract_lte_terms_dev(adata, ia);
-            lte_pops<T, fp_t, mem_space>(
-                lte_data.energy,
-                lte_data.g,
-                lte_data.stage,
-                atmos.temperature,
-                atmos.ne,
-                lte_data.abundance * atmos.nhtot,
-                n_star,
-                k
-            );
+        if (args.update_n_star) {
+            for (int ia = 0; ia < adata.num_level.extent(0); ++ia) {
+                const auto n_star = slice_pops(
+                    n_star_scratch,
+                    adata,
+                    ia
+                );
+                const auto lte_data = extract_lte_terms_dev(adata, ia);
+                lte_pops<T, fp_t, mem_space>(
+                    lte_data.energy,
+                    lte_data.g,
+                    lte_data.stage,
+                    atmos.temperature,
+                    atmos.ne,
+                    lte_data.abundance * atmos.nhtot,
+                    n_star,
+                    k
+                );
+            }
         }
         if (active_set_cont.initialized()) {
             for (int i = 0; i < active_set_cont.extent(0); ++i) {

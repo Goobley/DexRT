@@ -198,6 +198,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     int wave_batch = la_end - la_start;
     MultiResMipChain mip_chain;
     mip_chain.init(state, state.mr_block_map.buffer_len(), wave_batch);
+    // NOTE(cmo): lte_scratch filled here
     mip_chain.fill_mip0_atomic(state, lte_scratch, la_start, la_end);
     mip_chain.compute_mips(state, la_start, la_end);
 

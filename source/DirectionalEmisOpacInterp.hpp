@@ -258,7 +258,8 @@ struct DirectionalEmisOpacInterp {
                         .k = ks,
                         .atmos = local_atmos,
                         .active_set = slice_active_set(adata, la),
-                        // .mode = EmisOpacMode::DynamicOnly
+                        .active_set_cont = slice_active_cont_set(adata, la),
+                        .update_n_star = false,
                         .mode = EmisOpacMode::All
                     }
                 );

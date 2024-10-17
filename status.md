@@ -133,3 +133,5 @@ copying the mips out to 2d arrays for debugging.
     device, but the cuda compiler was optimising and pulling the device pointer
     in block_map through, which was the only bit needed _unless_ the debug mode
     was activated...
+
+[ ] Magma 2.8.0 builds on nvhpc 24.7 (not on 24.9) but does not yield correct results. Current git HEAD works on 24.7

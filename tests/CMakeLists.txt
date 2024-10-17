@@ -28,6 +28,7 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_utils.cpp
     test_emis_opac.cpp
     test_gesv.cpp
+    "../source/MiscSparse.cpp"
 )
 
 add_executable(dexrt_test

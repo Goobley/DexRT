@@ -932,7 +932,7 @@ inline fp_t stat_eq(State* state, const StatEqOptions& args = StatEqOptions()) {
     for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
         JasUnpack((*state), pops);
         const auto& Gamma = state->Gamma[ia];
-        // GammaT has shake [ks, Nlevel, Nlevel]
+        // GammaT has shape [ks, Nlevel, Nlevel]
         yakl::Array<T, 3, yakl::memDevice> GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
         yakl::Array<T*, 1, yakl::memDevice> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0));
         yakl::Array<T, 2, yakl::memDevice> new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));

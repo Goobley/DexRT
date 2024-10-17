@@ -510,7 +510,10 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     MRIdxGen idx_gen(args.mr_block_map);
     auto s = MultiLevelDDA<BLOCK_SIZE, ENTRY_SIZE>(idx_gen);
     const bool marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped);
-    RadianceInterval<Alo> result{};
+    RadianceInterval<Alo> result{
+        .I = FP(0.0),
+        .tau = FP(0.0)
+    };
     if ((RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped)) {
         // NOTE(cmo): Check the ray is going up along z.
         if ((ray.dir(1) > FP(0.0)) && la != -1) {

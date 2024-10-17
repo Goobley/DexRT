@@ -660,16 +660,12 @@ int main(int argc, char** argv) {
                 while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
                     fmt::println("FS {}", i);
                     compute_nh0(state);
-                    fmt::println("nh0");
                     compute_collisions_to_gamma(&state);
-                    fmt::println("colls");
                     compute_profile_normalisation(state, casc_state);
-                    fmt::println("wphi");
                     state.J = FP(0.0);
                     if (config.store_J_on_cpu) {
                         state.J_cpu = FP(0.0);
                     }
-                    fmt::println("zero J");
                     yakl::fence();
                     for (
                         int la_start = 0;

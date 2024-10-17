@@ -72,7 +72,7 @@ struct MultiResMipChain {
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
 
-                AtmosPointParams local_atmos;
+                AtmosPointParams local_atmos{};
                 local_atmos.temperature = flatmos.temperature(ks);
                 local_atmos.ne = flatmos.ne(ks);
                 local_atmos.vturb = flatmos.vturb(ks);
