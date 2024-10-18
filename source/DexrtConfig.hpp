@@ -8,12 +8,14 @@
 #include <yaml-cpp/yaml.h>
 
 struct DexrtOutputConfig {
+    bool sparse = false;
     bool wavelength = true;
     bool J = true;
     bool pops = true;
     bool lte_pops = true;
     bool ne = true;
     bool nh_tot = true;
+    bool max_mip_level = true;
     bool alo = false;
     bool active = true;
     std::vector<int> cascades;
@@ -131,6 +133,9 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     DexrtOutputConfig out;
 
     auto output = file["output"];
+    if (output["sparse"]) {
+        out.sparse = output["sparse"].as<bool>();
+    }
     if (output["wavelength"]) {
         out.wavelength = output["wavelength"].as<bool>();
     }

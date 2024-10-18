@@ -49,7 +49,12 @@ enum class LineCoeffCalc {
     VelocityInterp,
     CoreAndVoigt
 };
-constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::CoreAndVoigt;
+constexpr const char* LineCoeffCalcNames[3] = {
+    "Classic",
+    "VelocityInterp",
+    "CoreAndVoigt"
+};
+constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::VelocityInterp;
 
 constexpr int INTERPOLATE_DIRECTIONAL_BINS = 21;
 // NOTE(cmo): Code will warn if insufficient bins to provide less than this

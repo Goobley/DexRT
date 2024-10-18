@@ -1,0 +1,4 @@
+#include "GitVersion.hpp"
+// Following the approach of https://jonathanhamberg.com/post/cmake-embedding-git-hash/
+
+const char* GIT_HASH = "@GIT_HASH@";

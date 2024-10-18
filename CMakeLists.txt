@@ -8,6 +8,9 @@ if ("${YAKL_ARCH}" STREQUAL "CUDA")
     enable_language(CUDA)
 endif()
 
+include("CheckGit.cmake")
+CheckGitSetup()
+
 SET(CMAKE_CXX_FLAGS "${CXX_FLAGS}")
 SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 add_subdirectory(YAKL)
@@ -69,6 +72,7 @@ target_link_libraries(dexrt "${LDLIBS}")
 target_link_libraries(dexrt fmt::fmt)
 target_link_libraries(dexrt yaml-cpp::yaml-cpp)
 target_link_libraries(dexrt argparse)
+target_link_libraries(dexrt git_version)
 set_target_properties(dexrt PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
@@ -95,6 +99,7 @@ target_link_libraries(dexrt_ray "${LDLIBS}")
 target_link_libraries(dexrt_ray fmt::fmt)
 target_link_libraries(dexrt_ray yaml-cpp::yaml-cpp)
 target_link_libraries(dexrt_ray argparse)
+target_link_libraries(dexrt_ray git_version)
 set_target_properties(dexrt_ray PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES

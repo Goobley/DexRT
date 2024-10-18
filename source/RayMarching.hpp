@@ -11,37 +11,6 @@
 #include "Mipmaps.hpp"
 #include <optional>
 
-struct RayMarchState2d {
-    /// Start pos
-    vec2 p0;
-    /// end pos
-    vec2 p1;
-
-    /// Current cell coordinate
-    ivec2 curr_coord;
-    /// Next cell coordinate
-    ivec2 next_coord;
-    /// Final cell coordinate -- for intersections with the outer edge of the
-    /// box, this isn't floor(p1), but inside it is.
-    ivec2 final_coord;
-    /// Integer step dir
-    ivec2 step;
-
-    /// t to next hit per axis
-    vec2 next_hit;
-    /// t increment per step per axis
-    vec2 delta;
-    /// t to stop at
-    fp_t max_t;
-
-    /// axis increment
-    vec2 direction;
-    /// value of t at current intersection (far side of curr_coord, just before entering next_coord)
-    fp_t t = FP(0.0);
-    /// length of step
-    fp_t dt = FP(0.0);
-};
-
 struct RayStartEnd {
     yakl::SArray<fp_t, 1, NUM_DIM> start;
     yakl::SArray<fp_t, 1, NUM_DIM> end;
@@ -50,6 +19,9 @@ struct RayStartEnd {
 struct Box {
     vec2 dims[NUM_DIM];
 };
+
+struct RayMarchState2d;
+YAKL_INLINE bool next_intersection(RayMarchState2d* state);
 
 /** Clips a ray to the specified box
  * \param ray the start/end points of the ray
@@ -140,6 +112,117 @@ YAKL_INLINE std::optional<RayStartEnd> clip_ray_to_box(RayStartEnd ray, Box box,
     return result;
 }
 
+
+struct RayMarchState2d {
+    /// Start pos
+    vec2 p0;
+    /// end pos
+    vec2 p1;
+
+    /// Current cell coordinate
+    ivec2 curr_coord;
+    /// Next cell coordinate
+    ivec2 next_coord;
+    /// Final cell coordinate -- for intersections with the outer edge of the
+    /// box, this isn't floor(p1), but inside it is.
+    ivec2 final_coord;
+    /// Integer step dir
+    ivec2 step;
+
+    /// t to next hit per axis
+    vec2 next_hit;
+    /// t increment per step per axis
+    vec2 delta;
+    /// t to stop at
+    fp_t max_t;
+
+    /// axis increment
+    vec2 direction;
+    /// value of t at current intersection (far side of curr_coord, just before entering next_coord)
+    fp_t t = FP(0.0);
+    /// length of step
+    fp_t dt = FP(0.0);
+
+    /**
+     * Create a new state for grid traversal using DDA. The ray is first clipped to
+     * the grid, and if it is outside, nullopt is returned.
+     * \param start_pos The start position of the ray
+     * \param end_pos The start position of the ray
+     * \param domain_size The domain size
+     * \param start_clipped whether the start position was clipped; i.e. sample the BC.
+    */
+    template <int NumDim=NUM_DIM>
+    YAKL_INLINE bool init(
+        vec2 start_pos,
+        vec2 end_pos,
+        ivec2 domain_size,
+        bool* start_clipped=nullptr
+    ) {
+        Box box;
+        for (int d = 0; d < NumDim; ++d) {
+            box.dims[d](0) = FP(0.0);
+            box.dims[d](1) = domain_size(d);
+        }
+        auto clipped = clip_ray_to_box({start_pos, end_pos}, box, start_clipped);
+        if (!clipped) {
+            return false;
+        }
+
+        start_pos = clipped->start;
+        end_pos = clipped->end;
+
+        this->p0 = start_pos;
+        this->p1 = end_pos;
+
+        fp_t length = FP(0.0);
+        for (int d = 0; d < NumDim; ++d) {
+            // r.curr_coord(d) = std::min(int(std::floor(start_pos(d))), domain_size(d)-1);
+            this->curr_coord(d) = int(std::floor(start_pos(d)));
+            this->direction(d) = end_pos(d) - start_pos(d);
+            length += square(end_pos(d) - start_pos(d));
+            // r.final_coord(d) = std::min(int(std::floor(end_pos(d))), domain_size(d)-1);
+            this->final_coord(d) = int(std::floor(end_pos(d)));;
+        }
+        this->next_coord = this->curr_coord;
+        length = std::sqrt(length);
+        this->max_t = length;
+
+        fp_t inv_length = FP(1.0) / length;
+        for (int d = 0; d < NumDim; ++d) {
+            this->direction(d) *= inv_length;
+            if (this->direction(d) > FP(0.0)) {
+                this->next_hit(d) = fp_t(this->curr_coord(d) + 1 - this->p0(d)) / this->direction(d);
+                this->step(d) = 1;
+            } else if (this->direction(d) == FP(0.0)) {
+                this->step(d) = 0;
+                this->next_hit(d) = FP(1e24);
+            } else {
+                this->step(d) = -1;
+                this->next_hit(d) = (this->curr_coord(d) - this->p0(d)) / this->direction(d);
+            }
+            this->delta(d) = fp_t(this->step(d)) / this->direction(d);
+        }
+
+        this->t = FP(0.0);
+        this->dt = FP(0.0);
+
+        auto in_bounds = [&]() {
+            return (
+                this->curr_coord(0) >= 0
+                && this->curr_coord(0) < domain_size(0)
+                && this->curr_coord(1) >= 0
+                && this->curr_coord(1) < domain_size(1)
+            );
+        };
+        // NOTE(cmo): Initialise to the first intersection so dt != 0
+        while (!in_bounds() || (in_bounds() && this->dt < FP(1e-6))) {
+            next_intersection(this);
+        }
+
+        return true;
+    }
+};
+
 // NOTE(cmo): Based on Nanovdb templated implementation
 template <int axis>
 YAKL_INLINE fp_t step_marcher(RayMarchState2d* state) {
@@ -198,86 +281,6 @@ YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
     return new_t <= s.max_t;
 }
 
-/**
- * Create a new state for grid traversal using DDA. The ray is first clipped to
- * the grid, and if it is outside, nullopt is returned.
- * \param start_pos The start position of the ray
- * \param end_pos The start position of the ray
- * \param domain_size The domain size
- * \param start_clipped whether the start position was clipped; i.e. sample the BC.
-*/
-template <int NumDim=NUM_DIM>
-YAKL_INLINE std::optional<RayMarchState2d> RayMarch2d_new(
-    vec2 start_pos,
-    vec2 end_pos,
-    ivec2 domain_size,
-    bool* start_clipped=nullptr
-) {
-    Box box;
-    for (int d = 0; d < NumDim; ++d) {
-        box.dims[d](0) = FP(0.0);
-        box.dims[d](1) = domain_size(d);
-    }
-    auto clipped = clip_ray_to_box({start_pos, end_pos}, box, start_clipped);
-    if (!clipped) {
-        return std::nullopt;
-    }
-
-    start_pos = clipped->start;
-    end_pos = clipped->end;
-
-    RayMarchState2d r{};
-    r.p0 = start_pos;
-    r.p1 = end_pos;
-
-    fp_t length = FP(0.0);
-    for (int d = 0; d < NumDim; ++d) {
-        // r.curr_coord(d) = std::min(int(std::floor(start_pos(d))), domain_size(d)-1);
-        r.curr_coord(d) = int(std::floor(start_pos(d)));
-        r.direction(d) = end_pos(d) - start_pos(d);
-        length += square(end_pos(d) - start_pos(d));
-        // r.final_coord(d) = std::min(int(std::floor(end_pos(d))), domain_size(d)-1);
-        r.final_coord(d) = int(std::floor(end_pos(d)));;
-    }
-    r.next_coord = r.curr_coord;
-    length = std::sqrt(length);
-    r.max_t = length;
-
-    fp_t inv_length = FP(1.0) / length;
-    for (int d = 0; d < NumDim; ++d) {
-        r.direction(d) *= inv_length;
-        if (r.direction(d) > FP(0.0)) {
-            r.next_hit(d) = fp_t(r.curr_coord(d) + 1 - r.p0(d)) / r.direction(d);
-            r.step(d) = 1;
-        } else if (r.direction(d) == FP(0.0)) {
-            r.step(d) = 0;
-            r.next_hit(d) = FP(1e24);
-        } else {
-            r.step(d) = -1;
-            r.next_hit(d) = (r.curr_coord(d) - r.p0(d)) / r.direction(d);
-        }
-        r.delta(d) = fp_t(r.step(d)) / r.direction(d);
-    }
-
-    r.t = FP(0.0);
-    r.dt = FP(0.0);
-
-    auto in_bounds = [&]() {
-        return (
-            r.curr_coord(0) >= 0
-            && r.curr_coord(0) < domain_size(0)
-            && r.curr_coord(1) >= 0
-            && r.curr_coord(1) < domain_size(1)
-        );
-    };
-    // NOTE(cmo): Initialise to the first intersection so dt != 0
-    while (!in_bounds() || (in_bounds() && r.dt < FP(1e-6))) {
-        next_intersection(&r);
-    }
-
-    return r;
-}
-
 template <typename Alo>
 YAKL_INLINE RadianceInterval<Alo> merge_intervals(
     RadianceInterval<Alo> closer,
@@ -327,161 +330,6 @@ struct Raymarch2dArgs {
     const MultiResMipChain& mip_chain;
     const DynamicState& dyn_state;
 };
-
-template <
-    int RcMode=0,
-    typename Bc,
-    typename DynamicState,
-    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>
->
-YAKL_INLINE RadianceInterval<Alo> dda_raymarch_2d(
-    const Raymarch2dArgs<Bc, DynamicState>& args
-) {
-    JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
-    JasUnpack(casc_state_bc, state, bc);
-    constexpr bool dynamic = RcMode & RC_DYNAMIC;
-    constexpr bool dynamic_interp = (RcMode & RC_DYNAMIC) && (LINE_SCHEME == LineCoeffCalc::VelocityInterp);
-    static_assert(
-        !dynamic || (dynamic && (
-            std::is_same_v<DynamicState, Raymarch2dDynamicState>
-            || (dynamic_interp && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>)
-            )
-        ),
-        "If dynamic must provide dynamic state"
-    );
-
-    auto domain_dims = state.eta.get_dimensions();
-    ivec2 domain_size;
-    // NOTE(cmo): This is swapped as the coord is still x,y,z, but the array is indexed (z,y,x)
-    domain_size(0) = domain_dims(1);
-    domain_size(1) = domain_dims(0);
-    bool start_clipped;
-    auto marcher = RayMarch2d_new(ray.start, ray.end, domain_size, &start_clipped);
-    RadianceInterval<Alo> result{};
-    if ((RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped)) {
-        // NOTE(cmo): Check the ray is going up along z.
-        if ((ray.dir(1) > FP(0.0)) && la != -1) {
-            vec3 pos;
-            pos(0) = ray.centre(0) * distance_scale + offset(0);
-            pos(1) = offset(1);
-            pos(2) = ray.centre(1) * distance_scale + offset(2);
-
-            fp_t I_sample = sample_boundary(bc, la, pos, mu);
-            result.I = I_sample;
-        }
-    }
-    if (!marcher) {
-        return result;
-    }
-
-    RayMarchState2d s = *marcher;
-
-    // NOTE(cmo): implicit assumption muy != 1.0
-    const fp_t sin_theta = std::sqrt(FP(1.0) - square(incl));
-    const fp_t inv_sin_theta = FP(1.0) / sin_theta;
-    // NOTE(cmo): one_m_edt is also the ALO
-    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
-    do {
-        const auto& sample_coord(s.curr_coord);
-        const int u = sample_coord(0);
-        const int v = sample_coord(1);
-        one_m_edt = FP(0.0);
-
-        if (u < 0 || u >= domain_size(0)) {
-            break;
-        }
-        if (v < 0 || v >= domain_size(1)) {
-            break;
-        }
-        if (!args.active(v, u)) {
-            continue;
-        }
-
-        eta_s = state.eta(v, u, wave);
-        chi_s = state.chi(v, u, wave) + FP(1e-15);
-        if constexpr (dynamic && !dynamic_interp) {
-            // NOTE(cmo): dyn_state is Raymarch2dDynamicState
-            const Atmosphere& atmos = dyn_state.atmos;
-            const i64 k = v * atmos.temperature.extent(1) + u;
-            if (
-                dyn_state.dynamic_opac(v, u, wave)
-                && dyn_state.active_set.extent(0) > 0
-            ) {
-                fp_t vel = (
-                    atmos.vx.get_data()[k] * mu(0)
-                    + atmos.vy.get_data()[k] * mu(1)
-                    + atmos.vz.get_data()[k] * mu(2)
-                );
-                AtmosPointParams local_atmos{
-                    .temperature = atmos.temperature.get_data()[k],
-                    .ne = atmos.ne.get_data()[k],
-                    .vturb = atmos.vturb.get_data()[k],
-                    .nhtot = atmos.nh_tot.get_data()[k],
-                    .vel = vel,
-                    .nh0 = dyn_state.nh0.get_data()[k]
-                };
-                auto lines = emis_opac(
-                    EmisOpacState<fp_t>{
-                        .adata = dyn_state.adata,
-                        .profile = dyn_state.profile,
-                        .la = la,
-                        .n = dyn_state.n,
-                        .k = k,
-                        .atmos = local_atmos,
-                        .active_set = dyn_state.active_set,
-                        .mode = EmisOpacMode::DynamicOnly
-                    }
-                );
-
-                eta_s += lines.eta;
-                chi_s += lines.chi;
-            }
-        }
-         else if constexpr (dynamic && dynamic_interp) {
-            // NOTE(cmo): dyn_state is Raymarch2dDynamicInterpState
-            // if (dyn_state.dynamic_opac(v, u, wave)) {
-            IndexGen<BLOCK_SIZE> idx_gen(dyn_state.block_map);
-            if (idx_gen.has_leaves(u, v)) {
-                // const int ks = dyn_state.active_map(v, u);
-                const int ks = idx_gen.idx(u, v);
-                if (ks != -1) {
-                    const fp_t vel = (
-                        dyn_state.vx(v, u) * mu(0)
-                        + dyn_state.vy(v, u) * mu(1)
-                        + dyn_state.vz(v, u) * mu(2)
-                    );
-                    auto contrib = dyn_state.dir_interp.sample(ks, wave, vel);
-
-                    // NOTE(cmo): We are overwriting here, not adding.
-                    eta_s = contrib.eta;
-                    chi_s = contrib.chi + FP(1e-15);
-                }
-            }
-            // }
-        }
-
-        fp_t tau = chi_s * s.dt * distance_scale;
-        fp_t source_fn = eta_s / chi_s;
-
-        fp_t tau_mu = tau * inv_sin_theta;
-        fp_t edt;
-        if (tau_mu < FP(1e-2)) {
-            edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
-            one_m_edt = -std::expm1(-tau_mu);
-        } else {
-            edt = std::exp(-tau_mu);
-            one_m_edt = -std::expm1(-tau_mu);
-        }
-        result.tau += tau_mu;
-        result.I = result.I * edt + source_fn * one_m_edt;
-    } while (next_intersection(&s));
-
-    if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
-        result.alo = std::max(one_m_edt, FP(0.0));
-    }
-
-    return result;
-}
 
 YAKL_INLINE RaySegment ray_seg_from_ray_props(const RayProps& ray) {
     fp_t t1 = (ray.end(0) - ray.start(0)) / ray.dir(0);

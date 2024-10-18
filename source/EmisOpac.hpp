@@ -270,10 +270,11 @@ YAKL_INLINE UV compute_uv_cont(
 
 /// Computes the emissivity and opacity for for all relevant transitions in the
 /// model. Lines are selected for mode All or DynamicOnly, continua for All or
-/// StaticOnly. N.B. This is not thread-safe for continua if multiple threads
-/// could be in the same spatial cell k at a time (e.g. multiple angles). If the
-/// LTE populations are precomputed, and provided it can be made thread-safe
-/// (and a little faster), by setting args.update_n_star = false
+/// StaticOnly.
+/// N.B. This is not thread-safe for continua if multiple threads could be in
+/// the same spatial cell k at a time (e.g. multiple angles). If the LTE
+/// populations are precomputed, and provided it can be made thread-safe (and a
+/// little faster), by setting args.update_n_star = false
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacState<T, mem_space>& args

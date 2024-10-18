@@ -14,6 +14,7 @@
 #include "RayMarching.hpp"
 #include "DexrtConfig.hpp"
 #include "JasPP.hpp"
+#include "GitVersion.hpp"
 
 struct RayConfig {
     fp_t mem_pool_initial_gb = FP(2.0);
@@ -522,18 +523,18 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                     ivec2 domain_size;
                     domain_size(0) = atmos.temperature.extent(1);
                     domain_size(1) = atmos.temperature.extent(0);
-                    auto marcher = RayMarch2d_new(
+                    RayMarchState2d s;
+                    bool have_marcher = s.init(
                         start_pos,
                         end_pos,
                         domain_size
                     );
 
-                    if (!marcher) {
+                    if (!have_marcher) {
                         num_steps(ray_idx) = 0;
                         return;
                     }
 
-                    RayMarchState2d s = *marcher;
                     i64 step_count = 0;
                     do {
                         const auto& sample_coord(s.curr_coord);
@@ -640,13 +641,14 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                 ivec2 domain_size;
                 domain_size(0) = atmos.temperature.extent(1);
                 domain_size(1) = atmos.temperature.extent(0);
-                auto marcher = RayMarch2d_new(
+                RayMarchState2d s;
+                bool have_marcher = s.init(
                     start_pos,
                     end_pos,
                     domain_size
                 );
 
-                if (!marcher) {
+                if (!have_marcher) {
                     if (end_pos(1) < start_pos(1)) {
                         vec2 sample;
                         sample(0) = start_pos(0) * atmos.voxel_scale + atmos.offset_x;
@@ -663,7 +665,6 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                 fp_t I = FP(0.0);
                 fp_t cumulative_tau = FP(0.0);
 
-                RayMarchState2d s = *marcher;
                 const fp_t distance_factor = atmos.voxel_scale / std::sqrt(FP(1.0) - square(ray_set.mu(1)));
 
                 i64 step_idx = 0;
@@ -750,6 +751,12 @@ yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
     std::string name = "dexrt_ray (2d)";
     ncwrap(
         nc_put_att_text(ncid, NC_GLOBAL, "program", name.size(), name.c_str()),
+        __LINE__
+    );
+
+    std::string git_hash(GIT_HASH);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "git_hash", git_hash.size(), git_hash.c_str()),
         __LINE__
     );
 

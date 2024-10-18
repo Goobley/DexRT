@@ -52,34 +52,35 @@ Features/ToDo
     - We will get this for free when the sparsity propagates there.
 - [ ] Add groups to netcdf layer
 - [ ] Save/Restart from snapshot
-- [ ] Embed git hash in build (https://jonathanhamberg.com/post/cmake-embedding-git-hash/)
+- [x] Embed git hash in build (https://jonathanhamberg.com/post/cmake-embedding-git-hash/)
 - [x] Sparse VDB-like grid
     - Welcome MrBlockMap 💅
 - [x] Optionally page J out to host memory (enabled by default)
 - [x] Add method to IndexGenerators to generate the flat array index equivalent, we've messed that up enough.
     - This is now available as .full_flat_index()
-- [ ] Finish migrating Classic emis/opac method to MRBlockMap
+- [x] Finish migrating Classic emis/opac method to MRBlockMap
     - [ ] Remove old DDA infrastructure (after dexrt_ray updated)
         - Not if we leave `dexrt_ray` as-is
+        - Removed `dda_raymarch_2d` but left old `RayMarchState2d` infrastructure.
     - [ ] Propagate `mip_chain` allocation into main -- can store in State
-- [ ] Output sparse data by default, but have bool to rehydrate before saving (and support doing so in dexrt_py)
+- [x] Output sparse data by default, but have bool to rehydrate before saving (and support doing so in dexrt_py)
     - [x] Output `max_mip_level` for each wave_batch
-    - [ ] Output active map: sufficient information to reconstruct the tiles and their locations from flat buffers. probably just block_map.active_tiles that we can morton decode.
-    - [ ] Add extra attrs for sparse config (e.g. BLOCK_SIZE)
+    - [x] Output active map: sufficient information to reconstruct the tiles and their locations from flat buffers. probably just block_map.active_tiles that we can morton decode.
+    - [x] Add extra attrs for sparse config (e.g. BLOCK_SIZE)
 - [ ] Load sparse output into `dexrt_ray`
     - [ ] Just rehydrate the atmosphere and leave as-is
     - [ ] Will need to create own `mr_block_map` but with `max_mip_level` 0 from data in output.
-- [ ] Add extra attrs for emis/opac config
+- [x] Add extra attrs for emis/opac config
 - [ ] Support ANGLE_INVARIANT_THERMAL_VEL_FRAC for CoreAndVoigt?
 - [ ] Make dexrt_py a proper package
     - [ ] Get onto pypi
     - [ ] Add tonemapping code
     - [ ] Handle sparse rehydration
-- [ ] Only allocate necessary Gamma and pops (all driven by BlockMap)
+- [x] Only allocate necessary Gamma and pops (all driven by BlockMap)
     - [ ] Preallocate and store LTE pops... they're allocated 99% of the time currently.
         - Can still update every iteration (essentially free)
 - [ ] Set mip levels in config file.
-- [ ] Create sparse atmos and only keep that one on device
+- [x] Create sparse atmos and only keep that one on device
     - Migrate everything to the sparse atmos (that aligns with the active probes)
 - [ ] Move more things into .cpps to improve compile time.
 - [ ] Support for Golding method

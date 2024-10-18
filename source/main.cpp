@@ -31,12 +31,12 @@
 #include <fmt/core.h>
 #include <argparse/argparse.hpp>
 #include <sstream>
+#include "GitVersion.hpp"
 
 void allocate_J(State* state) {
     JasUnpack((*state), config, mr_block_map, c0_size, adata);
     const auto& block_map = mr_block_map.block_map;
     const bool sparse = config.sparse_calculation;
-    state->sparse_J = sparse;
     i64 num_cells = mr_block_map.block_map.get_num_active_cells();
     i32 wave_dim = adata.wavelength.extent(0);
     if (config.mode == DexrtMode::GivenFs) {
@@ -400,6 +400,11 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_int(ncid, NC_GLOBAL, "pingpong_buffers", NC_INT, 1, &pingpong),
         __LINE__
     );
+    i32 store_tau_cascades = STORE_TAU_CASCADES;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "store_tau_cascades", NC_INT, 1, &store_tau_cascades),
+        __LINE__
+    );
     f64 thermal_vel_frac = ANGLE_INVARIANT_THERMAL_VEL_FRAC;
     ncwrap(
         nc_put_att_double(ncid, NC_GLOBAL, "angle_invariant_thermal_vel_frac", NC_DOUBLE, 1, &thermal_vel_frac),
@@ -475,6 +480,63 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_int(ncid, NC_GLOBAL, "num_iter", NC_INT, 1, &num_iter),
         __LINE__
     );
+
+    std::string output_format = state.config.output.sparse ? "sparse" : "full";
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "output_format", output_format.size(), output_format.c_str()),
+        __LINE__
+    );
+
+    std::string line_scheme_name(LineCoeffCalcNames[int(LINE_SCHEME)]);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "line_calculation_scheme", line_scheme_name.size(), line_scheme_name.c_str()),
+        __LINE__
+    );
+
+    i32 block_size = BLOCK_SIZE;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "block_size", NC_INT, 1, &block_size),
+        __LINE__
+    );
+    i32 nx_blocks = state.mr_block_map.block_map.num_x_tiles;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_x_blocks", NC_INT, 1, &nx_blocks),
+        __LINE__
+    );
+    i32 nz_blocks = state.mr_block_map.block_map.num_z_tiles;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_z_blocks", NC_INT, 1, &nz_blocks),
+        __LINE__
+    );
+
+    if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
+        i32 interp_bins = INTERPOLATE_DIRECTIONAL_BINS;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "interpolate_directional_bins", NC_INT, 1, &interp_bins),
+            __LINE__
+        );
+
+        f64 interp_max_width = INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH;
+        ncwrap(
+            nc_put_att_double(ncid, NC_GLOBAL, "interpolate_direction_max_thermal_width", NC_DOUBLE, 1, &interp_max_width),
+            __LINE__
+        );
+    }
+
+    int mip_level[MAX_CASCADE+1];
+    for (int c = 0; c <= MAX_CASCADE; ++c) {
+        mip_level[c] = MIP_LEVEL[c];
+    }
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "mip_levels", NC_INT, MAX_CASCADE+1, mip_level),
+        __LINE__
+    );
+
+    std::string git_hash(GIT_HASH);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "git_hash", git_hash.size(), git_hash.c_str()),
+        __LINE__
+    );
 }
 
 void save_results(const State& state, const CascadeState& casc_state, i32 num_iter) {
@@ -487,19 +549,35 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     add_netcdf_attributes(state, nc, num_iter);
     const auto& block_map = state.mr_block_map.block_map;
 
+    bool sparse_J = (state.J.extent(1) == state.atmos.temperature.extent(0));
+
+    auto maybe_rehydrate_and_write = [&](
+        auto arr,
+        const std::string& name,
+        std::vector<std::string> leading_dim_names
+    ) {
+        auto& dim_names = leading_dim_names;
+        if (out_cfg.sparse) {
+            dim_names.insert(dim_names.end(), {"ks"});
+            nc.write(arr, name, dim_names);
+        } else {
+            auto hydrated = rehydrate_sparse_quantity(block_map, arr);
+            dim_names.insert(dim_names.end(), {"z", "x"});
+            nc.write(hydrated, name, dim_names);
+        }
+    };
+
     if (out_cfg.J) {
         if (config.store_J_on_cpu) {
-            if (state.sparse_J) {
-                Fp3dHost J_full = rehydrate_sparse_quantity(block_map, state.J_cpu);
-                nc.write(J_full, "J", {"wavelength", "z", "x"});
+            if (sparse_J) {
+                maybe_rehydrate_and_write(state.J_cpu, "J", {"wavelength"});
             } else {
                 Fp3dHost J_full = state.J_cpu.reshape(state.J_cpu.extent(0), block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
                 nc.write(J_full, "J", {"wavelength", "z", "x"});
             }
         } else {
-            if (state.sparse_J) {
-                Fp3dHost J_full = rehydrate_sparse_quantity(block_map, state.J);
-                nc.write(J_full, "J", {"wavelength", "z", "x"});
+            if (sparse_J) {
+                maybe_rehydrate_and_write(state.J, "J", {"wavelength"});
             } else {
                 Fp3d J_full = state.J.reshape(state.J.extent(0), block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
                 nc.write(J_full, "J", {"wavelength", "z", "x"});
@@ -512,29 +590,25 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
     }
     if (out_cfg.pops && state.pops.initialized()) {
-        Fp3dHost pops_full = rehydrate_sparse_quantity(block_map, state.pops);
-        nc.write(pops_full, "pops", {"level", "z", "x"});
+        maybe_rehydrate_and_write(state.pops, "pops", {"level"});
     }
     if (out_cfg.lte_pops) {
         Fp2d lte_pops = state.pops.createDeviceObject();
         compute_lte_pops(&state, lte_pops);
         yakl::fence();
-        Fp3dHost lte_pops_full = rehydrate_sparse_quantity(block_map, state.pops);
-        nc.write(lte_pops_full, "lte_pops", {"level", "z", "x"});
+        maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});
     }
     if (out_cfg.ne && state.atmos.ne.initialized()) {
-        Fp2dHost ne_out = rehydrate_sparse_quantity(block_map, state.atmos.ne);
-        nc.write(ne_out, "ne", {"z", "x"});
+        maybe_rehydrate_and_write(state.atmos.ne, "ne", {});
     }
     if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
-        Fp2dHost nh_tot_out = rehydrate_sparse_quantity(block_map, state.atmos.nh_tot);
-        nc.write(nh_tot_out, "nh_tot", {"z", "x"});
+        maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
     }
     if (out_cfg.alo && casc_state.alo.initialized()) {
         nc.write(casc_state.alo, "alo", {"casc_shape"});
     }
     if (out_cfg.active) {
-        const auto& active_char = reify_active_c0(state.mr_block_map.block_map);
+        const auto& active_char = reify_active_c0(block_map);
         nc.write(active_char, "active", {"z", "x"});
     }
     for (int casc : out_cfg.cascades) {
@@ -544,6 +618,9 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         nc.write(casc_state.i_cascades[casc], name, {shape});
         name = fmt::format("tau_C{}", casc);
         nc.write(casc_state.tau_cascades[casc], name, {shape});
+    }
+    if (out_cfg.sparse) {
+        nc.write(block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
     }
     nc.close();
 }

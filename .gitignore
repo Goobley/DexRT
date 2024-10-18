@@ -28,6 +28,8 @@ tests/build/*
 !tests/build/cmake_docker.sh
 !tests/build/cmake_docker_cpu.sh
 
+source/GitVersion.cpp
+
 .vscode
 
 *.png

@@ -10,12 +10,14 @@ class DexrtSystemConfig(BaseModel):
     mem_pool_grow_gb: float = 1.4
 
 class DexrtOutputConfig(BaseModel):
+    sparse: bool = False
     wavelength: bool = True
     J: bool = True
     pops: bool = True
     lte_pops: bool = True
     ne: bool = True
     nh_tot: bool = True
+    max_mip_level = True
     alo: bool = False
     cascades: List[int] = Field(default_factory=list)
 
