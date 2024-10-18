@@ -213,7 +213,7 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
 
     st->max_block_mip = decltype(st->max_block_mip)(
         "max_block_mip",
-        (wave_dim + c0_rays.wave_batch-1) / c0_rays.wave_batch-1,
+        (wave_dim + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
         block_map.num_z_tiles,
         block_map.num_x_tiles
     );
