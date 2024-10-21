@@ -55,7 +55,7 @@ constexpr const char* LineCoeffCalcNames[3] = {
     "VelocityInterp",
     "CoreAndVoigt"
 };
-constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::VelocityInterp;
+constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::CoreAndVoigt;
 
 constexpr int INTERPOLATE_DIRECTIONAL_BINS = 21;
 // NOTE(cmo): Code will warn if insufficient bins to provide less than this

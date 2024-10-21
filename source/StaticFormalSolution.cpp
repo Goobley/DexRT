@@ -11,6 +11,7 @@
 void static_formal_sol_given_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
     assert(state.config.mode == DexrtMode::GivenFs);
     JasUnpack(state, mr_block_map);
+    JasUnpack(casc_state, mip_chain);
     const auto& block_map = mr_block_map.block_map;
 
     if (la_end == -1) {
@@ -21,8 +22,6 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     }
     int wave_batch = la_end - la_start;
 
-    MultiResMipChain mip_chain;
-    mip_chain.init(state, mr_block_map.buffer_len(), wave_batch);
     auto& eta_store = state.given_state.emis;
     auto& chi_store = state.given_state.opac;
     auto bounds = block_map.loop_bounds();

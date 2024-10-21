@@ -62,7 +62,8 @@ Features/ToDo
     - [ ] Remove old DDA infrastructure (after dexrt_ray updated)
         - Not if we leave `dexrt_ray` as-is
         - Removed `dda_raymarch_2d` but left old `RayMarchState2d` infrastructure.
-    - [ ] Propagate `mip_chain` allocation into main -- can store in State
+    - [x] Propagate `mip_chain` allocation into main -- can store in CascadeState
+- [ ] Update ProbesToCompute to launch in normal block order
 - [x] Output sparse data by default, but have bool to rehydrate before saving (and support doing so in dexrt_py)
     - [x] Output `max_mip_level` for each wave_batch
     - [x] Output active map: sufficient information to reconstruct the tiles and their locations from flat buffers. probably just block_map.active_tiles that we can morton decode.
@@ -84,6 +85,7 @@ Features/ToDo
     - Migrate everything to the sparse atmos (that aligns with the active probes)
 - [x] Move more things into .cpps to improve compile time.
     - Didn't have the largest effect, but many incremental compiles are faster
+- [ ] Optimise accumulation into Gamma
 - [ ] Support for Golding method
 - [ ] PRD
     - ML ?
@@ -121,6 +123,8 @@ Formalising coordinate system
 - Storage is as [z, x] or [z, y, x]
 - These correspond to probes v, u in 2D, and w, v, u in 3D.
 - Indexing as wave typically implies the member of a batch, and la the index into the wavelength array
+- ks for sparse spatial index
+- tile_idx is the index of the contiguous cartesian block, block_idx is the index _within_ the block.
 
 
 Weird Issues

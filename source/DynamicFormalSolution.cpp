@@ -189,6 +189,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     auto pops_dims = state.pops.get_dimensions();
     Fp2d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1));
 
+    JasUnpack(casc_state, mip_chain);
+
     if (la_end == -1) {
         la_end = la_start + 1;
     }
@@ -196,8 +198,6 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         assert(false && "Wavelength batch too big.");
     }
     int wave_batch = la_end - la_start;
-    MultiResMipChain mip_chain;
-    mip_chain.init(state, state.mr_block_map.buffer_len(), wave_batch);
     // NOTE(cmo): lte_scratch filled here
     mip_chain.fill_mip0_atomic(state, lte_scratch, la_start, la_end);
     mip_chain.compute_mips(state, la_start, la_end);

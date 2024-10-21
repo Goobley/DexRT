@@ -2,6 +2,7 @@
 #define DEXRT_UTILS_MODES_HPP
 #include "Types.hpp"
 #include "State.hpp"
+#include "CascadeState.hpp"
 
 constexpr int RC_DYNAMIC = 0x1;
 constexpr int RC_PREAVERAGE = 0x2;

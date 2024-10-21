@@ -1,4 +1,4 @@
-#include "Types.hpp"
+#include "CascadeState.hpp"
 #include "State.hpp"
 #include "RcUtilsModes.hpp"
 #include "MiscSparse.hpp"
@@ -52,5 +52,7 @@ bool CascadeState::init(const State& state, int max_cascades) {
     if (state.config.mode == DexrtMode::NonLte) {
         alo = Fp1d("ALO", i_cascades[0].extent(0));
     }
+    mip_chain.init(state, state.mr_block_map.buffer_len(), c0.wave_batch);
+
     return true;
 }
