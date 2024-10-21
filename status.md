@@ -82,7 +82,8 @@ Features/ToDo
 - [ ] Set mip levels in config file.
 - [x] Create sparse atmos and only keep that one on device
     - Migrate everything to the sparse atmos (that aligns with the active probes)
-- [ ] Move more things into .cpps to improve compile time.
+- [x] Move more things into .cpps to improve compile time.
+    - Didn't have the largest effect, but many incremental compiles are faster
 - [ ] Support for Golding method
 - [ ] PRD
     - ML ?

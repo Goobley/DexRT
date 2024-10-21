@@ -29,6 +29,7 @@ list(APPEND DEX_SOURCE_FILES
     "source/Collisions.cpp"
     "source/ProfileNormalisation.cpp"
     "source/Populations.cpp"
+    "source/ChargeConservation.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"

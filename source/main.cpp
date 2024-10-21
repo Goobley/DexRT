@@ -711,7 +711,7 @@ int main(int argc, char** argv) {
                         lte_i += 1;
                         compute_nh0(state);
                         compute_collisions_to_gamma(&state);
-                        lte_max_change = stat_eq<f64>(&state, StatEqOptions{
+                        lte_max_change = stat_eq(&state, StatEqOptions{
                             .ignore_change_below_ntot_frac=FP(1e-7)
                         });
                         if (lte_i < 2) {
@@ -722,7 +722,7 @@ int main(int argc, char** argv) {
                         // instantly due to linearity, so whilst the error may
                         // be above a threshold, it's unlikely to get
                         // meaningfully better after the second iteration
-                        fp_t nr_update = nr_post_update<f64>(&state, NrPostUpdateOptions{
+                        fp_t nr_update = nr_post_update(&state, NrPostUpdateOptions{
                             .ignore_change_below_ntot_frac=FP(1e-7)
                         });
                         lte_max_change = nr_update;
@@ -763,9 +763,9 @@ int main(int argc, char** argv) {
                     }
                     yakl::fence();
                     fmt::println("Stat eq");
-                    max_change = stat_eq<f64>(&state);
+                    max_change = stat_eq(&state);
                     if (i > 0 && actually_conserve_charge) {
-                        fp_t nr_update = nr_post_update<f64>(&state);
+                        fp_t nr_update = nr_post_update(&state);
                         max_change = std::max(nr_update, max_change);
                         if (actually_conserve_pressure) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);

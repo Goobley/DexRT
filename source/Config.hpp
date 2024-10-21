@@ -26,6 +26,7 @@ typedef uint64_t u64;
 #ifdef YAKL_DEBUG
 #define DEXRT_DEBUG
 #endif
+typedef f64 StatEqPrecision;
 
 constexpr int DEXRT_WARP_SIZE = 32;
 
