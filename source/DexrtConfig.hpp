@@ -21,6 +21,13 @@ struct DexrtOutputConfig {
     std::vector<int> cascades;
 };
 
+struct DexrtMipConfig {
+    fp_t opacity_threshold = FP(0.25);
+    fp_t log_chi_mip_variance = FP(1.0);
+    fp_t log_eta_mip_variance = FP(1.0);
+    std::vector<int> mip_levels;
+};
+
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_initial_gb = FP(2.0);
@@ -40,6 +47,8 @@ struct DexrtConfig {
     bool conserve_pressure = false;
     int snapshot_frequency = 0;
     int initial_lambda_iterations = 2;
+    int max_cascade = 5;
+    DexrtMipConfig mip_config;
 };
 
 inline void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
@@ -189,8 +198,8 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
             fmt::println(stderr, "Cascade output requested, but DIR_BY_DIR is enabled, only the entries corresponding to the final direction of C0 will be output.");
         }
         for (int casc_to_output : out.cascades) {
-            if (casc_to_output > MAX_CASCADE) {
-                throw std::runtime_error(fmt::format("Output of cascade {} requested, greater than max cascade {}.", casc_to_output, MAX_CASCADE));
+            if (casc_to_output > config.max_cascade) {
+                throw std::runtime_error(fmt::format("Output of cascade {} requested, greater than max cascade {}.", casc_to_output, config.max_cascade));
             }
             if constexpr (PINGPONG_BUFFERS) {
                 if (casc_to_output > 1) {
@@ -203,8 +212,50 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     config.output = out;
 }
 
+inline void parse_mip_config(DexrtConfig* cfg, const YAML::Node& file) {
+    DexrtConfig& config(*cfg);
+    config.mip_config.mip_levels.resize(config.max_cascade + 1);
+
+    // NOTE(cmo): Parse the mip level: extend or truncate sequence as necessary
+    if (!file["mip_config"] || !file["mip_config"]["mip_levels"]) {
+        for (int i = 0; i <= config.max_cascade; ++i) {
+            config.mip_config.mip_levels[i] = 0;
+        }
+    } else {
+        auto mip_level = file["mip_config"]["mip_levels"];
+        if (mip_level.IsSequence()) {
+            int len = std::min(i32(config.max_cascade + 1), i32(mip_level.size()));
+            for (int i = 0; i < len; ++i) {
+                config.mip_config.mip_levels[i] = mip_level[i].as<i32>();
+            }
+            for (int i = len; i <= config.max_cascade; ++i) {
+                config.mip_config.mip_levels[i] = config.mip_config.mip_levels[len-1];
+            }
+        } else {
+            i32 level = mip_level.as<i32>();
+            for (int i = 0; i <= config.max_cascade; ++i) {
+                config.mip_config.mip_levels[i] = level;
+            }
+        }
+    }
+
+    if (file["mip_config"]) {
+        auto& mip_config = file["mip_config"];
+        if (mip_config["log_chi_mip_variance"]) {
+            config.mip_config.log_chi_mip_variance = mip_config["log_chi_mip_variance"].as<fp_t>();
+        }
+        if (mip_config["log_eta_mip_variance"]) {
+            config.mip_config.log_eta_mip_variance = mip_config["log_eta_mip_variance"].as<fp_t>();
+        }
+        if (mip_config["opacity_threshold"]) {
+            config.mip_config.opacity_threshold = mip_config["opacity_threshold"].as<fp_t>();
+        }
+    }
+}
+
+
 inline DexrtConfig parse_dexrt_config(const std::string& path) {
-    DexrtConfig config;
+    DexrtConfig config{};
     config.atmos_path = "dexrt_atmos.nc";
     config.output_path = "dexrt.nc";
 
@@ -240,6 +291,10 @@ inline DexrtConfig parse_dexrt_config(const std::string& path) {
         config.store_J_on_cpu = file["store_J_on_cpu"].as<bool>();
     }
 
+    if (file["max_cascade"]) {
+        config.max_cascade = file["max_cascade"].as<int>();
+    }
+
     switch (config.mode) {
         case DexrtMode::Lte: {
             parse_extra_lte(&config, file);
@@ -255,6 +310,8 @@ inline DexrtConfig parse_dexrt_config(const std::string& path) {
     if (file["output"]) {
         parse_and_update_dexrt_output_config(&config, file);
     }
+
+    parse_mip_config(&config, file);
 
     return config;
 }

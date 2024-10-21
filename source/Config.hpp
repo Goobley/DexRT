@@ -103,16 +103,9 @@ constexpr int BLOCK_SIZE = 16;
 constexpr bool HYPERBLOCK2x2 = true;
 constexpr int ENTRY_SIZE = 3;
 
-constexpr bool USE_MIPMAPS = true;
-// constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
-// constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 0, 0, 0, 0};
-constexpr int MIPMAP_FACTORS[MAX_CASCADE+1] = {0, 0, 1, 1, 1, 0};
-constexpr int MIP_LEVEL[MAX_CASCADE+1] = {0, 0, 1, 2, 3, 3};
-
 constexpr bool PINGPONG_BUFFERS = true;
 
 constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
-// constexpr bool USE_BC = true;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 

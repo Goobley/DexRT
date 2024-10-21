@@ -81,13 +81,12 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     BlockMap<BLOCK_SIZE> block_map;
     block_map.init(atmos, config.threshold_temperature);
     i32 max_mip_level = 0;
-    if constexpr (USE_MIPMAPS) {
-        for (int i = 0; i < MAX_CASCADE + 1; ++i) {
-            max_mip_level += MIPMAP_FACTORS[i];
-        }
+    for (int i = 0; i <= config.max_cascade; ++i) {
+        max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
     }
     if (state.config.mode != DexrtMode::GivenFs && LINE_SCHEME == LineCoeffCalc::Classic) {
         max_mip_level = 0;
+        fmt::println("Mips not supported with LineCoeffCalc::Classic");
     }
     state.mr_block_map.init(block_map, max_mip_level);
 
@@ -164,10 +163,8 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     BlockMap<BLOCK_SIZE> block_map;
     block_map.init(x_dim, z_dim);
     i32 max_mip_level = 0;
-    if constexpr (USE_MIPMAPS) {
-        for (int i = 0; i < MAX_CASCADE + 1; ++i) {
-            max_mip_level += MIPMAP_FACTORS[i];
-        }
+    for (int i = 0; i <= config.max_cascade; ++i) {
+        max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
     }
     // NOTE(cmo): Everything is assumed active
     st->mr_block_map.init(block_map, max_mip_level);
@@ -368,7 +365,7 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_int(ncid, NC_GLOBAL, "cascade_branching_factor", NC_INT, 1, &cascade_branching),
         __LINE__
     );
-    i32 max_cascade = MAX_CASCADE;
+    i32 max_cascade = state.config.max_cascade;
     ncwrap(
         nc_put_att_int(ncid, NC_GLOBAL, "max_cascade", NC_INT, 1, &max_cascade),
         __LINE__
@@ -521,12 +518,12 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         );
     }
 
-    int mip_level[MAX_CASCADE+1];
-    for (int c = 0; c <= MAX_CASCADE; ++c) {
-        mip_level[c] = MIP_LEVEL[c];
-    }
     ncwrap(
-        nc_put_att_int(ncid, NC_GLOBAL, "mip_levels", NC_INT, MAX_CASCADE+1, mip_level),
+        nc_put_att_int(
+            ncid, NC_GLOBAL, "mip_levels", NC_INT,
+            state.config.max_cascade+1,
+            state.config.mip_config.mip_levels.data()
+        ),
         __LINE__
     );
 
@@ -650,7 +647,7 @@ int main(int argc, char** argv) {
         // not using an atmosphere
         init_state(&state, config);
         CascadeState casc_state;
-        casc_state.init(state, MAX_CASCADE);
+        casc_state.init(state, config.max_cascade);
         yakl::timer_start("DexRT");
         state.max_block_mip = -1;
         yakl::fence();

@@ -769,7 +769,10 @@ void cascade_i_25d(
 
     JasUnpack(state, mr_block_map);
     const auto& block_map = mr_block_map.block_map;
-    const int max_mip_to_sample = std::min(MIP_LEVEL[cascade_idx], mip_chain.max_mip_factor);
+    const int max_mip_to_sample = std::min(
+        state.config.mip_config.mip_levels[cascade_idx],
+        mip_chain.max_mip_factor
+    );
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());
     parallel_for(

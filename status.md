@@ -80,11 +80,15 @@ Features/ToDo
 - [x] Only allocate necessary Gamma and pops (all driven by BlockMap)
     - [ ] Preallocate and store LTE pops... they're allocated 99% of the time currently.
         - Can still update every iteration (essentially free)
-- [ ] Set mip levels in config file.
+- [ ] Set mip variance limits in config file.
+    - Parsing logic now in
+- [x] Set mip levels in config file.
+- [x] Set max cascade in config file.
 - [x] Create sparse atmos and only keep that one on device
     - Migrate everything to the sparse atmos (that aligns with the active probes)
 - [x] Move more things into .cpps to improve compile time.
     - Didn't have the largest effect, but many incremental compiles are faster
+- [ ] Pull out user config variables in Config header into something less busy
 - [ ] Optimise accumulation into Gamma
 - [ ] Support for Golding method
 - [ ] PRD

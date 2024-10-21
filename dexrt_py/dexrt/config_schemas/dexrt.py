@@ -21,6 +21,12 @@ class DexrtOutputConfig(BaseModel):
     alo: bool = False
     cascades: List[int] = Field(default_factory=list)
 
+class DexrtMipConfig(BaseModel):
+    mip_levels: Union[int, List[int]] = Field(default_factory=lambda: [0, 0, 1, 2, 3, 3])
+    opacity_threshold: float = 0.25
+    log_chi_mip_variance: float = 1.0
+    log_eta_mip_variance: float = 1.0
+
 class DexrtConfig(BaseModel):
     system: DexrtSystemConfig = Field(default_factory=DexrtSystemConfig)
     atmos_path: str = "dexrt_atmos.nc"
@@ -28,6 +34,8 @@ class DexrtConfig(BaseModel):
     mode: Union[Literal["Lte"], Literal["NonLte"], Literal["GivenFs"]] = "NonLte"
     store_J_on_cpu: bool = True
     output: DexrtOutputConfig = Field(default_factory=DexrtOutputConfig)
+    max_cascade: int = 5
+    mip_config: DexrtMipConfig
 
 class DexrtLteConfig(DexrtConfig):
     mode: Literal["Lte"] = "Lte"
