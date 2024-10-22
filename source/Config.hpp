@@ -4,88 +4,18 @@
 #include "AlwaysFalse.hpp"
 #include <cassert>
 
-#define DEXRT_SINGLE_PREC
-#ifdef DEXRT_SINGLE_PREC
-typedef float fp_t;
-#define FP(X) (X##f)
-#else
-typedef double fp_t;
-#define FP(X) (X)
-#endif
-typedef float f32;
-typedef double f64;
-typedef int8_t i8;
-typedef uint8_t u8;
-typedef int16_t i16;
-typedef uint16_t u16;
-typedef int32_t i32;
-typedef uint32_t u32;
-typedef int64_t i64;
-typedef uint64_t u64;
+#include "UserConfig2d.hpp"
 
 #ifdef YAKL_DEBUG
 #define DEXRT_DEBUG
 #endif
-typedef f64 StatEqPrecision;
 
-constexpr int DEXRT_WARP_SIZE = 32;
-
-constexpr fp_t PROBE0_LENGTH = FP(1.5);
-constexpr int PROBE0_NUM_RAYS = 4;
+// NOTE(cmo): The spacing between probes on cascade 0 -- this isn't actually configurable
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 
-constexpr int CASCADE_BRANCHING_FACTOR = 2;
-constexpr int MAX_CASCADE = 5;
-
-constexpr bool LAST_CASCADE_TO_INFTY = true;
-constexpr fp_t LAST_CASCADE_MAX_DIST = FP(1e4);
-
-constexpr bool PREAVERAGE = false;
-constexpr bool DIR_BY_DIR = true;
+// Compile time errors for RC misconfig
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
 static_assert(!PREAVERAGE, "Don't use preaveraging for DexRT unless you know what you're doing! (Then disable me)");
-
-enum class LineCoeffCalc {
-    Classic,
-    VelocityInterp,
-    CoreAndVoigt
-};
-constexpr const char* LineCoeffCalcNames[3] = {
-    "Classic",
-    "VelocityInterp",
-    "CoreAndVoigt"
-};
-constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::CoreAndVoigt;
-
-constexpr int INTERPOLATE_DIRECTIONAL_BINS = 21;
-// NOTE(cmo): Code will warn if insufficient bins to provide less than this
-constexpr fp_t INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH = FP(2.0);
-constexpr int CORE_AND_VOIGT_MAX_LINES = 4;
-enum class BaseMipContents {
-    Continua,
-    LinesAtRest,
-    VelocityDependent
-};
-constexpr BaseMipContents BASE_MIP_CONTAINS =
-    (LINE_SCHEME == LineCoeffCalc::VelocityInterp) ? BaseMipContents::LinesAtRest
-        : (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) ? BaseMipContents::Continua
-        : BaseMipContents::VelocityDependent;
-
-enum class RcConfiguration {
-    Vanilla,
-    ParallaxFix,
-    ParallaxFixInner,
-    BilinearFix,
-};
-constexpr const char* RcConfigurationNames[4] = {
-    "Vanilla",
-    "ParallaxFix",
-    "ParallaxFixInner",
-    "BilinearFix"
-};
-constexpr RcConfiguration RC_CONFIG = RcConfiguration::Vanilla;
-constexpr int PARALLAX_MERGE_ABOVE_CASCADE = 1;
-constexpr int INNER_PARALLAX_MERGE_ABOVE_CASCADE = -1;
 static_assert(
     !(
         (DIR_BY_DIR)
@@ -96,27 +26,26 @@ static_assert(
     ),
     "Parallax (reprojection) methods cannot be used with DIR_BY_DIR"
 );
-constexpr bool STORE_TAU_CASCADES = false;
 static_assert(! (!STORE_TAU_CASCADES && RC_CONFIG == RcConfiguration::ParallaxFixInner), "Need to store tau cascades for the inner parallax fix");
 
-constexpr int BLOCK_SIZE = 16;
-constexpr bool HYPERBLOCK2x2 = true;
-constexpr int ENTRY_SIZE = 3;
+// NOTE(cmo): The contents of mip0 is determined by LINE_SCHEME, and determines
+// how we handle computing variance for mip-mapping.
+enum class BaseMipContents {
+    Continua,
+    LinesAtRest,
+    VelocityDependent
+};
+constexpr BaseMipContents BASE_MIP_CONTAINS =
+    (LINE_SCHEME == LineCoeffCalc::VelocityInterp) ? BaseMipContents::LinesAtRest
+        : (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) ? BaseMipContents::Continua
+        : BaseMipContents::VelocityDependent;
 
-constexpr bool PINGPONG_BUFFERS = true;
 
-constexpr fp_t ANGLE_INVARIANT_THERMAL_VEL_FRAC = FP(0.5);
-constexpr bool PWBC_USE_VECTOR_FORM = true;
-constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
-
-// #define FLATLAND
 #ifdef FLATLAND
-constexpr int NUM_INCL = 1;
 constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);
 constexpr fp_t INCL_RAYS[NUM_INCL] = {FP(0.000000)};
 constexpr fp_t INCL_WEIGHTS[NUM_INCL] = {FP(1.0)};
 #else
-constexpr int NUM_INCL = 8;
 constexpr fp_t INCL_RAYS_4[4] = {FP(0.0), FP(0.21234053823915322), FP(0.5905331355592653), FP(0.9114120404872961)};
 constexpr fp_t INCL_WEIGHTS_4[4] = {FP(0.0625), FP(0.32884431998005864), FP(0.38819346884317174), FP(0.22046221117676768)};
 constexpr fp_t INCL_RAYS_8[8] = {FP(0.0), FP(0.0562625605369218), FP(0.1802406917368919), FP(0.3526247171131696), FP(0.5471536263305554), FP(0.7342101772154105), FP(0.8853209468390957), FP(0.9775206135612882)};
@@ -142,12 +71,10 @@ constexpr fp_t const* INCL_WEIGHTS = (NUM_INCL == 4) ?
 
 #endif
 
-constexpr int MODEL_X = 1024;
-constexpr int MODEL_Y = 1024;
-
+// NOTE(cmo): These are vestigial, but still needed for now.
 constexpr int NUM_DIM = 2;
-
-constexpr int WAVE_BATCH = DEXRT_WARP_SIZE / NUM_INCL;
+constexpr bool PWBC_USE_VECTOR_FORM = true;
+constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 
 template <int NumIncl=NUM_INCL>
 yakl::SArray<fp_t, 1, NumIncl> get_incl_rays() {
@@ -166,7 +93,6 @@ yakl::SArray<fp_t, 1, NumIncl> get_incl_weights() {
     }
     return incl_weights;
 }
-
 
 #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
 #define DEXRT_USE_MAGMA

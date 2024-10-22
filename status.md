@@ -88,7 +88,7 @@ Features/ToDo
     - Migrate everything to the sparse atmos (that aligns with the active probes)
 - [x] Move more things into .cpps to improve compile time.
     - Didn't have the largest effect, but many incremental compiles are faster
-- [ ] Pull out user config variables in Config header into something less busy
+- [x] Pull out user config variables in Config header into something less busy
 - [ ] Tidy up iteration prints
 - [ ] Optimise accumulation into Gamma
 - [ ] Support for Golding method
