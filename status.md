@@ -51,7 +51,7 @@ Features/ToDo
 - [x] Avoid writing nonsense from non-active probes in C0 into J when pingponging
     - We will get this for free when the sparsity propagates there.
 - [ ] Add groups to netcdf layer
-- [ ] Save/Restart from snapshot
+- [x] Save/Restart from snapshot
 - [x] Embed git hash in build (https://jonathanhamberg.com/post/cmake-embedding-git-hash/)
 - [x] Sparse VDB-like grid
     - Welcome MrBlockMap 💅

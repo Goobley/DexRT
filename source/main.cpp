@@ -256,6 +256,74 @@ void finalize_state(State* state) {
 #endif
 }
 
+/// Loads the populations, ne, and nh_tot from restart_path. Returns the current
+/// iteration number.  Will crash/throw exception if file can't be found or
+/// dimensions are wrong etc.
+int handle_restart(State* st, const std::string& restart_path) {
+    State& state(*st);
+    yakl::SimpleNetCDF nc;
+    nc.open(restart_path, yakl::NETCDF_MODE_WRITE);
+
+    i64 num_active = nc.getDimSize("ks");
+    i64 num_level = nc.getDimSize("level");
+    if (num_active != state.atmos.temperature.extent(0)) {
+        throw std::runtime_error("Restart atmosphere size does not match loaded size, have you changed a parameter (e.g. threshold_temperature)?");
+    }
+    if (num_level != state.pops.extent(0)) {
+        throw std::runtime_error("Restart number of levels does not match size set in config. Have the models changed?");
+    }
+
+    nc.read(state.pops, "pops");
+    if (nc.varExists("ne")) {
+        nc.read(state.atmos.ne, "ne");
+    }
+    if (nc.varExists("nh_tot")) {
+        nc.read(state.atmos.nh_tot, "nh_tot");
+    }
+
+    int ncid = nc.file.ncid;
+    int num_iter = 0;
+    int ierr = nc_get_att_int(ncid, NC_GLOBAL, "num_iter", &num_iter);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to get num_iter from restart file: {}", nc_strerror(ierr)));
+    }
+
+    return num_iter;
+}
+
+/// Dump a snapshot. File name determined automatically (e.g. main output
+/// dexrt_output.nc -> dexrt_output_snapshot.nc)
+void save_snapshot(const State& state, int num_iter) {
+    yakl::SimpleNetCDF nc;
+    std::string name(state.config.output_path);
+    std::string ext(".nc");
+    std::string new_ext("_snapshot.nc");
+    auto nc_pos = name.rfind(ext);
+    if (nc_pos == std::string::npos) {
+        // NOTE(cmo): Didn't find it, so just append
+        name += new_ext;
+    } else {
+        name.replace(nc_pos, ext.size(), new_ext);
+    }
+
+    nc.create(name, yakl::NETCDF_MODE_REPLACE);
+    fmt::println("Saving snapshot to {}...", name);
+
+    int ncid = nc.file.ncid;
+    int ierr = nc_put_att_int(ncid, NC_GLOBAL, "num_iter", NC_INT, 1, &num_iter);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to write num_iter to snapshot file: {}", nc_strerror(ierr)));
+    }
+
+    nc.write(state.pops, "pops", {"level", "ks"});
+    if (state.config.conserve_charge) {
+        nc.write(state.atmos.ne, "ne", {"ks"});
+    }
+    if (state.config.conserve_pressure) {
+        nc.write(state.atmos.nh_tot, "nh_tot", {"ks"});
+    }
+}
+
 /// Called to copy J from GPU to plane of host array if config.store_J_on_cpu
 void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
     int wave_batch = la_end - la_start;
@@ -629,9 +697,15 @@ int main(int argc, char** argv) {
         .default_value(std::string("dexrt.yaml"))
         .help("Path to config file")
         .metavar("FILE");
+    program.add_argument("--restart-from")
+        .nargs(1)
+        .help("Path to snapshot file")
+        .metavar("FILE");
     program.add_epilog("DexRT Radiance Cascade based non-LTE solver.");
 
     program.parse_args(argc, argv);
+
+    std::optional<std::string> restart_path = program.present("--restart-from");
 
     const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
 
@@ -677,6 +751,7 @@ int main(int argc, char** argv) {
         } else {
             compute_lte_pops(&state);
             const bool non_lte = config.mode == DexrtMode::NonLte;
+            const bool do_restart = bool(restart_path);
             const bool conserve_charge = config.conserve_charge;
             const bool actually_conserve_charge = state.have_h && conserve_charge;
             if (!actually_conserve_charge && conserve_charge) {
@@ -692,12 +767,11 @@ int main(int argc, char** argv) {
 
             const fp_t non_lte_tol = config.pop_tol;
             auto& waves = state.adata_host.wavelength;
-            auto fs_fn = dynamic_formal_sol_rc;
             fp_t max_change = FP(1.0);
             int num_iter = 1;
             if (non_lte) {
                 int i = 0;
-                if (actually_conserve_charge) {
+                if (actually_conserve_charge && !do_restart) {
                     // TODO(cmo): Make all of these parameters configurable
                     fmt::println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
@@ -728,6 +802,10 @@ int main(int argc, char** argv) {
                     }
                     fmt::println("Ran for {} iterations", lte_i);
                 }
+
+                if (do_restart) {
+                    i = handle_restart(&state, *restart_path);
+                }
                 fmt::println("-- Non-LTE Iterations --");
                 while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
                     fmt::println("FS {}", i);
@@ -747,7 +825,7 @@ int main(int argc, char** argv) {
                         int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                         setup_wavelength_batch(state, la_start, la_end);
                         bool lambda_iterate = i < initial_lambda_iterations;
-                        fs_fn(
+                        dynamic_formal_sol_rc(
                             state,
                             casc_state,
                             lambda_iterate,
@@ -768,6 +846,12 @@ int main(int argc, char** argv) {
                         }
                     }
                     i += 1;
+                    if (
+                        (state.config.snapshot_frequency != 0) &&
+                        (i % state.config.snapshot_frequency == 0)
+                    ) {
+                        save_snapshot(state, i);
+                    }
                 }
                 if (state.config.sparse_calculation) {
                     state.config.sparse_calculation = false;
@@ -789,7 +873,7 @@ int main(int argc, char** argv) {
                         int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                         setup_wavelength_batch(state, la_start, la_end);
                         bool lambda_iterate = i < initial_lambda_iterations;
-                        fs_fn(
+                        dynamic_formal_sol_rc(
                             state,
                             casc_state,
                             lambda_iterate,
@@ -821,7 +905,7 @@ int main(int argc, char** argv) {
                         waves(la_end-1)
                     );
                     bool lambda_iterate = true;
-                    fs_fn(state, casc_state, lambda_iterate, la_start, la_end);
+                    dynamic_formal_sol_rc(state, casc_state, lambda_iterate, la_start, la_end);
                     finalise_wavelength_batch(state, la_start, la_end);
                     // break;
                 }
