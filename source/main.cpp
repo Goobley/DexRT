@@ -876,7 +876,7 @@ int main(int argc, char** argv) {
                 }
                 fmt::println("-- Non-LTE Iterations --");
                 while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
-                    fmt::println("FS {}", i);
+                    fmt::println("==== FS {} ====", i);
                     compute_nh0(state);
                     compute_collisions_to_gamma(&state);
                     compute_profile_normalisation(state, casc_state);
@@ -903,7 +903,7 @@ int main(int argc, char** argv) {
                         finalise_wavelength_batch(state, la_start, la_end);
                     }
                     yakl::fence();
-                    fmt::println("Stat eq");
+                    fmt::println("  == Statistical equilibrium ==");
                     max_change = stat_eq(&state);
                     if (i > 0 && actually_conserve_charge) {
                         fp_t nr_update = nr_post_update(&state);

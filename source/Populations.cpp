@@ -257,7 +257,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         int max_change_level = max_change_loc % new_pops.extent(1);
         max_change_loc /= new_pops.extent(1);
         fmt::println(
-            "Max Change (ele: {}, Z={}): {} (@ l={}, ks={}) [T={}]",
+            "     Max Change (ele: {}, Z={}): {} (@ l={}, ks={}) [T={}]",
             ia,
             state->adata_host.Z(ia),
             max_change,

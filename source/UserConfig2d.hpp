@@ -68,7 +68,8 @@ constexpr int WAVE_BATCH = std::max(DEXRT_WARP_SIZE / NUM_INCL, 1);
 
 /*== BlockMap ================================================================*/
 
-// The size chunks to consider in the BlockMap. 8 or 16 are typically good choices.
+// The size chunks to consider in the BlockMap. 8 or 16 are typically good
+// choices.
 constexpr int BLOCK_SIZE = 16;
 // Whether to apply a simple 2x2 Morton pattern to the compressed tile
 // mip-levels stored in the MultiResBlockMap. Has a tiny impact on cache

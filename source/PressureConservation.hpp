@@ -71,7 +71,7 @@ inline fp_t simple_conserve_pressure(State* state) {
     yakl::fence();
 
     fmt::println(
-        "Max Change nh_tot: {} (@ {})",
+        "     Max Change nh_tot: {} (@ {})",
         max_change,
         max_change_loc
     );

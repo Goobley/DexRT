@@ -297,7 +297,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     max_change_acc /= F.extent(1);
     i64 max_change_ks = max_change_acc;
     fmt::println(
-        "NR Update Max Change (level: {}): {} (@ {}), step_size: {}",
+        "     NR Update Max Change (level: {}): {} (@ {}), step_size: {}",
         max_change_level == (num_eqn - 1) ? "n_e": std::to_string(max_change_level),
         max_change,
         max_change_ks,
