@@ -37,6 +37,7 @@ list(APPEND DEX_SOURCE_FILES
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"
     "source/PromweaverBoundary.cpp"
+    "source/MiscSparse.cpp"
 )
 
 add_executable(dexrt

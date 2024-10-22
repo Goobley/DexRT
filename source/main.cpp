@@ -736,6 +736,7 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         nc.write(casc_state.alo, "alo", {"casc_shape"});
     }
     if (out_cfg.active) {
+        // NOTE(cmo): Currently active is always written dense
         const auto& active_char = reify_active_c0(block_map);
         nc.write(active_char, "active", {"z", "x"});
     }

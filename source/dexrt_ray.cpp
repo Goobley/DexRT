@@ -14,6 +14,7 @@
 #include "RayMarching.hpp"
 #include "DexrtConfig.hpp"
 #include "JasPP.hpp"
+#include "MiscSparse.hpp"
 #include "GitVersion.hpp"
 
 struct RayConfig {
@@ -181,44 +182,137 @@ void load_wavelength_if_missing(RayConfig* cfg) {
     }
 }
 
-DexOutput load_dex_output(const std::string& path) {
-    yakl::SimpleNetCDF nc;
-    nc.open(path, yakl::NETCDF_MODE_READ);
-    DexOutput result;
-    nc.read(result.pops, "pops");
-
-    if (nc.varExists("active")) {
-        // NOTE(cmo): This is dumb, but isn't going to cause an issue, and netCDF doesn't let us save bool arrays.
-        yakl::Array<unsigned char, 2, yakl::memHost> active_char;
-        nc.read(active_char, "active");
-        yakl::Array<bool, 2, yakl::memHost> active_host("active", active_char.extent(0), active_char.extent(1));
-        for (int z = 0; z < active_char.extent(0); ++z) {
-            for (int x = 0; x < active_char.extent(1); ++x) {
-                active_host(z, x) = active_char(z, x);
-            }
+bool dex_data_is_sparse(const yakl::SimpleNetCDF& nc) {
+    int ncid = nc.file.ncid;
+    size_t len = 0;
+    auto check_error = [](int ierr) {
+        if (ierr != NC_NOERR) {
+            throw std::runtime_error(fmt::format("Error determining sparsity: {}", nc_strerror(ierr)));
         }
-        result.active = active_host.createDeviceCopy();
-    } else {
-        // NOTE(cmo): If the active mask isn't in the file, then set everything to true
-        result.active = decltype(result.active)("active", result.pops.extent(1), result.pops.extent(2));
-        result.active = true;
-        yakl::fence();
+    };
+    int ierr = nc_inq_att(ncid, NC_GLOBAL, "output_format", nullptr, &len);
+    if (ierr == NC_ENOTATT) {
+        // NOTE(cmo): No "output_format" attribute found, i.e. old file -> dense
+        return false;
+    } else if (ierr != NC_NOERR) {
+        check_error(ierr);
+    }
+    std::string format(len, 'x');
+    ierr = nc_get_att_text(ncid, NC_GLOBAL, "output_format", format.data());
+    check_error(ierr);
+    bool is_sparse = (format == "sparse");
+    return is_sparse;
+}
+
+BlockMap<BLOCK_SIZE> dex_block_map(const DexrtConfig& config, const Atmosphere& atmos, yakl::SimpleNetCDF& nc) {
+    int block_size_file = 0;
+    int ncid = nc.file.ncid;
+    int ierr = nc_get_att_int(ncid, NC_GLOBAL, "block_size", &block_size_file);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to load block_size from dex output: {}", nc_strerror(ierr)));
     }
 
-    nc.close();
+    if (BLOCK_SIZE != block_size_file) {
+        throw std::runtime_error(
+            fmt::format(
+                "Compiled BLOCK_SIZE ({}) != block_size in dex output ({}), please recompile so these are the same",
+                BLOCK_SIZE,
+                block_size_file
+            )
+        );
+    }
+
+    BlockMap<BLOCK_SIZE> block_map;
+    block_map.init(atmos, config.threshold_temperature);
+    return block_map;
+}
+
+DexOutput load_dex_output(const DexrtConfig& config, const Atmosphere& atmos) {
+    yakl::SimpleNetCDF nc;
+    nc.open(config.output_path, yakl::NETCDF_MODE_READ);
+    const bool is_sparse = dex_data_is_sparse(nc);
+    DexOutput result;
+
+    if (is_sparse) {
+        BlockMap<BLOCK_SIZE> block_map = dex_block_map(config, atmos, nc);
+        Fp2d temp_pops;
+        nc.read(temp_pops, "pops");
+        Fp3dHost full_pops = rehydrate_sparse_quantity(block_map, temp_pops);
+        result.pops = full_pops.createDeviceCopy();
+
+        // NOTE(cmo): If we're sparse -- we need active, so rely on it being there.
+        // currently active is always written dense -- but we reconstruct it from the block_map here anyway
+        auto active = reify_active_c0(block_map);
+        result.active = decltype(result.active)("active", active.extent(0), active.extent(1));
+        parallel_for(
+            SimpleBounds<2>(active.extent(0), active.extent(1)),
+            YAKL_LAMBDA (int i, int j) {
+                result.active(i, j) = active(i, j);
+            }
+        );
+        yakl::fence();
+    } else {
+        nc.read(result.pops, "pops");
+
+        if (nc.varExists("active")) {
+            // NOTE(cmo): This is dumb, but isn't going to cause an issue, and netCDF doesn't let us save bool arrays.
+            yakl::Array<unsigned char, 2, yakl::memHost> active_char;
+            nc.read(active_char, "active");
+            yakl::Array<bool, 2, yakl::memHost> active_host("active", active_char.extent(0), active_char.extent(1));
+            for (int z = 0; z < active_char.extent(0); ++z) {
+                for (int x = 0; x < active_char.extent(1); ++x) {
+                    active_host(z, x) = active_char(z, x);
+                }
+            }
+            result.active = active_host.createDeviceCopy();
+        } else {
+            // NOTE(cmo): If the active mask isn't in the file, then set everything to true
+            result.active = decltype(result.active)("active", result.pops.extent(1), result.pops.extent(2));
+            result.active = true;
+            yakl::fence();
+        }
+    }
+
     return result;
 }
 
-void update_atmosphere(const std::string& output_path, Atmosphere* atmos) {
+void update_atmosphere(const DexrtConfig& config, Atmosphere* atmos) {
     yakl::SimpleNetCDF nc;
-    nc.open(output_path, yakl::NETCDF_MODE_READ);
-    if (nc.varExists("ne")) {
-        nc.read(atmos->ne, "ne");
+    nc.open(config.output_path, yakl::NETCDF_MODE_READ);
+    if (!(nc.varExists("ne") || nc.varExists("nh_tot"))) {
+        return;
     }
-    if (nc.varExists("nh_tot")) {
-        nc.read(atmos->nh_tot, "nh_tot");
+
+    const bool is_sparse = dex_data_is_sparse(nc);
+    if (is_sparse) {
+        BlockMap<BLOCK_SIZE> block_map = dex_block_map(config, *atmos, nc);
+
+        auto load_and_rehydrate_if_present = [&](const std::string& name) -> std::optional<Fp2d> {
+            if (!nc.varExists(name)) {
+                return std::nullopt;
+            }
+            Fp1d temp;
+            nc.read(temp, name);
+            // NOTE(cmo): This is a little inefficient, but eh.
+            Fp2dHost hydrated = rehydrate_sparse_quantity(block_map, temp);
+            return hydrated.createDeviceCopy();
+        };
+        auto ne = load_and_rehydrate_if_present("ne");
+        if (ne) {
+            atmos->ne = *ne;
+        }
+        auto nh_tot = load_and_rehydrate_if_present("nh_tot");
+        if (nh_tot) {
+            atmos->nh_tot = *nh_tot;
+        }
+    } else {
+        if (nc.varExists("ne")) {
+            nc.read(atmos->ne, "ne");
+        }
+        if (nc.varExists("nh_tot")) {
+            nc.read(atmos->nh_tot, "nh_tot");
+        }
     }
-    nc.close();
 }
 
 template <int mem_space=yakl::memDevice>
@@ -742,7 +836,7 @@ yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
 
     const auto ncwrap = [] (int ierr, int line) {
         if (ierr != NC_NOERR) {
-            printf("NetCDF Error writing attributes at main.cpp:%d\n", line);
+            printf("NetCDF Error writing attributes at dexrt_ray.cpp:%d\n", line);
             printf("%s\n",nc_strerror(ierr));
             yakl::yakl_throw(nc_strerror(ierr));
         }
@@ -817,7 +911,7 @@ int main(int argc, const char* argv[]) {
             throw std::runtime_error(fmt::format("Only promweaver boundaries are supported by {}", argv[0]));
         }
         Atmosphere atmos = load_atmos(config.dexrt.atmos_path);
-        update_atmosphere(config.dexrt.output_path, &atmos);
+        update_atmosphere(config.dexrt, &atmos);
         std::vector<ModelAtom<f64>> crtaf_models;
         // TODO(cmo): Override atoms in ray config
         crtaf_models.reserve(config.dexrt.atom_paths.size());
@@ -825,7 +919,7 @@ int main(int argc, const char* argv[]) {
             crtaf_models.emplace_back(parse_crtaf_model<f64>(p));
         }
         AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
-        DexOutput model_output = load_dex_output(config.dexrt.output_path);
+        DexOutput model_output = load_dex_output(config.dexrt, atmos);
 
         DexRayState state{
             .atmos = atmos,

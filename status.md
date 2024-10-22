@@ -68,9 +68,9 @@ Features/ToDo
     - [x] Output `max_mip_level` for each wave_batch
     - [x] Output active map: sufficient information to reconstruct the tiles and their locations from flat buffers. probably just block_map.active_tiles that we can morton decode.
     - [x] Add extra attrs for sparse config (e.g. BLOCK_SIZE)
-- [ ] Load sparse output into `dexrt_ray`
-    - [ ] Just rehydrate the atmosphere and leave as-is
-    - [ ] Will need to create own `mr_block_map` but with `max_mip_level` 0 from data in output.
+- [x] Load sparse output into `dexrt_ray`
+    - Just rehydrate the atmosphere and leave as-is, just creates a BlockMap on
+    the fly. Requires consistent BLOCK_SIZE with the file.
 - [x] Add extra attrs for emis/opac config
 - [ ] Support ANGLE_INVARIANT_THERMAL_VEL_FRAC for CoreAndVoigt?
     - Doesn't seem necessary currently
@@ -84,6 +84,7 @@ Features/ToDo
 - [x] Set mip variance limits in config file.
 - [x] Set mip levels in config file.
 - [x] Set max cascade in config file.
+- [ ] Allow disabling final dense fs for non-lte in config file.
 - [x] Create sparse atmos and only keep that one on device
     - Migrate everything to the sparse atmos (that aligns with the active probes)
 - [x] Move more things into .cpps to improve compile time.
