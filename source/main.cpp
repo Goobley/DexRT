@@ -324,6 +324,71 @@ void save_snapshot(const State& state, int num_iter) {
     }
 }
 
+/// Load populations from the specified path (variable name "pops"). Will be
+/// assumed to be sparse if the ks dimension exists (e.g. from a previous run),
+/// or dense otherwise.
+void load_initial_pops(State* st, const std::string& initial_pops_path) {
+    State& state(*st);
+    yakl::SimpleNetCDF nc;
+    nc.open(initial_pops_path, yakl::NETCDF_MODE_READ);
+
+    bool load_sparse = nc.dimExists("ks");
+    fmt::println(
+        "Loading populations from {}, appear to be {}.",
+        initial_pops_path,
+        load_sparse ? "sparse" : "dense"
+    );
+
+    i64 num_level = nc.getDimSize("level");
+    if (num_level != state.pops.extent(0)) {
+        throw std::runtime_error("Restart number of levels does not match size set in config. Have the models changed?");
+    }
+
+    if (load_sparse) {
+        i64 num_active = nc.getDimSize("ks");
+        if (num_active != state.pops.extent(1)) {
+            throw std::runtime_error("Initial pops spatial dimension (ks) does not match loaded size, have you changed a parameter (e.g. threshold_temperature)?");
+        }
+        nc.read(state.pops, "pops");
+    } else {
+        i64 nx = nc.getDimSize("x");
+        i64 nz = nc.getDimSize("z");
+
+        if (nx != state.atmos.num_x || nz != state.atmos.num_z) {
+            throw std::runtime_error(
+                fmt::format(
+                    "Initial pops file dimensions [x: {}, z: {}] do not match atmos: [{}, {}]",
+                    nx,
+                    nz,
+                    state.atmos.num_x,
+                    state.atmos.num_z
+                )
+            );
+        }
+        Fp3d temp_pops("temp_pops", num_level, nz, nx);
+        nc.read(temp_pops, "pops");
+
+        JasUnpack(state, mr_block_map, pops);
+        auto bounds = mr_block_map.block_map.loop_bounds();
+        parallel_for(
+            "Sparsify new pops",
+            SimpleBounds<3>(
+                num_level,
+                bounds.dim(0),
+                bounds.dim(1)
+            ),
+            YAKL_LAMBDA (i32 level, i64 tile_idx, i32 block_idx) {
+                IdxGen idx_gen(mr_block_map);
+
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                pops(level, ks) = temp_pops(level, coord.z, coord.x);
+            }
+        );
+        yakl::fence();
+    }
+}
+
 /// Called to copy J from GPU to plane of host array if config.store_J_on_cpu
 void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
     int wave_batch = la_end - la_start;
@@ -750,6 +815,9 @@ int main(int argc, char** argv) {
             save_results(state, casc_state, 1);
         } else {
             compute_lte_pops(&state);
+            if (state.config.initial_pops_path.size() > 0) {
+                load_initial_pops(&state, state.config.initial_pops_path);
+            }
             const bool non_lte = config.mode == DexrtMode::NonLte;
             const bool do_restart = bool(restart_path);
             const bool conserve_charge = config.conserve_charge;

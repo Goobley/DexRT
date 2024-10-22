@@ -43,6 +43,7 @@ class DexrtLteConfig(DexrtConfig):
     threshold_temperature: float = 250e3
     atoms: Dict[str, AtomicModelConfig]
     boundary_type: Union[Literal["Zero"], Literal["Promweaver"]]
+    initial_pops_path: str = ""
 
 class DexrtNonLteConfig(DexrtLteConfig):
     mode: Literal["NonLte"] = "NonLte"

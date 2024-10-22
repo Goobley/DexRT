@@ -34,6 +34,7 @@ struct DexrtConfig {
     fp_t mem_pool_grow_gb = FP(1.4);
     std::string atmos_path;
     std::string output_path;
+    std::string initial_pops_path;
     DexrtOutputConfig output;
     bool store_J_on_cpu = true;
     std::vector<std::string> atom_paths;
@@ -274,6 +275,9 @@ inline DexrtConfig parse_dexrt_config(const std::string& path) {
     }
     if (file["output_path"]) {
         config.output_path = file["output_path"].as<std::string>();
+    }
+    if (file["initial_pops_path"]) {
+        config.initial_pops_path = file["initial_pops_path"].as<std::string>();
     }
     if (file["mode"]) {
         std::string mode = file["mode"].as<std::string>();
