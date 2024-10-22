@@ -155,6 +155,12 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
     const fp_t vox_scale = state.atmos.voxel_scale;
     const i32 wave_batch = la_end - la_start;
 
+    const MipmapTolerance mip_config = {
+        .opacity_threshold = state.config.mip_config.opacity_threshold,
+        .log_chi_mip_variance = state.config.mip_config.log_chi_mip_variance,
+        .log_eta_mip_variance = state.config.mip_config.log_eta_mip_variance,
+    };
+
     const i32 level_m_1 = level - 1;
     const i32 vox_size = (1 << level);
     auto bounds = block_map.loop_bounds(vox_size);
@@ -200,8 +206,6 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
             fp_t m2_eta = FP(0.0);
 
             bool consider_variance = false;
-            constexpr fp_t opacity_threshold = FP(0.25);
-            constexpr fp_t variance_threshold = FP(1.0);
 
             for (int i = 0; i < mip_block; ++i) {
                 i64 idx = idxs[i];
@@ -250,7 +254,7 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
                     }
                 }
 
-                consider_variance = consider_variance || (tot_opac * ds) > opacity_threshold;
+                consider_variance = consider_variance || (tot_opac * ds) > mip_config.opacity_threshold;
                 m1_chi += std::log(tot_opac * ds);
                 m2_chi += square(std::log(tot_opac * ds));
                 m1_eta += std::log(tot_emis * ds);
@@ -280,7 +284,10 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
                 if (m2_eta == FP(0.0)) {
                     D_eta = FP(0.0);
                 }
-                if (D_chi > variance_threshold || D_eta > variance_threshold) {
+                if (
+                    D_chi > mip_config.log_chi_mip_variance
+                    || D_eta > mip_config.log_eta_mip_variance
+                ) {
                     do_increment = false;
                 }
             }

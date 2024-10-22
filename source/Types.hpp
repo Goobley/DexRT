@@ -552,5 +552,11 @@ struct MipmapSubsetState {
     const Fp1d& vz;
 };
 
+struct MipmapTolerance {
+    fp_t opacity_threshold;
+    fp_t log_chi_mip_variance;
+    fp_t log_eta_mip_variance;
+};
+
 #else
 #endif

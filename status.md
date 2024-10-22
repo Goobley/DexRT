@@ -73,6 +73,7 @@ Features/ToDo
     - [ ] Will need to create own `mr_block_map` but with `max_mip_level` 0 from data in output.
 - [x] Add extra attrs for emis/opac config
 - [ ] Support ANGLE_INVARIANT_THERMAL_VEL_FRAC for CoreAndVoigt?
+    - Doesn't seem necessary currently
 - [ ] Make dexrt_py a proper package
     - [ ] Get onto pypi
     - [ ] Add tonemapping code
@@ -80,8 +81,7 @@ Features/ToDo
 - [x] Only allocate necessary Gamma and pops (all driven by BlockMap)
     - [ ] Preallocate and store LTE pops... they're allocated 99% of the time currently.
         - Can still update every iteration (essentially free)
-- [ ] Set mip variance limits in config file.
-    - Parsing logic now in
+- [x] Set mip variance limits in config file.
 - [x] Set mip levels in config file.
 - [x] Set max cascade in config file.
 - [x] Create sparse atmos and only keep that one on device

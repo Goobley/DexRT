@@ -162,6 +162,11 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
     yakl::Array<i32, 1, yakl::memDevice> max_mip_level("max mip entries", block_map.num_z_tiles * block_map.num_x_tiles);
 
     const bool compute_criteria_on_base_array = (state.config.mode == DexrtMode::GivenFs) || (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest);
+    const MipmapTolerance mip_config = {
+        .opacity_threshold = state.config.mip_config.opacity_threshold,
+        .log_chi_mip_variance = state.config.mip_config.log_chi_mip_variance,
+        .log_eta_mip_variance = state.config.mip_config.log_eta_mip_variance,
+    };
 
     max_mip_level = 0;
     mippable_entries = 0;
@@ -261,8 +266,6 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                 fp_t m2_eta = FP(0.0);
 
                 bool consider_variance = false;
-                constexpr fp_t opacity_threshold = FP(0.25);
-                constexpr fp_t variance_threshold = FP(1.0);
 
                 for (int i = 0; i < mip_block; ++i) {
                     i64 idx = idxs[i];
@@ -272,7 +275,7 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                     opac_mip += chi_s;
 
                     if (compute_criteria_on_base_array) {
-                        consider_variance = consider_variance || (chi_s * ds) > opacity_threshold;
+                        consider_variance = consider_variance || (chi_s * ds) > mip_config.opacity_threshold;
                         chi_s += FP(1e-15);
                         eta_s += FP(1e-15);
                         m1_chi += std::log(chi_s * ds);
@@ -299,7 +302,10 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                     if (m2_eta == FP(0.0)) {
                         D_eta = FP(0.0);
                     }
-                    if (D_chi > variance_threshold || D_eta > variance_threshold) {
+                    if (
+                        D_chi > mip_config.log_chi_mip_variance
+                        || D_eta > mip_config.log_eta_mip_variance
+                    ) {
                         do_increment = false;
                     }
                 }
