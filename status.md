@@ -63,7 +63,7 @@ Features/ToDo
         - Not if we leave `dexrt_ray` as-is
         - Removed `dda_raymarch_2d` but left old `RayMarchState2d` infrastructure.
     - [x] Propagate `mip_chain` allocation into main -- can store in CascadeState
-- [ ] Update ProbesToCompute to launch in normal block order
+- [x] Update ProbesToCompute to launch in normal block order
 - [x] Output sparse data by default, but have bool to rehydrate before saving (and support doing so in dexrt_py)
     - [x] Output `max_mip_level` for each wave_batch
     - [x] Output active map: sufficient information to reconstruct the tiles and their locations from flat buffers. probably just block_map.active_tiles that we can morton decode.

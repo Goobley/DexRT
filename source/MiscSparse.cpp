@@ -222,23 +222,21 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
         }
     );
     yakl::fence();
-    u64 num_active = yakl::intrinsics::sum(prev_active);
+    u64 num_active = mr_block_map.get_num_active_cells();
 
     auto prev_active_h = prev_active.createHostCopy();
     yakl::fence();
-    yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("c0 to compute", num_active, 2);
-    i32 idx = 0;
-    // TODO(cmo): Ideally these should be launched in tiles
-    for (int z = 0; z < prev_active_h.extent(0); ++z) {
-        for (int x = 0; x < prev_active_h.extent(1); ++x) {
-            if (prev_active_h(z, x)) {
-                probes_to_compute_h(idx, 0) = x;
-                probes_to_compute_h(idx, 1) = z;
-                idx += 1;
-            }
+    yakl::Array<i32, 2, yakl::memDevice> probes_to_compute_c0("c0 to compute", num_active, 2);
+    parallel_for(
+        mr_block_map.block_map.loop_bounds(),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+            IdxGen idx_gen(mr_block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+            probes_to_compute_c0(ks, 0) = coord.x;
+            probes_to_compute_c0(ks, 1) = coord.z;
         }
-    }
-    auto probes_to_compute_c0 = probes_to_compute_h.createDeviceCopy();
+    );
     probes_to_compute.emplace_back(probes_to_compute_c0);
     fmt::println(
         "C0 Active Probes {}/{} ({}%)",
@@ -293,16 +291,22 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
         i64 num_active = yakl::intrinsics::sum(curr_active);
         auto curr_active_h = curr_active.createHostCopy();
         yakl::fence();
-        yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("probes to compute", num_active, 2);
+        yakl::Array<u32, 1, yakl::memHost> probes_to_compute_morton("probes to compute morton", num_active);
         i32 idx = 0;
         for (int z = 0; z < curr_active_h.extent(0); ++z) {
             for (int x = 0; x < curr_active_h.extent(1); ++x) {
                 if (curr_active_h(z, x)) {
-                    probes_to_compute_h(idx, 0) = x;
-                    probes_to_compute_h(idx, 1) = z;
-                    idx += 1;
+                    probes_to_compute_morton(idx++) = encode_morton_2(Coord2{.x = x, .z = z});
                 }
             }
+        }
+        // NOTE(cmo): These are now being launched in morton order... should be close to tile order
+        std::sort(probes_to_compute_morton.begin(), probes_to_compute_morton.end());
+        yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("probes to compute", num_active, 2);
+        for (int idx = 0; idx < num_active; ++idx) {
+            Coord2 coord = decode_morton_2(probes_to_compute_morton(idx));
+            probes_to_compute_h(idx, 0) = coord.x;
+            probes_to_compute_h(idx, 1) = coord.z;
         }
         auto probes_to_compute_ci = probes_to_compute_h.createDeviceCopy();
         probes_to_compute.emplace_back(probes_to_compute_ci);
