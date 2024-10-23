@@ -614,6 +614,11 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_text(ncid, NC_GLOBAL, "output_format", output_format.size(), output_format.c_str()),
         __LINE__
     );
+    i32 final_dense_fs = state.config.final_dense_fs;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "final_dense_fs", NC_INT, 1, &final_dense_fs),
+        __LINE__
+    );
 
     std::string line_scheme_name(LineCoeffCalcNames[int(LINE_SCHEME)]);
     ncwrap(
@@ -922,7 +927,7 @@ int main(int argc, char** argv) {
                         save_snapshot(state, i);
                     }
                 }
-                if (state.config.sparse_calculation) {
+                if (state.config.sparse_calculation && state.config.final_dense_fs) {
                     state.config.sparse_calculation = false;
                     allocate_J(&state);
                     casc_state.probes_to_compute.init(state, casc_state.num_cascades);
@@ -963,7 +968,6 @@ int main(int argc, char** argv) {
                 }
                 yakl::fence();
                 for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
-                    // la_start = 53;
                     int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
                     setup_wavelength_batch(state, la_start, la_end);
                     fmt::println(
@@ -976,7 +980,6 @@ int main(int argc, char** argv) {
                     bool lambda_iterate = true;
                     dynamic_formal_sol_rc(state, casc_state, lambda_iterate, la_start, la_end);
                     finalise_wavelength_batch(state, la_start, la_end);
-                    // break;
                 }
             }
             yakl::timer_stop("DexRT");

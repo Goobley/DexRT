@@ -53,6 +53,7 @@ class DexrtNonLteConfig(DexrtLteConfig):
     conserve_pressure: bool = False
     snapshot_frequency: int = 0
     initial_lambda_iterations: int = 2
+    final_dense_fs: bool = True
 
 class DexrtGivenFsConfig(DexrtConfig):
     mode: Literal["GivenFs"] = "GivenFs"

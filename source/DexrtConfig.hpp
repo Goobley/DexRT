@@ -41,6 +41,7 @@ struct DexrtConfig {
     std::vector<AtomicTreatment> atom_modes;
     BoundaryType boundary = BoundaryType::Zero;
     bool sparse_calculation = false;
+    bool final_dense_fs = true;
     fp_t threshold_temperature = FP(0.0);
     int max_iter = 200;
     fp_t pop_tol = FP(1e-3);
@@ -135,6 +136,9 @@ inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     }
     if (file["initial_lambda_iterations"]) {
         config.initial_lambda_iterations = file["initial_lambda_iterations"].as<int>();
+    }
+    if (file["final_dense_fs"]) {
+        config.final_dense_fs = file["final_dense_fs"].as<bool>();
     }
 }
 
