@@ -8,19 +8,19 @@ ARG USER_GID=$USER_UID
 RUN apt update && apt install -y build-essential curl libcurl4-openssl-dev libopenmpi-dev cmake wget git libopenblas-dev liblapack-dev sudo
 
 WORKDIR /src/hdf5
-COPY hdf5/docker_setup.sh .
+COPY docker_deps/hdf5/docker_setup.sh .
 RUN ./docker_setup.sh
 
 WORKDIR /src/netcdf
-COPY netcdf/docker_setup.sh .
+COPY docker_deps/netcdf/docker_setup.sh .
 RUN ./docker_setup.sh
 
 WORKDIR /src/pnetcdf
-COPY pnetcdf/docker_setup.sh .
+COPY docker_deps/pnetcdf/docker_setup.sh .
 RUN ./docker_setup.sh
 
 WORKDIR /src/conda
-COPY miniconda/docker_setup.sh .
+COPY docker_deps/miniconda/docker_setup.sh .
 RUN ./docker_setup.sh
 
 RUN ldconfig
@@ -35,6 +35,6 @@ ENV HOME=/home/$USERNAME
 USER $USERNAME
 
 WORKDIR /src/conda
-COPY miniconda/env_setup.sh .
+COPY docker_deps/miniconda/env_setup.sh .
 RUN [ "/bin/bash", "env_setup.sh" ]
 ENV HDF5_USE_FILE_LOCKING=FALSE

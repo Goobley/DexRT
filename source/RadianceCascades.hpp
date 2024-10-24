@@ -165,7 +165,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
                 };
 
                 i64 lin_idx = probe_linear_index<RcMode>(casc_state.state.upper_dims, upper_probe);
-                upper_interp.I += ray_weight = upper_I(lin_idx);
+                upper_interp.I += ray_weight * upper_I(lin_idx);
                 if constexpr (STORE_TAU_CASCADES) {
                     upper_interp.tau += ray_weight * upper_tau(lin_idx);
                 }

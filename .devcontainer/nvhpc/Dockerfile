@@ -3,26 +3,26 @@ FROM nvcr.io/nvidia/nvhpc:24.5-devel-cuda12.4-ubuntu22.04
 RUN apt update && apt install -y git curl libcurl4-openssl-dev
 
 WORKDIR /src/magma
-COPY magma/docker_setup.sh .
+COPY docker_deps/magma/docker_setup.sh .
 RUN ./docker_setup.sh "-DMAGMA_ENABLE_CUDA=ON -DCMAKE_C_COMPILER=nvc -DCMAKE_CXX_COMPILER=nvc++"
 
 WORKDIR /src/hdf5
-COPY hdf5/docker_setup.sh .
+COPY docker_deps/hdf5/docker_setup.sh .
 RUN ./docker_setup.sh
 
 WORKDIR /src/netcdf
-COPY netcdf/docker_setup.sh .
+COPY docker_deps/netcdf/docker_setup.sh .
 RUN ./docker_setup.sh
 
 WORKDIR /src/pnetcdf
-COPY pnetcdf/docker_setup.sh .
+COPY docker_deps/pnetcdf/docker_setup.sh .
 RUN ./docker_setup.sh
 
 WORKDIR /src/conda
-COPY miniconda/docker_setup.sh .
+COPY docker_deps/miniconda/docker_setup.sh .
 RUN ./docker_setup.sh
 
-COPY magma/magma.conf /etc/ld.so.conf.d
+COPY docker_deps/magma/magma.conf /etc/ld.so.conf.d
 RUN ldconfig
 
 # NOTE(cmo): Based on https://github.com/adalundhe/dev-images/blob/main/cpp/Dockerfile.cpp
@@ -42,6 +42,6 @@ ENV HOME=/home/$USERNAME
 USER $USERNAME
 
 WORKDIR /src/conda
-COPY miniconda/env_setup.sh .
+COPY docker_deps/miniconda/env_setup.sh .
 RUN [ "/bin/bash", "env_setup.sh" ]
 ENV HDF5_USE_FILE_LOCKING=FALSE
