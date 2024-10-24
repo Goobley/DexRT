@@ -20,6 +20,7 @@
 struct RayConfig {
     fp_t mem_pool_initial_gb = FP(2.0);
     fp_t mem_pool_grow_gb = FP(1.4);
+    std::string own_path;
     std::string dexrt_config_path;
     std::string ray_output_path;
     std::vector<fp_t> muz;
@@ -88,6 +89,7 @@ struct LineSeg {
 
 RayConfig parse_ray_config(const std::string& path) {
     RayConfig config;
+    config.own_path = path;
     config.dexrt_config_path = "dexrt.yaml";
     config.ray_output_path = "ray_output.nc";
 
@@ -815,7 +817,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
     }
 }
 
-yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
+yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg, const Atmosphere& atmos) {
     yakl::SimpleNetCDF nc;
     nc.create(path, yakl::NETCDF_MODE_REPLACE);
 
@@ -851,6 +853,18 @@ yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg) {
     std::string git_hash(GIT_HASH);
     ncwrap(
         nc_put_att_text(ncid, NC_GLOBAL, "git_hash", git_hash.size(), git_hash.c_str()),
+        __LINE__
+    );
+
+    f64 voxel_scale = atmos.voxel_scale;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "voxel_scale", NC_DOUBLE, 1, &voxel_scale),
+        __LINE__
+    );
+
+    const auto& config_path(cfg.own_path);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "config_path", config_path.size(), config_path.c_str()),
         __LINE__
     );
 
@@ -945,7 +959,7 @@ int main(int argc, const char* argv[]) {
             atmos.temperature.extent(1)
         );
 
-        auto out = setup_output(config.ray_output_path, config);
+        auto out = setup_output(config.ray_output_path, config, atmos);
 
         for (int mu = 0; mu < config.muz.size(); ++mu) {
             state.ray_set = compute_ray_set<yakl::memDevice>(config, atmos, mu);

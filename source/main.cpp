@@ -670,6 +670,18 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_text(ncid, NC_GLOBAL, "git_hash", git_hash.size(), git_hash.c_str()),
         __LINE__
     );
+
+    f64 voxel_scale = state.atmos.voxel_scale;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "voxel_scale", NC_DOUBLE, 1, &voxel_scale),
+        __LINE__
+    );
+
+    const auto& config_path(state.config.own_path);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "config_path", config_path.size(), config_path.c_str()),
+        __LINE__
+    );
 }
 
 void save_results(const State& state, const CascadeState& casc_state, i32 num_iter) {

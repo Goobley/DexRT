@@ -32,6 +32,7 @@ struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_initial_gb = FP(2.0);
     fp_t mem_pool_grow_gb = FP(1.4);
+    std::string own_path;
     std::string atmos_path;
     std::string output_path;
     std::string initial_pops_path;
@@ -261,6 +262,7 @@ inline void parse_mip_config(DexrtConfig* cfg, const YAML::Node& file) {
 
 inline DexrtConfig parse_dexrt_config(const std::string& path) {
     DexrtConfig config{};
+    config.own_path = path;
     config.atmos_path = "dexrt_atmos.nc";
     config.output_path = "dexrt.nc";
 

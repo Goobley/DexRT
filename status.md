@@ -74,17 +74,18 @@ Features/ToDo
 - [x] Add extra attrs for emis/opac config
 - [ ] Support ANGLE_INVARIANT_THERMAL_VEL_FRAC for CoreAndVoigt?
     - Doesn't seem necessary currently
-- [ ] Make dexrt_py a proper package
+- [x] Make dexrt_py a proper package
     - [ ] Get onto pypi
-    - [ ] Add tonemapping code
-    - [ ] Handle sparse rehydration
+    - [x] Add tonemapping code
+    - [x] Handle sparse rehydration
+    - [x] Plot ray_output_rotato functionality
 - [x] Only allocate necessary Gamma and pops (all driven by BlockMap)
     - [ ] Preallocate and store LTE pops... they're allocated 99% of the time currently.
         - Can still update every iteration (essentially free)
 - [x] Set mip variance limits in config file.
 - [x] Set mip levels in config file.
 - [x] Set max cascade in config file.
-- [ ] Allow disabling final dense fs for non-lte in config file.
+- [x] Allow disabling final dense fs for non-lte in config file.
 - [x] Create sparse atmos and only keep that one on device
     - Migrate everything to the sparse atmos (that aligns with the active probes)
 - [x] Move more things into .cpps to improve compile time.
