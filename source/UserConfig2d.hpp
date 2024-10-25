@@ -87,9 +87,14 @@ constexpr fp_t PROBE0_LENGTH = FP(1.5);
 // The number of rays to trace on cascade 0
 constexpr int PROBE0_NUM_RAYS = 4;
 
-// The angular branching factor to use for each cascade (i.e. num_rays_i =
-// PROBE0_NUM_RAYS * 2^(CASCADE_BRANCHING_FACTOR * i))
+// The angular branching and interval length factor to use for each cascade
+// (i.e. num_rays_i = PROBE0_NUM_RAYS * 2^(CASCADE_BRANCHING_FACTOR * i))
 constexpr int CASCADE_BRANCHING_FACTOR = 2;
+// Set this factor if a different factor is to be used for the higher cascades.
+constexpr int UPPER_BRANCHING_FACTOR = 1;
+// The cascade at which to transition to UPPER_BRANCHING_FACTOR (set to 0 to
+// disable).
+constexpr int BRANCHING_FACTOR_SWITCH = 0;
 
 // Whether to run the rays of the last cascade off the grid regardless of where
 // they start, to correctly sample the boundary conditions.

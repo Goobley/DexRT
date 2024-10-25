@@ -47,11 +47,34 @@ YAKL_INLINE constexpr int RC_flags_storage() {
     });
 }
 
+YAKL_INLINE constexpr int num_flat_rays_exponent(int n) {
+    if constexpr (VARY_BRANCHING_FACTOR) {
+        if (n < BRANCHING_FACTOR_SWITCH) {
+            return CASCADE_BRANCHING_FACTOR * n;
+        } else {
+            return CASCADE_BRANCHING_FACTOR * (BRANCHING_FACTOR_SWITCH - 1)
+                + UPPER_BRANCHING_FACTOR * (n - (BRANCHING_FACTOR_SWITCH - 1));
+        }
+    } else {
+        return CASCADE_BRANCHING_FACTOR * n;
+    }
+}
+
+YAKL_INLINE constexpr int num_flat_rays_storage(const CascadeStorage& c0, int n) {
+    int exponent = num_flat_rays_exponent(n);
+    return c0.num_flat_dirs * (1 << exponent);
+}
+
+YAKL_INLINE constexpr int num_flat_rays_compute(const CascadeRays& c0, int n) {
+    int exponent = num_flat_rays_exponent(n);
+    return c0.num_flat_dirs * (1 << exponent);
+}
+
 YAKL_INLINE CascadeStorage cascade_size(const CascadeStorage& c0, int n) {
     CascadeStorage c;
     c.num_probes(0) = std::max(1, (c0.num_probes(0) >> n));
     c.num_probes(1) = std::max(1, (c0.num_probes(1) >> n));
-    c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
+    c.num_flat_dirs = num_flat_rays_storage(c0, n);
     c.num_incl = c0.num_incl;
     c.wave_batch = c0.wave_batch;
     return c;
@@ -61,7 +84,7 @@ YAKL_INLINE CascadeRays cascade_compute_size(const CascadeRays& c0, int n) {
     CascadeRays c;
     c.num_probes(0) = std::max(1, (c0.num_probes(0) >> n));
     c.num_probes(1) = std::max(1, (c0.num_probes(1) >> n));
-    c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
+    c.num_flat_dirs = num_flat_rays_compute(c0, n);
     c.num_incl = c0.num_incl;
     c.wave_batch = c0.wave_batch;
     return c;
@@ -72,12 +95,19 @@ YAKL_INLINE CascadeRays cascade_compute_size(const CascadeStorage& c0, int n) {
     CascadeRays c;
     c.num_probes(0) = std::max(1, (c0.num_probes(0) >> n));
     c.num_probes(1) = std::max(1, (c0.num_probes(1) >> n));
-    if constexpr (RcMode & RC_PREAVERAGE) {
-        c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * (n + 1)));
-    } else if constexpr  (RcMode & RC_DIR_BY_DIR) {
-        c.num_flat_dirs = (c0.num_flat_dirs * PROBE0_NUM_RAYS) * (1 << (CASCADE_BRANCHING_FACTOR * n));
+    if constexpr (VARY_BRANCHING_FACTOR) {
+        c.num_flat_dirs = num_flat_rays_storage(c0, n);
+        if constexpr (RcMode & RC_DIR_BY_DIR) {
+            c.num_flat_dirs *= PROBE0_NUM_RAYS;
+        }
     } else {
-        c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
+        if constexpr (RcMode & RC_PREAVERAGE) {
+            c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * (n + 1)));
+        } else if constexpr  (RcMode & RC_DIR_BY_DIR) {
+            c.num_flat_dirs = (c0.num_flat_dirs * PROBE0_NUM_RAYS) * (1 << (CASCADE_BRANCHING_FACTOR * n));
+        } else {
+            c.num_flat_dirs = c0.num_flat_dirs * (1 << (CASCADE_BRANCHING_FACTOR * n));
+        }
     }
     c.num_incl = c0.num_incl;
     c.wave_batch = c0.wave_batch;
@@ -101,6 +131,23 @@ YAKL_INLINE CascadeStorage cascade_rays_to_storage(const CascadeRays& r) {
     return c;
 }
 
+template <int RcMode>
+YAKL_INLINE CascadeRays cascade_storage_to_rays(const CascadeStorage& c) {
+    CascadeRays r;
+    r.num_probes(0) = c.num_probes(0);
+    r.num_probes(1) = c.num_probes(1);
+    if constexpr (RcMode & RC_PREAVERAGE) {
+        r.num_flat_dirs = c.num_flat_dirs * (1 << CASCADE_BRANCHING_FACTOR);
+    } else if constexpr (RcMode & RC_DIR_BY_DIR) {
+        r.num_flat_dirs = c.num_flat_dirs * PROBE0_NUM_RAYS;
+    } else {
+        r.num_flat_dirs = c.num_flat_dirs;
+    }
+    r.num_incl = c.num_incl;
+    r.wave_batch = c.wave_batch;
+    return r;
+}
+
 /// The number of rays to be computed for each texel in the cascade arrays.
 /// These are essentially used for preaveraging, where we store the 4 rays in
 /// one write to global (since they are always read as an averaged group).
@@ -114,13 +161,35 @@ YAKL_INLINE constexpr int rays_per_stored_texel() {
 }
 
 /// The number of upper ray directions to be loaded/averaged for each ray in the
-/// current cascade
+/// current cascade. n refers to the current cascade, and returns the number of
+/// ray directions to average in n+1
 template <int RcMode>
-YAKL_INLINE constexpr int upper_texels_per_ray() {
+YAKL_INLINE int upper_texels_per_ray(int n) {
     if constexpr (RcMode & RC_PREAVERAGE) {
         return 1;
     } else {
-        return (1 << CASCADE_BRANCHING_FACTOR);
+        if constexpr (VARY_BRANCHING_FACTOR) {
+            if ((n + 1) < BRANCHING_FACTOR_SWITCH) {
+                return (1 << CASCADE_BRANCHING_FACTOR);
+            } else {
+                return (1 << UPPER_BRANCHING_FACTOR);
+            }
+        } else {
+            return (1 << CASCADE_BRANCHING_FACTOR);
+        }
+    }
+}
+
+/// The associated ray index in cascade n+1 from the direction in n
+YAKL_INLINE int upper_ray_idx(int this_dir, int n) {
+    if constexpr (VARY_BRANCHING_FACTOR) {
+        if ((n + 1) < BRANCHING_FACTOR_SWITCH) {
+            return this_dir * (1 << CASCADE_BRANCHING_FACTOR);
+        } else {
+            return this_dir * (1 << UPPER_BRANCHING_FACTOR);
+        }
+    } else {
+        return this_dir * (1 << CASCADE_BRANCHING_FACTOR);
     }
 }
 
@@ -457,9 +526,15 @@ struct IntervalLength {
 };
 
 YAKL_INLINE IntervalLength cascade_interval_length(int num_cascades, int n) {
+    int near_exp = 0;
+    if (n > 0) {
+        near_exp = num_flat_rays_exponent(n-1);
+    }
+    int far_exp = num_flat_rays_exponent(n);
+
     IntervalLength length = {
-        .from = PROBE0_LENGTH * ((n == 0) ? FP(0.0) : (1 << (CASCADE_BRANCHING_FACTOR * (n - 1)))),
-        .to = PROBE0_LENGTH * (1 << (CASCADE_BRANCHING_FACTOR * n))
+        .from = PROBE0_LENGTH * ((n == 0) ? FP(0.0) : (1 << near_exp)),
+        .to = PROBE0_LENGTH * (1 << far_exp)
     };
     if (LAST_CASCADE_TO_INFTY && n == num_cascades) {
         length.to = LAST_CASCADE_MAX_DIST;

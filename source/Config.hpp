@@ -14,6 +14,9 @@
 // NOTE(cmo): The spacing between probes on cascade 0 -- this isn't actually configurable
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 
+constexpr bool VARY_BRANCHING_FACTOR = (BRANCHING_FACTOR_SWITCH > 0);
+static_assert(!(PREAVERAGE && VARY_BRANCHING_FACTOR), "Can't use preaveraging and variable branching factor because I was too lazy to implement it");
+
 // Compile time errors for RC misconfig
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
 static_assert(!PREAVERAGE, "Don't use preaveraging for DexRT unless you know what you're doing! (Then disable me)");

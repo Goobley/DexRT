@@ -54,9 +54,8 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
         }
     );
 
-    constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
-    // const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
-    const int upper_ray_start_idx = this_probe.dir * (1 << CASCADE_BRANCHING_FACTOR);
+    const int num_rays_per_ray = upper_texels_per_ray<RcMode>(casc_state.state.n);
+    const int upper_ray_start_idx = upper_ray_idx(this_probe.dir, casc_state.state.n);
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
     RadianceInterval<Alo> interp{};
@@ -102,9 +101,8 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
 ) {
     ray = invert_direction(ray);
 
-    constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
-    // const int upper_ray_start_idx = this_probe.dir * num_rays_per_ray;
-    const int upper_ray_start_idx = this_probe.dir * (1 << CASCADE_BRANCHING_FACTOR);
+    const int num_rays_per_ray = upper_texels_per_ray<RcMode>(casc_state.state.n);
+    const int upper_ray_start_idx = upper_ray_idx(this_probe.dir, casc_state.state.n);
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
     RadianceInterval<Alo> interp{};
@@ -112,8 +110,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
         BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau);
-        // NOTE(cmo): The cascade_compute_size function works with any cascade and a relative level offset for n.
-        CascadeRays upper_rays = cascade_compute_size(rays, 1);
+        CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(casc_state.state.upper_dims);
         for (int bilin = 0; bilin < 4; ++bilin) {
             ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
             ProbeIndex upper_centre_probe{
@@ -274,7 +271,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
         }
     );
 
-    constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
+    const int num_rays_per_ray = upper_texels_per_ray<RcMode>(casc_state.state.n);
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
     RadianceInterval<Alo> interp{};
@@ -309,8 +306,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
         vec2 cone_start_pos = ray.start + FP(0.5) * (prev_ray.end - ray.start);
         vec2 cone_end_pos = ray.start + FP(0.5) * (next_ray.end - ray.start);
 
-        // NOTE(cmo): The cascade_compute_size function works with any cascade and a relative level offset for n.
-        CascadeRays upper_rays = cascade_compute_size(rays, 1);
+        CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(casc_state.state.upper_dims);
         for (int bilin = 0; bilin < 4; ++bilin) {
             ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
             ProbeIndex upper_probe{
@@ -499,16 +495,16 @@ inline void parallax_fix_inner_merge(
                 };
                 RayProps this_ray = ray_props(rays, dev_casc_state.num_cascades, dev_casc_state.n, probe_idx);
 
-                constexpr int num_rays_per_ray = upper_texels_per_ray<RcMode>();
+                const int num_rays_per_ray = upper_texels_per_ray<RcMode>(dev_casc_state.n);
                 const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
                 RadianceInterval<DexEmpty> ri{};
                 BilinearCorner base = bilinear_corner(probe_idx.coord);
                 vec4 weights = bilinear_weights(base);
                 JasUnpack(dev_casc_state, upper_I, upper_tau);
-                // NOTE(cmo): The cascade_compute_size function works with any cascade and a relative level offset for n.
-                CascadeRays upper_rays = cascade_compute_size(rays, 1);
-                const int upper_ray_start_idx = probe_idx.dir * (1 << CASCADE_BRANCHING_FACTOR);
+
+                CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(dev_casc_state.upper_dims);
+                const int upper_ray_start_idx = upper_ray_idx(probe_idx.dir, dev_casc_state.n);
                 const int upper_ray_mid_idx = upper_ray_start_idx + num_rays_per_ray / 2;
 
                 for (int bilin = 0; bilin < 4; ++bilin) {
