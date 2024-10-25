@@ -3,6 +3,7 @@
 #include "YAKL.h"
 #include "AlwaysFalse.hpp"
 #include <cassert>
+#include <bit>
 
 #include "UserConfig2d.hpp"
 
@@ -40,6 +41,8 @@ constexpr BaseMipContents BASE_MIP_CONTAINS =
         : (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) ? BaseMipContents::Continua
         : BaseMipContents::VelocityDependent;
 
+
+static_assert(std::has_single_bit(u32(BLOCK_SIZE)), "BLOCK_SIZE must be a power of two (>= 2)");
 
 #ifdef FLATLAND
 constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);

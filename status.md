@@ -119,6 +119,7 @@ Ideas
     - Other mipmappable option is CoreAndVoigt --  we store the line core parameters (eta*, chi*, a_damp, inv_dop_width), and modulate them with the Voigt.
 - [ ] Sparse line quadratures that fit entirely inside a WAVE_BATCH (can be increased). Ensure whole line is done in one go, them use a higher order scheme to evaluate the wavelength integral over I?
 - [ ] If we stick with such a simple ALO, it can actually be computed in-situ when computing Gamma, saving the memory.
+- [ ] Refactor voxel coordinates to uints. Division etc is more efficient. If they end up negative, they wraparound, so we'd only need to check one > per axis rather than two to fully check bounds/
 
 
 Notes

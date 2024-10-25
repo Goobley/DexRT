@@ -362,7 +362,9 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         .I = FP(0.0),
         .tau = FP(0.0)
     };
-    if ((RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped)) {
+    constexpr bool always_sample_bc = (RcMode & RC_SAMPLE_BC) && LAST_CASCADE_TO_INFTY;
+    const bool ray_starts_outside = (RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped);
+    if (always_sample_bc || ray_starts_outside) {
         // NOTE(cmo): Check the ray is going up along z.
         if ((ray.dir(1) > FP(0.0)) && la != -1) {
             vec3 pos;

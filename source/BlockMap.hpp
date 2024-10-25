@@ -351,6 +351,8 @@ struct IndexGen {
     i32 refined_size;
     const BlockMap<BLOCK_SIZE>& block_map;
 
+    static constexpr i32 L2_BLOCK_SIZE = std::bit_width(u32(BLOCK_SIZE)) - 1;
+
     YAKL_INLINE
     IndexGen(const BlockMap<BLOCK_SIZE>& block_map_, i32 refined_size_=1) :
         tile_key({.x = -1, .z = -1}),
@@ -414,8 +416,8 @@ struct IndexGen {
 
     YAKL_INLINE
     i64 idx(i32 x, i32 z) {
-        i32 tile_x = x / BLOCK_SIZE;
-        i32 tile_z = z / BLOCK_SIZE;
+        i32 tile_x = x >> L2_BLOCK_SIZE;
+        i32 tile_z = z >> L2_BLOCK_SIZE;
         i32 inner_x = x % BLOCK_SIZE;
         i32 inner_z = z % BLOCK_SIZE;
         Coord2 tile_key_lookup{
@@ -443,8 +445,8 @@ struct IndexGen {
 
     YAKL_INLINE
     bool has_leaves(i32 x, i32 z) {
-        i32 tile_x = x / BLOCK_SIZE;
-        i32 tile_z = z / BLOCK_SIZE;
+        i32 tile_x = x >> L2_BLOCK_SIZE;
+        i32 tile_z = z >> L2_BLOCK_SIZE;
         Coord2 tile_key_lookup{
             .x = tile_x,
             .z = tile_z
@@ -454,8 +456,8 @@ struct IndexGen {
             return true;
         }
         if (
-            (tile_x < 0) || (tile_x >= block_map.bbox.max(0)) ||
-            (tile_z < 0) || (tile_z >= block_map.bbox.max(1))
+            (x < 0) || (x >= block_map.bbox.max(0)) ||
+            (z < 0) || (z >= block_map.bbox.max(1))
         ) {
             return false;
         }
@@ -504,6 +506,8 @@ struct MultiLevelIndexGen {
     i64 tile_base_idx;
     const BlockMap<BLOCK_SIZE>& block_map;
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mip_block_map;
+
+    static constexpr i32 L2_BLOCK_SIZE = std::bit_width(u32(BLOCK_SIZE)) - 1;
 
     YAKL_INLINE
     MultiLevelIndexGen(
@@ -566,8 +570,12 @@ struct MultiLevelIndexGen {
 
     YAKL_INLINE
     i64 idx(i32 mip_level, i32 x, i32 z) {
-        i32 tile_x = x / BLOCK_SIZE;
-        i32 tile_z = z / BLOCK_SIZE;
+        // NOTE(cmo): The shift vs integer division may seem like premature
+        // optimisation here. I assure you it isn't. It properly captures the
+        // case of x and z being small negatives. Due to integer rules -1 / 16
+        // == 0, but -1 >> 4 == -1
+        i32 tile_x = x >> L2_BLOCK_SIZE;
+        i32 tile_z = z >> L2_BLOCK_SIZE;
         i32 inner_x = x % BLOCK_SIZE;
         i32 inner_z = z % BLOCK_SIZE;
         MultiLevelTileKey tile_key_lookup{
@@ -597,18 +605,17 @@ struct MultiLevelIndexGen {
     /// Returns the mip level to sample on, or -1 if empty
     YAKL_INLINE
     i32 get_sample_level(i32 x, i32 z) {
-        i32 tile_x = x / BLOCK_SIZE;
-        i32 tile_z = z / BLOCK_SIZE;
+        i32 tile_x = x >> L2_BLOCK_SIZE;
+        i32 tile_z = z >> L2_BLOCK_SIZE;
         /// NOTE(cmo): This makes the assumption that if one is requesting the
         /// mip level of the current tile, then whatever level is there is the
         /// one returned.
         if (tile_x == tile_key.x && tile_z == tile_key.z) {
             return tile_key.mip_level;
         }
-
         if (
-            (tile_x < 0) || (tile_x >= block_map.bbox.max(0)) ||
-            (tile_z < 0) || (tile_z >= block_map.bbox.max(1))
+            (x < 0) || (x >= block_map.bbox.max(0)) ||
+            (z < 0) || (z >= block_map.bbox.max(1))
         ) {
             return -1;
         }
@@ -685,13 +692,16 @@ struct RaySegment {
         return result;
     }
 
-    YAKL_INLINE IntersectionResult intersects(const GridBbox& bbox) const {
+    /// Check intersection in the sense of whether the ray is inside the bbox,
+    /// not whether it hits a boundary. Shrink bbox contours in that fraction of
+    /// a voxel to try and force ray positions in bounds.
+    YAKL_INLINE IntersectionResult intersects(const GridBbox& bbox, fp_t shrink_bbox=FP(1e-4)) const {
         fp_t t0_ = t0;
         fp_t t1_ = t1;
 
         for (int ax = 0; ax < NUM_DIM; ++ax) {
-            fp_t a = fp_t(bbox.min(ax));
-            fp_t b = fp_t(bbox.max(ax));
+            fp_t a = fp_t(bbox.min(ax)) + shrink_bbox;
+            fp_t b = fp_t(bbox.max(ax)) - shrink_bbox;
             if (a >= b) {
                 return IntersectionResult{
                     .intersects = false,
@@ -729,8 +739,8 @@ struct RaySegment {
         };
     }
 
-    YAKL_INLINE bool clip(const GridBbox& bbox, bool* start_clipped=nullptr) {
-        IntersectionResult result = intersects(bbox);
+    YAKL_INLINE bool clip(const GridBbox& bbox, bool* start_clipped=nullptr, fp_t shrink_bbox=FP(1e-4)) {
+        IntersectionResult result = intersects(bbox, shrink_bbox);
         if (start_clipped) {
             *start_clipped = false;
         }
@@ -793,16 +803,20 @@ struct MultiLevelDDA {
     YAKL_INLINE MultiLevelDDA(MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE>& idx_gen_) : idx_gen(idx_gen_) {};
 
     YAKL_INLINE
-    bool init(RaySegment& ray_, i32 max_mip_level_, bool* start_clipped=nullptr) {
-        if (!ray_.clip(idx_gen.block_map.bbox, start_clipped)) {
+    bool init(const RaySegment& ray_, i32 max_mip_level_, bool* start_clipped=nullptr) {
+        ray = ray_;
+        if (!ray.clip(idx_gen.block_map.bbox, start_clipped)) {
             return false;
         }
 
-        ray = ray_;
         max_mip_level = max_mip_level_;
 
         constexpr fp_t eps = FP(1e-6);
         ray.update_origin(ray.t0);
+        if (std::abs(ray.t1 - ray.t0) < FP(1e-4)) {
+            // NOTE(cmo): Ray length has collapsed to essentially 0
+            return false;
+        }
         vec2 end_pos = ray(ray.t1 - eps);
         vec2 start_pos = ray(ray.t0 + eps);
         curr_coord = round_down(start_pos);
@@ -836,8 +850,16 @@ struct MultiLevelDDA {
         }
         compute_axis_and_dt();
         // NOTE(cmo): If we didn't start in bounds, advance until we're in, and set the step size
+        constexpr i32 max_steps = 32;
+        i32 steps = 0;
         while (!in_bounds() || (in_bounds() && dt < FP(1e-6))) {
             next_intersection();
+            if (++steps > max_steps) {
+#ifdef DEXRT_DEBUG
+                yakl::yakl_throw("Failed to walk into grid");
+#endif
+                return false;
+            }
         }
         update_mip_level(get_sample_level(), true);
         return true;
