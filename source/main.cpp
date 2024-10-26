@@ -498,6 +498,23 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_int(ncid, NC_GLOBAL, "cascade_branching_factor", NC_INT, 1, &cascade_branching),
         __LINE__
     );
+    i32 multiple_branching_factors = VARY_BRANCHING_FACTOR;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "multiple_branching_factors", NC_INT, 1, &multiple_branching_factors),
+        __LINE__
+    );
+    if (VARY_BRANCHING_FACTOR) {
+        i32 upper_branching = UPPER_BRANCHING_FACTOR;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "upper_branching_factor", NC_INT, 1, &upper_branching),
+            __LINE__
+        );
+        i32 branch_switch = BRANCHING_FACTOR_SWITCH;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "branching_factor_switch", NC_INT, 1, &branch_switch),
+            __LINE__
+        );
+    }
     i32 max_cascade = state.config.max_cascade;
     ncwrap(
         nc_put_att_int(ncid, NC_GLOBAL, "max_cascade", NC_INT, 1, &max_cascade),
