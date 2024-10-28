@@ -18,6 +18,10 @@ WORKDIR /src/pnetcdf
 COPY docker_deps/pnetcdf/docker_setup.sh .
 RUN ./docker_setup.sh
 
+WORKDIR /src/kokkos
+COPY docker_deps/kokkos/docker_setup.sh .
+RUN ./docker_setup.sh "-DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_AMPERE86=ON -DKokkos_ENABLE_THREADS=ON -DKokkos_ENABLE_CUDA_CONSTEXPR=ON -DKokkos_ENABLE_CUDA_LAMBDA=ON -DCMAKE_BUILD_TYPE=Release"
+
 WORKDIR /src/conda
 COPY docker_deps/miniconda/docker_setup.sh .
 RUN ./docker_setup.sh
