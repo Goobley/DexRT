@@ -83,9 +83,9 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(1.5);
+constexpr fp_t PROBE0_LENGTH = FP(2.5);
 // The number of rays to trace on cascade 0
-constexpr int PROBE0_NUM_RAYS = 4;
+constexpr int PROBE0_NUM_RAYS = 8;
 
 // The angular branching and interval length factor to use for each cascade
 // (i.e. num_rays_i = PROBE0_NUM_RAYS * 2^(CASCADE_BRANCHING_FACTOR * i))
@@ -183,6 +183,10 @@ constexpr fp_t INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH = FP(2.0);
 // CoreAndVoigt. Code will throw an error if this is too small, but there are
 // performance benefits for keeping it smaller.
 constexpr int CORE_AND_VOIGT_MAX_LINES = 4;
+
+// Whether to conserve pressure in the charge conservation Newton-Raphson, or in
+// the separate secondary iteration.
+constexpr bool CONSERVE_PRESSURE_NR = true;
 
 #else
 #endif

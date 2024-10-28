@@ -4,7 +4,7 @@
 template <typename T=fp_t>
 fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions()) {
     yakl::timer_start("Charge conservation");
-    JasUnpack(args, ignore_change_below_ntot_frac);
+    JasUnpack(args, ignore_change_below_ntot_frac, conserve_pressure);
     // TODO(cmo): Add background n_e term like in Lw.
     // NOTE(cmo): Only considers H for now
     // TODO(cmo): He contribution?
@@ -13,13 +13,23 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     const auto& GammaH = state->Gamma[0];
     const int num_level = GammaH.extent(0);
     const int num_eqn = GammaH.extent(0) + 1;
-    const auto& ne_flat = state->atmos.ne;
-    const auto& nhtot = state->atmos.nh_tot;
+    JasUnpack(state->atmos, ne, nh_tot, pressure, temperature);
     // NOTE(cmo): GammaH_flat is how we access Gamma/C in the following
     const auto& GammaH_flat = state->Gamma[0];
     // NOTE(cmo): Sort out the diagonal before we copy into the transpose (full Gamma)
     fixup_gamma(GammaH_flat);
     yakl::fence();
+
+    fp_t total_abund = FP(0.0);
+    if constexpr (false) {
+        for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
+            total_abund += state->adata_host.abundance(ia);
+        }
+    } else {
+        // NOTE(cmo): From Asplund 2009/Lw calc
+        total_abund = FP(1.0861550335264554);
+        // NOTE(cmo): 1.1 is traditionally used to account for He, but it's all much of a muchness
+    }
 
     const auto& H_atom = extract_atom(state->adata, state->adata_host, 0);
     // NOTE(cmo): Immediately transposed -- we can reduce the memory requirements here if really needed
@@ -75,7 +85,6 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 
 
     // NOTE(cmo): Perturb ne, compute C, compute dC/dne, restore ne
-    auto& ne = state->atmos.ne;
     constexpr fp_t pert_size = FP(1e-2);
     parallel_for(
         "Perturb ne",
@@ -119,17 +128,27 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                 }
                 F(k, i) = Fi;
             } else if (i == (num_level - 1)) {
-                T dntot = H_atom.abundance * nhtot(k);
-                for (int j = 0; j < num_level; ++j) {
-                    dntot -= new_pops(k, j);
+                if (conserve_pressure) {
+                    using ConstantsFP::k_B;
+                    T N = pressure(k) / (k_B * temperature(k));
+                    T dntot = N;
+                    for (int j = 0; j < num_level; ++j) {
+                        dntot -= total_abund * new_pops(k, j);
+                    }
+                    dntot -= ne(k);
+                } else {
+                    T dntot = H_atom.abundance * nh_tot(k);
+                    for (int j = 0; j < num_level; ++j) {
+                        dntot -= new_pops(k, j);
+                    }
+                    F(k, i) = dntot;
                 }
-                F(k, i) = dntot;
             } else if (i == (num_eqn - 1)) {
                 T charge = FP(0.0);
                 for (int j = 0; j < num_level; ++j) {
                     charge += (H_atom.stage(j) - FP(1.0)) * new_pops(k, j);
                 }
-                charge -= ne_flat(k);
+                charge -= ne(k);
                 F(k, i) = charge;
             }
         }
@@ -147,7 +166,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                     for (int kr = 0; kr < H_atom.continua.extent(0); ++kr) {
                         const auto& cont = H_atom.continua(kr);
                         const T precon_Rji = GammaT(k, cont.j, cont.i) - C_flat(cont.i, cont.j, k);
-                        const T entry = -(precon_Rji / ne_flat(k)) * new_pops(k, cont.j);
+                        const T entry = -(precon_Rji / ne(k)) * new_pops(k, cont.j);
                         yakl::atomicAdd(
                             dF(k, num_eqn-1, cont.i),
                             entry
@@ -165,12 +184,22 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                 }
             }
             if (i < num_level && j == (num_level-1)) {
-                // NOTE(cmo): Number conservation eqn for H
-                dF(k, i, j) = FP(1.0);
+                if (conserve_pressure) {
+                    // NOTE(cmo): Pressure conservation eqn
+                    dF(k, i, j) = total_abund;
+                } else {
+                    // NOTE(cmo): Number conservation eqn for H
+                    dF(k, i, j) = FP(1.0);
+                }
             }
             if (i == num_level && j == (num_level-1)) {
-                // NOTE(cmo): Number conservation eqn for H
-                dF(k, i, j) = FP(0.0);
+                if (conserve_pressure) {
+                    // NOTE(cmo): Pressure conservation eqn (ne term)
+                    dF(k, i, j) = FP(1.0);
+                } else {
+                    // NOTE(cmo): Number conservation eqn for H
+                    dF(k, i, j) = FP(0.0);
+                }
             }
             if (i < num_level && j == (num_eqn - 1)) {
                 dF(k, i, j) = -(H_atom.stage(i) - FP(1.0));
@@ -265,26 +294,52 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                     }
                 }
                 fp_t ne_update = F(k, num_eqn-1);
-                fp_t ne_updated = ne_flat(k) + ne_update;
+                fp_t ne_updated = ne(k) + ne_update;
                 if (ne_updated < FP(0.0)) {
-                    fp_t local_step_size = FP(0.95) * ne_flat(k) / std::abs(ne_update);
+                    fp_t local_step_size = FP(0.95) * ne(k) / std::abs(ne_update);
                     step_size = std::max(std::min(step_size, local_step_size), FP(1e-4));
                 }
             }
             for (int i = 0; i < num_level; ++i) {
                 fp_t update = step_size * F(k, i);
-                if (pops(i, k) > ignore_change_below_ntot_frac * nhtot(k)) {
+                if (pops(i, k) > ignore_change_below_ntot_frac * nh_tot(k)) {
                     max_rel_change(k, i) = std::abs(update / (pops(i, k)));
                 }
                 pops(i, k) += update;
             }
             fp_t ne_update = step_size * F(k, num_eqn-1);
-            max_rel_change(k, num_eqn-1) = std::abs(ne_update / (ne_flat(k)));
-            ne_flat(k) += ne_update;
+            max_rel_change(k, num_eqn-1) = std::abs(ne_update / (ne(k)));
+            ne(k) += ne_update;
             nr_step_size(k) = step_size;
         }
     );
     yakl::fence();
+
+    if (conserve_pressure) {
+        Fp1d nh_tot_ratio("nh_tot_ratio", nh_tot.extent(0));
+        parallel_for(
+            "Update nh_tot (pressure)",
+            SimpleBounds<1>(nh_tot_ratio.extent(0)),
+            YAKL_LAMBDA (i64 k) {
+                fp_t pops_sum = FP(0.0);
+                for (int i = 0; i < num_level; ++i) {
+                    pops_sum += pops(i, k);
+                }
+                nh_tot_ratio(k) = pops_sum / nh_tot(k);
+                nh_tot(k) = pops_sum;
+            }
+        );
+        yakl::fence();
+
+        const auto& full_pops = state->pops;
+        parallel_for(
+            "Rescale pops (presure)",
+            SimpleBounds<2>(full_pops.extent(0), full_pops.extent(1)),
+            YAKL_LAMBDA (int i, i64 k) {
+                full_pops(i, k) *= nh_tot_ratio(k);
+            }
+        );
+    }
 
 
     fp_t max_change = yakl::intrinsics::maxval(max_rel_change);

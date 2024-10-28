@@ -10,6 +10,7 @@ struct NrPostUpdateOptions {
     /// When computing relative change, ignore the change in populations with a
     /// starting fraction lower than this
     fp_t ignore_change_below_ntot_frac = FP(0.0);
+    bool conserve_pressure = false;
 };
 
 

@@ -555,6 +555,12 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_double(ncid, NC_GLOBAL, "angle_invariant_thermal_vel_frac", NC_DOUBLE, 1, &thermal_vel_frac),
         __LINE__
     );
+    i32 conserve_pressure_nr = CONSERVE_PRESSURE_NR;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "conserve_pressure_nr", NC_INT, 1, &conserve_pressure_nr),
+        __LINE__
+    );
+
     i32 warp_size = DEXRT_WARP_SIZE;
     ncwrap(
         nc_put_att_int(ncid, NC_GLOBAL, "warp_size", NC_INT, 1, &warp_size),
@@ -895,10 +901,11 @@ int main(int argc, char** argv) {
                         // be above a threshold, it's unlikely to get
                         // meaningfully better after the second iteration
                         fp_t nr_update = nr_post_update(&state, NrPostUpdateOptions{
-                            .ignore_change_below_ntot_frac=FP(1e-7)
+                            .ignore_change_below_ntot_frac = FP(1e-7),
+                            .conserve_pressure = actually_conserve_pressure && CONSERVE_PRESSURE_NR
                         });
                         lte_max_change = nr_update;
-                        if (actually_conserve_pressure) {
+                        if (!CONSERVE_PRESSURE_NR && actually_conserve_pressure) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
                             lte_max_change = std::max(nh_tot_update, lte_max_change);
                         }
@@ -939,11 +946,22 @@ int main(int argc, char** argv) {
                     }
                     yakl::fence();
                     fmt::println("  == Statistical equilibrium ==");
-                    max_change = stat_eq(&state);
+                    max_change = stat_eq(
+                        &state,
+                        StatEqOptions{
+                            .ignore_change_below_ntot_frac=std::min(FP(1e-6), non_lte_tol)
+                        }
+                    );
                     if (i > 0 && actually_conserve_charge) {
-                        fp_t nr_update = nr_post_update(&state);
+                        fp_t nr_update = nr_post_update(
+                            &state,
+                            NrPostUpdateOptions{
+                                .ignore_change_below_ntot_frac = std::min(FP(1e-6), non_lte_tol),
+                                .conserve_pressure = CONSERVE_PRESSURE_NR && actually_conserve_pressure
+                            }
+                        );
                         max_change = std::max(nr_update, max_change);
-                        if (actually_conserve_pressure) {
+                        if (!CONSERVE_PRESSURE_NR && actually_conserve_pressure) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
                             max_change = std::max(nh_tot_update, max_change);
                         }
