@@ -34,7 +34,7 @@ struct State {
     Fp2d pops; /// [num_level, ks]
     Fp2d J; /// [num_wave, ks] -- if we're paging J to cpu, the first axis is wave_batch
     Fp2dHost J_cpu; /// [num_wave, ks] -- The full J in host memory, if we're paging after each batch.
-    std::vector<Fp3d> Gamma; /// [i, j, ks]
+    std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;

@@ -12,7 +12,7 @@ struct GammaAccumState {
     fp_t I;
     fp_t alo;
     fp_t wlamu;
-    const Fp3d& Gamma;
+    const GammaMat& Gamma;
     int i;
     int j;
     int64_t k;
@@ -27,11 +27,11 @@ YAKL_INLINE void add_to_gamma(const GammaAccumState& args) {
     const fp_t psi_star = alo / chi;
     const fp_t I_eff = I - psi_star * eta;
 
-    fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
-    fp_t G_ij = integrand * wlamu;
+    fp_t integrand = (FP(1.0) - alo) * uv.Uji + uv.Vji * I_eff;
+    GammaFp G_ij = GammaFp(integrand) * GammaFp(wlamu);
 
     integrand = uv.Vij * I_eff;
-    fp_t G_ji = integrand * wlamu;
+    GammaFp G_ji = GammaFp(integrand) * GammaFp(wlamu);
     if constexpr (atomic) {
         yakl::atomicAdd(Gamma(i, j, k), G_ij);
         yakl::atomicAdd(Gamma(j, i, k), G_ji);
@@ -41,13 +41,14 @@ YAKL_INLINE void add_to_gamma(const GammaAccumState& args) {
     }
 }
 
-inline void fixup_gamma(const Fp3d& Gamma) {
+template <typename T>
+inline void fixup_gamma(const yakl::Array<T, 3, yakl::memDevice>& Gamma) {
     parallel_for(
         "Gamma fixup",
         SimpleBounds<1>(Gamma.extent(2)),
         YAKL_LAMBDA (i64 k) {
             for (int i = 0; i < Gamma.extent(1); ++i) {
-                fp_t diag = FP(0.0);
+                T diag = FP(0.0);
                 Gamma(i, i, k) = FP(0.0);
                 for (int j = 0; j < Gamma.extent(0); ++j) {
                     diag += Gamma(j, i, k);

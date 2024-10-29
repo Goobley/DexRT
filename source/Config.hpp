@@ -14,6 +14,9 @@
 // NOTE(cmo): The spacing between probes on cascade 0 -- this isn't actually configurable
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 
+typedef f64 GammaFp;
+typedef yakl::Array<GammaFp, 3, yakl::memDevice> GammaMat;
+
 constexpr bool VARY_BRANCHING_FACTOR = (BRANCHING_FACTOR_SWITCH > 0);
 static_assert(!(PREAVERAGE && VARY_BRANCHING_FACTOR), "Can't use preaveraging and variable branching factor because I was too lazy to implement it");
 

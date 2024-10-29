@@ -108,7 +108,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
         for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
             const int n_level = state.adata_host.num_level(ia);
             state.Gamma.emplace_back(
-                Fp3d("Gamma", n_level, n_level, num_active_cells)
+                decltype(state.Gamma)::value_type("Gamma", n_level, n_level, num_active_cells)
             );
         }
         state.wphi = Fp2d("wphi", state.adata.lines.extent(0), num_active_cells);
@@ -902,10 +902,10 @@ int main(int argc, char** argv) {
                         // meaningfully better after the second iteration
                         fp_t nr_update = nr_post_update(&state, NrPostUpdateOptions{
                             .ignore_change_below_ntot_frac = FP(1e-7),
-                            .conserve_pressure = actually_conserve_pressure && CONSERVE_PRESSURE_NR
+                            .conserve_pressure = false
                         });
                         lte_max_change = nr_update;
-                        if (!CONSERVE_PRESSURE_NR && actually_conserve_pressure) {
+                        if (actually_conserve_pressure) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
                             lte_max_change = std::max(nh_tot_update, lte_max_change);
                         }

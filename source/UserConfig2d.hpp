@@ -7,7 +7,7 @@
 // So far everything works in single precision, other than where overridden (i.e.
 // StatEq), but you can adjust here, especially if you're lucky enough to have a
 // GPU with good f64 throughput.
-#define DEXRT_SINGLE_PREC
+// #define DEXRT_SINGLE_PREC
 #ifdef DEXRT_SINGLE_PREC
 typedef float fp_t;
 #define FP(X) (X##f)
