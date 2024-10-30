@@ -32,7 +32,7 @@ Non-exhaustive feature list:
 📖 Documentation
 ----------------
 
-Documentation is thin on the ground currently, please see the paper (when released), doxygen strings in some files, and the tests.
+Documentation is thin on the ground currently, please see the [paper](https://arxiv.org/abs/2408.14425), doxygen strings in some files, and the tests.
 Please ask if things are unclear.
 
 ⬇ Installation
