@@ -208,12 +208,17 @@ void dynamic_compute_gamma_nonatomic(
     int wave_batch = la_end - la_start;
     wave_batch = std::min(wave_batch, ray_subset.wave_batch);
     Fp1dHost wl_ray_weights_h("wl_ray_weights", wave_batch);
+    constexpr bool include_hc_4pi = false;
+    constexpr fp_t hc_4pi = hc_kJ_nm / four_pi;
     for (int wave = 0; wave < wave_batch; ++wave) {
         const int la = la_start + wave;
         const auto& wavelength_h= state.adata_host.wavelength;
         fp_t lambda = wavelength_h(la);
-        const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
-        fp_t wl_weight = FP(1.0) / hnu_4pi;
+        fp_t hnu_4pi = FP(1.0);
+        if (include_hc_4pi) {
+            hnu_4pi *= hc_4pi;
+        }
+        fp_t wl_weight = lambda / hnu_4pi;
         if (la == 0) {
             wl_weight *= FP(0.5) * (wavelength_h(1) - wavelength_h(0));
         } else if (la == wavelength_h.extent(0) - 1) {
@@ -310,11 +315,20 @@ void dynamic_compute_gamma_nonatomic(
                                         .k = ks,
                                         .atmos = local_atmos
                                     },
-                                    kr
+                                    kr,
+                                    UvOptions{
+                                        .include_hc_4pi = false
+                                    }
                                 );
 
-                                const fp_t eta = pops(offset + l.j, ks) * uv.Uji;
-                                const fp_t chi = pops(offset + l.i, ks) * uv.Vij - pops(offset + l.j, ks) * uv.Vji + FP(1e-20);
+                                fp_t eta = pops(offset + l.j, ks) * uv.Uji;
+                                fp_t chi = pops(offset + l.i, ks) * uv.Vij - pops(offset + l.j, ks) * uv.Vji;
+                                if (!include_hc_4pi) {
+                                    eta *= hc_4pi;
+                                    chi *= hc_4pi;
+                                }
+                                chi += FP(1e-20);
+                                const fp_t wlamu = wl_ray_weights(wave) * incl_quad.wmuy(theta_idx) * wphi(kr, ks);
 
                                 add_to_gamma<false>(GammaAccumState{
                                     .eta = eta,
@@ -322,7 +336,7 @@ void dynamic_compute_gamma_nonatomic(
                                     .uv = uv,
                                     .I = intensity,
                                     .alo = alo_entry,
-                                    .wlamu = wl_ray_weights(wave) * incl_quad.wmuy(theta_idx) * wphi(kr, ks),
+                                    .wlamu = wlamu,
                                     .Gamma = Gamma,
                                     .i = l.i,
                                     .j = l.j,
@@ -348,11 +362,19 @@ void dynamic_compute_gamma_nonatomic(
                                         .k = ks,
                                         .atmos = local_atmos
                                     },
-                                    kr
+                                    kr,
+                                    UvOptions{
+                                        .include_hc_4pi = false
+                                    }
                                 );
 
-                                const fp_t eta = pops(offset + cont.j, ks) * uv.Uji;
-                                const fp_t chi = pops(offset + cont.i, ks) * uv.Vij - pops(offset + cont.j, ks) * uv.Vji + FP(1e-20);
+                                fp_t eta = pops(offset + cont.j, ks) * uv.Uji;
+                                fp_t chi = pops(offset + cont.i, ks) * uv.Vij - pops(offset + cont.j, ks) * uv.Vji;
+                                if (!include_hc_4pi) {
+                                    eta *= hc_4pi;
+                                    chi *= hc_4pi;
+                                }
+                                chi += FP(1e-20);
 
                                 add_to_gamma<false>(GammaAccumState{
                                     .eta = eta,

@@ -8,7 +8,7 @@ MAGMA_LIB="-lmagma"
 
 ./cmake_clean.sh
 
-      # -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v" \
+      # -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v -ftz=true" \
       # -DYAKL_DEBUG="On"               \
       # -DYAKL_B4B="On"                  \
       # -DYAKL_VERBOSE="On" \
@@ -18,7 +18,7 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DCMAKE_Fortran_COMPILER=gfortran \
       -DYAKL_ARCH="CUDA"              \
       -DYAKL_AUTO_PROFILE="On"         \
-      -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v --generate-line-info" \
+      -DYAKL_CUDA_FLAGS="-O3 --ptxas-options=-v --generate-line-info -ftz=true" \
       -DYAKL_INT64_RESHAPE="On"       \
       -DDEXRT_CUDA_ARCHITECTURES="86" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \

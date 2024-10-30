@@ -7,7 +7,7 @@
 // So far everything works in single precision, other than where overridden (i.e.
 // StatEq), but you can adjust here, especially if you're lucky enough to have a
 // GPU with good f64 throughput.
-// #define DEXRT_SINGLE_PREC
+#define DEXRT_SINGLE_PREC
 #ifdef DEXRT_SINGLE_PREC
 typedef float fp_t;
 #define FP(X) (X##f)
@@ -30,6 +30,10 @@ typedef uint64_t u64;
 // charge conservation. Don't change from double precision unless you have a
 // good idea what you're doing!
 typedef f64 StatEqPrecision;
+
+// Set the precision used in the accumulation of the Gamma matrix. Single
+// precision is usually fine.
+typedef fp_t GammaFp;
 
 /*== 2D Config ===============================================================*/
 // To consider a flatland setup (no inclination rays), uncomment the #define
@@ -83,9 +87,9 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(2.5);
+constexpr fp_t PROBE0_LENGTH = FP(1.5);
 // The number of rays to trace on cascade 0
-constexpr int PROBE0_NUM_RAYS = 8;
+constexpr int PROBE0_NUM_RAYS = 4;
 
 // The angular branching and interval length factor to use for each cascade
 // (i.e. num_rays_i = PROBE0_NUM_RAYS * 2^(CASCADE_BRANCHING_FACTOR * i))

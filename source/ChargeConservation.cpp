@@ -247,6 +247,20 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
             state->magma_queue
         );
     } else if constexpr (std::is_same_v<T, f64>) {
+
+        constexpr bool iterative_improvement = true;
+        constexpr int num_refinement_passes = 2;
+        yakl::Array<T, 3, yakl::memDevice> dF_copy;
+        yakl::Array<T, 2, yakl::memDevice> F_copy;
+        yakl::Array<T, 2, yakl::memDevice> residuals;
+        yakl::Array<T*, 1, yakl::memDevice> residuals_ptrs;
+        if constexpr (iterative_improvement) {
+            dF_copy = dF.createDeviceCopy();
+            F_copy = F.createDeviceCopy();
+            residuals = F.createDeviceCopy();
+            residuals_ptrs = decltype(residuals_ptrs)("residuals_ptrs", residuals.extent(0));
+        }
+
         magma_dgesv_batched(
             dF.extent(1),
             1,
@@ -259,9 +273,72 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
             dF.extent(0),
             state->magma_queue
         );
+        magma_queue_sync(state->magma_queue);
+
+        if constexpr (iterative_improvement) {
+            for (int refinement = 0; refinement < num_refinement_passes; ++refinement) {
+                // r_i = b_i
+                parallel_for(
+                    "Copy residual",
+                    SimpleBounds<2>(residuals.extent(0), residuals.extent(1)),
+                    YAKL_LAMBDA (i64 ks, i32 i) {
+                        if (i == 0) {
+                            residuals_ptrs(ks) = &residuals(ks, 0);
+                        }
+                        residuals(ks, i) = F_copy(ks, i);
+                    }
+                );
+                yakl::fence();
+                // r -= A x
+                magmablas_dgemv_batched_strided(
+                    MagmaNoTrans,
+                    residuals.extent(1),
+                    residuals.extent(1),
+                    -1,
+                    dF_copy.get_data(),
+                    dF_copy.extent(1),
+                    square(dF_copy.extent(1)),
+                    F.get_data(),
+                    1,
+                    F.extent(1),
+                    1,
+                    residuals.get_data(),
+                    1,
+                    residuals.extent(1),
+                    residuals.extent(0),
+                    state->magma_queue
+                );
+                magma_queue_sync(state->magma_queue);
+
+                // Solve A x' = r
+                magma_dgetrs_batched(
+                    MagmaNoTrans,
+                    dF.extent(1),
+                    1,
+                    dF_ptrs.get_data(),
+                    dF.extent(1),
+                    ipiv_ptrs.get_data(),
+                    residuals_ptrs.get_data(),
+                    residuals.extent(1),
+                    dF.extent(0),
+                    state->magma_queue
+                );
+                magma_queue_sync(state->magma_queue);
+
+                // x += x'
+                parallel_for(
+                    "Apply residual",
+                    SimpleBounds<2>(F.extent(0), F.extent(1)),
+                    YAKL_LAMBDA (i64 ks, i32 i) {
+                        F(ks, i) += residuals(ks, i);
+                    }
+                );
+                yakl::fence();
+            }
+        }
     }
+
     magma_queue_sync(state->magma_queue);
-    yakl::fence();
     // NOTE(cmo): F is now the absolute update to apply to Hpops and ne
     parallel_for(
         "info check",
