@@ -107,6 +107,8 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", new_pops.extent(0));
         yakl::Array<i32, 1, yakl::memDevice> info("info", new_pops.extent(0));
 
+        constexpr bool fractional_pops = true;
+
         const int pops_start = state->adata_host.level_start(ia);
         const int num_level = state->adata_host.num_level(ia);
         parallel_for(
@@ -157,8 +159,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
             YAKL_LAMBDA (i64 k, int i) {
                 if (i_elim(k) == i) {
-                    // new_pops(k, i) = n_total(k);
-                    new_pops(k, i) = FP(1.0);
+                    if (fractional_pops) {
+                        new_pops(k, i) = FP(1.0);
+                    } else {
+                        new_pops(k, i) = n_total(k);
+                    }
                 } else {
                     new_pops(k, i) = FP(0.0);
                 }
@@ -315,7 +320,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 if (pops(pops_start + i, k) < ignore_change_below_ntot_frac * n_total(k)) {
                     change = FP(0.0);
                 } else {
-                    change = std::abs(FP(1.0) - pops(pops_start + i, k) / (new_pops(k, i) * n_total(k)));
+                    if (fractional_pops) {
+                        change = std::abs(FP(1.0) - pops(pops_start + i, k) / (new_pops(k, i) * n_total(k)));
+                    } else {
+                        change = std::abs(FP(1.0) - pops(pops_start + i, k) / new_pops(k, i));
+                    }
                 }
                 max_rel_change(k, i) = change;
             }
@@ -325,8 +334,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             "Copy & transpose pops",
             SimpleBounds<2>(new_pops.extent(1), new_pops.extent(0)),
             YAKL_LAMBDA (int i, int64_t k) {
-                // pops(pops_start + i, k) = new_pops(k, i);
-                pops(pops_start + i, k) = new_pops(k, i) * n_total(k);
+                if (fractional_pops) {
+                    pops(pops_start + i, k) = new_pops(k, i) * n_total(k);
+                } else {
+                    pops(pops_start + i, k) = new_pops(k, i);
+                }
             }
         );
 

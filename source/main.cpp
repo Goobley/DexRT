@@ -262,7 +262,7 @@ void finalize_state(State* state) {
 int handle_restart(State* st, const std::string& restart_path) {
     State& state(*st);
     yakl::SimpleNetCDF nc;
-    nc.open(restart_path, yakl::NETCDF_MODE_WRITE);
+    nc.open(restart_path, yakl::NETCDF_MODE_READ);
 
     i64 num_active = nc.getDimSize("ks");
     i64 num_level = nc.getDimSize("level");
@@ -785,8 +785,10 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         std::string name = fmt::format("I_C{}", casc);
         std::string shape = fmt::format("casc_shape_{}", casc);
         nc.write(casc_state.i_cascades[casc], name, {shape});
-        name = fmt::format("tau_C{}", casc);
-        nc.write(casc_state.tau_cascades[casc], name, {shape});
+        if constexpr (STORE_TAU_CASCADES) {
+            name = fmt::format("tau_C{}", casc);
+            nc.write(casc_state.tau_cascades[casc], name, {shape});
+        }
     }
     if (out_cfg.sparse) {
         nc.write(block_map.active_tiles, "morton_tiles", {"num_active_tiles"});

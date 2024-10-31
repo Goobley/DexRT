@@ -207,6 +207,9 @@ struct MultiLevelLookup {
         num_x_tiles = block_map.num_x_tiles;
         num_z_tiles = block_map.num_z_tiles;
         if constexpr (HYPERBLOCK2x2) {
+            if (num_z_tiles % 2 == 1 || num_x_tiles % 2 == 1) {
+                throw std::runtime_error(fmt::format("Must have an even number of tiles when using hyperblocking, i.e. make your model a multiple of {} cells.", BLOCK_SIZE*2));
+            }
             num_x_tiles /= 2;
             num_z_tiles /= 2;
         }
