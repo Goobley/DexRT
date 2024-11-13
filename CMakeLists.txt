@@ -72,6 +72,7 @@ target_include_directories(dexrt SYSTEM PUBLIC
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
+    "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_link_libraries(dexrt "${LDLIBS}")
 target_link_libraries(dexrt fmt::fmt)
@@ -99,6 +100,7 @@ target_include_directories(dexrt_ray SYSTEM PUBLIC
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
+    "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_link_libraries(dexrt_ray "${LDLIBS}")
 target_link_libraries(dexrt_ray fmt::fmt)
