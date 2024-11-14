@@ -4,18 +4,10 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include <string>
-#ifdef HAVE_MPI
-    #include "YAKL_pnetcdf.h"
-#else
-    #include "YAKL_netcdf.h"
-#endif
+#include "YAKL_netcdf.h"
 #include "JasPP.hpp"
 
 inline Atmosphere load_atmos(const std::string& path) {
-#ifdef HAVE_MPI
-    static_assert(false, "Only normal netcdf supported for atmosphere loading currently.");
-#endif
-
     typedef yakl::Array<f32, 1, yakl::memHost> Fp1dLoad;
     typedef yakl::Array<f32, 2, yakl::memHost> Fp2dLoad;
 

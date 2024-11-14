@@ -18,11 +18,7 @@
 #include "DexrtConfig.hpp"
 #include "BlockMap.hpp"
 #include "MiscSparse.hpp"
-#ifdef HAVE_MPI
-    #include "YAKL_pnetcdf.h"
-#else
-    #include "YAKL_netcdf.h"
-#endif
+#include "YAKL_netcdf.h"
 #include <vector>
 #include <string>
 #include <optional>
@@ -30,6 +26,9 @@
 #include <argparse/argparse.hpp>
 #include <sstream>
 #include "GitVersion.hpp"
+#include "WavelengthParallelisation.hpp"
+
+#include <random>
 
 void allocate_J(State* state) {
     JasUnpack((*state), config, mr_block_map, c0_size, adata);
@@ -247,6 +246,8 @@ void init_state (State* state, const DexrtConfig& config) {
     magma_init();
     magma_queue_create(0, &state->magma_queue);
 #endif
+
+    setup_comm(state);
 }
 
 void finalize_state(State* state) {
@@ -797,9 +798,8 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
 }
 
 int main(int argc, char** argv) {
-#ifdef HAVE_MPI
-    MPI_Init(&argc, &argv);
-#endif
+    init_mpi(argc, argv);
+
     argparse::ArgumentParser program("DexRT");
     program.add_argument("--config")
         .default_value(std::string("dexrt.yaml"))
@@ -918,6 +918,10 @@ int main(int argc, char** argv) {
                 if (do_restart) {
                     i = handle_restart(&state, *restart_path);
                 }
+
+                WavelengthDistributor wave_dist;
+                wave_dist.init(state.mpi_state, waves.extent(0), state.c0_size.wave_batch);
+
                 fmt::println("-- Non-LTE Iterations --");
                 while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
                     fmt::println("==== FS {} ====", i);
@@ -929,24 +933,34 @@ int main(int argc, char** argv) {
                         state.J_cpu = FP(0.0);
                     }
                     yakl::fence();
-                    for (
-                        int la_start = 0;
-                        la_start < waves.extent(0);
-                        la_start += state.c0_size.wave_batch
-                    ) {
-                        int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
-                        setup_wavelength_batch(state, la_start, la_end);
-                        bool lambda_iterate = i < initial_lambda_iterations;
-                        dynamic_formal_sol_rc(
-                            state,
-                            casc_state,
-                            lambda_iterate,
-                            la_start,
-                            la_end
-                        );
-                        finalise_wavelength_batch(state, la_start, la_end);
+                    WavelengthBatch wave_batch;
+                    wave_dist.reset();
+                    while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
+                    // for (
+                    //     int la_start = 0;
+                    //     la_start < waves.extent(0);
+                    //     la_start += state.c0_size.wave_batch
+                    // ) {
+                        // setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+                        // bool lambda_iterate = i < initial_lambda_iterations;
+                        // dynamic_formal_sol_rc(
+                        //     state,
+                        //     casc_state,
+                        //     lambda_iterate,
+                        //     wave_batch.la_start,
+                        //     wave_batch.la_end
+                        // );
+                        // finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+                        fmt::println("Proc {}, processing [{}, {}]", state.mpi_state.rank, wave_batch.la_start, wave_batch.la_end);
+                        std::mt19937_64 eng{std::random_device{}()};  // or seed however you want
+                        std::uniform_int_distribution<> dist{100, 500};
+                        std::this_thread::sleep_for(std::chrono::milliseconds{dist(eng)});
                     }
                     yakl::fence();
+                    wave_dist.wait_for_all(state.mpi_state);
+
+                    MPI_Abort(MPI_COMM_WORLD, EXIT_SUCCESS);
+
                     fmt::println("  == Statistical equilibrium ==");
                     max_change = stat_eq(
                         &state,
@@ -1037,7 +1051,5 @@ int main(int argc, char** argv) {
         finalize_state(&state);
     }
     yakl::finalize();
-#ifdef HAVE_MPI
-    MPI_Finalize();
-#endif
+    finalise_mpi();
 }

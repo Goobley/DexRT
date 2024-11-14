@@ -9,6 +9,7 @@
 #include "BoundaryType.hpp"
 #include "BlockMap.hpp"
 #include "DexrtConfig.hpp"
+#include "MpiWrapper.hpp"
 
 #ifdef DEXRT_USE_MAGMA
     #include <magma_v2.h>
@@ -16,6 +17,7 @@
 
 struct State {
     DexrtConfig config;
+    MpiState mpi_state;
     CascadeStorage c0_size;
     GivenEmisOpac given_state;
     SparseAtmosphere atmos;
