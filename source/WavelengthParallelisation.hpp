@@ -134,6 +134,81 @@ struct WavelengthDistributor {
 #endif
     }
 
+    inline void reduce_Gamma(State* state) {
+#ifdef HAVE_MPI
+        for (int ia = 0; ia < state->Gamma.size(); ++ia) {
+            if (state->mpi_state.rank == 0) {
+                MPI_Reduce(
+                    MPI_IN_PLACE,
+                    state->Gamma[ia].data(),
+                    state->Gamma[ia].size(),
+                    get_GammaFpMpi(),
+                    MPI_SUM,
+                    0,
+                    state->mpi_state.comm
+                );
+            } else {
+                MPI_Reduce(
+                    state->Gamma[ia].data(),
+                    state->Gamma[ia].data(),
+                    state->Gamma[ia].size(),
+                    get_GammaFpMpi(),
+                    MPI_SUM,
+                    0,
+                    state->mpi_state.comm
+                );
+            }
+        }
+#endif
+    }
+
+    inline void reduce_J(State* state) {
+#ifdef HAVE_MPI
+        fp_t* J_ptr = state->config.store_J_on_cpu ? state->J_cpu.data() : state->J.data();
+        i64 J_size = state->config.store_J_on_cpu ? state->J_cpu.size() : state->J.size();
+        if (state->mpi_state.rank == 0) {
+            MPI_Reduce(
+                MPI_IN_PLACE,
+                J_ptr,
+                J_size,
+                get_FpMpi(),
+                MPI_SUM,
+                0,
+                state->mpi_state.comm
+            );
+        } else {
+            MPI_Reduce(
+                J_ptr,
+                J_ptr,
+                J_size,
+                get_FpMpi(),
+                MPI_SUM,
+                0,
+                state->mpi_state.comm
+            );
+        }
+#endif
+    }
+
+    inline void update_pops(State* state) {
+#ifdef HAVE_MPI
+        MPI_Bcast(state->pops.data(), state->pops.size(), get_FpMpi(), 0, state->mpi_state.comm);
+#endif
+    }
+
+    inline void update_ne(State* state) {
+#ifdef HAVE_MPI
+        MPI_Bcast(state->atmos.ne.data(), state->atmos.ne.size(), get_FpMpi(), 0, state->mpi_state.comm);
+#endif
+    }
+
+    inline void update_nh_tot(State* state) {
+#ifdef HAVE_MPI
+        MPI_Bcast(state->atmos.nh_tot.data(), state->atmos.nh_tot.size(), get_FpMpi(), 0, state->mpi_state.comm);
+#endif
+    }
+
+
 };
 
 

@@ -85,7 +85,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     }
     if (state.config.mode != DexrtMode::GivenFs && LINE_SCHEME == LineCoeffCalc::Classic) {
         max_mip_level = 0;
-        fmt::println("Mips not supported with LineCoeffCalc::Classic");
+        state.println("Mips not supported with LineCoeffCalc::Classic");
     }
     state.mr_block_map.init(block_map, max_mip_level);
 
@@ -96,7 +96,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
         VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
     );
     state.nh_lte = HPartFn();
-    fmt::println("Scale: {} m", state.atmos.voxel_scale);
+    state.println("Scale: {} m", state.atmos.voxel_scale);
 
     i64 num_active_cells = block_map.get_num_active_cells();
 
@@ -158,7 +158,7 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     }
     st->atmos.voxel_scale = voxel_scale;
     st->given_state.voxel_scale = voxel_scale;
-    fmt::println("Scale: {} m", st->atmos.voxel_scale);
+    st->println("Scale: {} m", st->atmos.voxel_scale);
     BlockMap<BLOCK_SIZE> block_map;
     block_map.init(x_dim, z_dim);
     i32 max_mip_level = 0;
@@ -220,6 +220,8 @@ void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
 
 void init_state (State* state, const DexrtConfig& config) {
     state->config = config;
+    setup_comm(state);
+
     CascadeRays c0_rays;
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
         c0_rays = init_atmos_atoms(state, config);
@@ -246,8 +248,6 @@ void init_state (State* state, const DexrtConfig& config) {
     magma_init();
     magma_queue_create(0, &state->magma_queue);
 #endif
-
-    setup_comm(state);
 }
 
 void finalize_state(State* state) {
@@ -308,7 +308,7 @@ void save_snapshot(const State& state, int num_iter) {
     }
 
     nc.create(name, yakl::NETCDF_MODE_REPLACE);
-    fmt::println("Saving snapshot to {}...", name);
+    state.println("Saving snapshot to {}...", name);
 
     int ncid = nc.file.ncid;
     int ierr = nc_put_att_int(ncid, NC_GLOBAL, "num_iter", NC_INT, 1, &num_iter);
@@ -334,7 +334,7 @@ void load_initial_pops(State* st, const std::string& initial_pops_path) {
     nc.open(initial_pops_path, yakl::NETCDF_MODE_READ);
 
     bool load_sparse = nc.dimExists("ks");
-    fmt::println(
+    state.println(
         "Loading populations from {}, appear to be {}.",
         initial_pops_path,
         load_sparse ? "sparse" : "dense"
@@ -432,10 +432,10 @@ void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
 
 /// Add Dex's metadata to the file using attributes. The netcdf layer needs extending to do this, so I'm just throwing it in manually.
 void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i32 num_iter) {
-    const auto ncwrap = [] (int ierr, int line) {
+    const auto ncwrap = [&] (int ierr, int line) {
         if (ierr != NC_NOERR) {
-            printf("NetCDF Error writing attributes at main.cpp:%d\n", line);
-            printf("%s\n",nc_strerror(ierr));
+            state.println("NetCDF Error writing attributes at main.cpp:{}", line);
+            state.println("{}",nc_strerror(ierr));
             yakl::yakl_throw(nc_strerror(ierr));
         }
     };
@@ -711,10 +711,13 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
 void save_results(const State& state, const CascadeState& casc_state, i32 num_iter) {
     const auto& config = state.config;
     const auto& out_cfg = config.output;
+    if (state.mpi_state.rank != 0) {
+        return;
+    }
 
     yakl::SimpleNetCDF nc;
     nc.create(config.output_path, yakl::NETCDF_MODE_REPLACE);
-    fmt::println("Saving output to {}...", config.output_path);
+    state.println("Saving output to {}...", config.output_path);
     add_netcdf_attributes(state, nc, num_iter);
     const auto& block_map = state.mr_block_map.block_map;
 
@@ -880,11 +883,15 @@ int main(int argc, char** argv) {
             auto& waves = state.adata_host.wavelength;
             fp_t max_change = FP(1.0);
             int num_iter = 1;
+
+            WavelengthDistributor wave_dist;
+            wave_dist.init(state.mpi_state, waves.extent(0), state.c0_size.wave_batch);
+
             if (non_lte) {
                 int i = 0;
                 if (actually_conserve_charge && !do_restart) {
                     // TODO(cmo): Make all of these parameters configurable
-                    fmt::println("-- Iterating LTE n_e/pressure --");
+                    state.println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
                     while ((lte_max_change > FP(1e-5) || lte_i < 6) && lte_i < max_iters) {
@@ -912,21 +919,27 @@ int main(int argc, char** argv) {
                             lte_max_change = std::max(nh_tot_update, lte_max_change);
                         }
                     }
-                    fmt::println("Ran for {} iterations", lte_i);
+                    state.println("Ran for {} iterations", lte_i);
                 }
 
                 if (do_restart) {
                     i = handle_restart(&state, *restart_path);
                 }
 
-                WavelengthDistributor wave_dist;
-                wave_dist.init(state.mpi_state, waves.extent(0), state.c0_size.wave_batch);
-
-                fmt::println("-- Non-LTE Iterations --");
+                state.println("-- Non-LTE Iterations --");
                 while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
-                    fmt::println("==== FS {} ====", i);
+                    state.println("==== FS {} ====", i);
                     compute_nh0(state);
-                    compute_collisions_to_gamma(&state);
+
+                    if (state.mpi_state.rank == 0) {
+                        compute_collisions_to_gamma(&state);
+                    } else {
+                        for (int ia = 0; ia < state.Gamma.size(); ++ia) {
+                            state.Gamma[ia] = FP(0.0);
+                        }
+                        yakl::fence();
+                    }
+
                     compute_profile_normalisation(state, casc_state);
                     state.J = FP(0.0);
                     if (config.store_J_on_cpu) {
@@ -934,34 +947,25 @@ int main(int argc, char** argv) {
                     }
                     yakl::fence();
                     WavelengthBatch wave_batch;
+                    wave_dist.wait_for_all(state.mpi_state);
                     wave_dist.reset();
                     while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
-                    // for (
-                    //     int la_start = 0;
-                    //     la_start < waves.extent(0);
-                    //     la_start += state.c0_size.wave_batch
-                    // ) {
-                        // setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
-                        // bool lambda_iterate = i < initial_lambda_iterations;
-                        // dynamic_formal_sol_rc(
-                        //     state,
-                        //     casc_state,
-                        //     lambda_iterate,
-                        //     wave_batch.la_start,
-                        //     wave_batch.la_end
-                        // );
-                        // finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
-                        fmt::println("Proc {}, processing [{}, {}]", state.mpi_state.rank, wave_batch.la_start, wave_batch.la_end);
-                        std::mt19937_64 eng{std::random_device{}()};  // or seed however you want
-                        std::uniform_int_distribution<> dist{100, 500};
-                        std::this_thread::sleep_for(std::chrono::milliseconds{dist(eng)});
+                        setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+                        bool lambda_iterate = i < initial_lambda_iterations;
+                        dynamic_formal_sol_rc(
+                            state,
+                            casc_state,
+                            lambda_iterate,
+                            wave_batch.la_start,
+                            wave_batch.la_end
+                        );
+                        finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                     }
                     yakl::fence();
                     wave_dist.wait_for_all(state.mpi_state);
 
-                    MPI_Abort(MPI_COMM_WORLD, EXIT_SUCCESS);
-
-                    fmt::println("  == Statistical equilibrium ==");
+                    state.println("  == Statistical equilibrium ==");
+                    wave_dist.reduce_Gamma(&state);
                     max_change = stat_eq(
                         &state,
                         StatEqOptions{
@@ -976,12 +980,17 @@ int main(int argc, char** argv) {
                                 .conserve_pressure = CONSERVE_PRESSURE_NR && actually_conserve_pressure
                             }
                         );
+                        wave_dist.update_ne(&state);
                         max_change = std::max(nr_update, max_change);
                         if (!CONSERVE_PRESSURE_NR && actually_conserve_pressure) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
                             max_change = std::max(nh_tot_update, max_change);
                         }
+                        if (actually_conserve_pressure) {
+                            wave_dist.update_nh_tot(&state);
+                        }
                     }
+                    wave_dist.update_pops(&state);
                     i += 1;
                     if (
                         (state.config.snapshot_frequency != 0) &&
@@ -995,31 +1004,29 @@ int main(int argc, char** argv) {
                     allocate_J(&state);
                     casc_state.probes_to_compute.init(state, casc_state.num_cascades);
 
-                    fmt::println("Final FS (dense)");
+                    state.println("Final FS (dense)");
                     compute_nh0(state);
                     state.J = FP(0.0);
                     if (config.store_J_on_cpu) {
                         state.J_cpu = FP(0.0);
                     }
                     yakl::fence();
-                    for (
-                        int la_start = 0;
-                        la_start < waves.extent(0);
-                        la_start += state.c0_size.wave_batch
-                    ) {
-                        int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
-                        setup_wavelength_batch(state, la_start, la_end);
+                    wave_dist.reset();
+                    WavelengthBatch wave_batch;
+                    while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
+                        setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                         bool lambda_iterate = i < initial_lambda_iterations;
                         dynamic_formal_sol_rc(
                             state,
                             casc_state,
                             lambda_iterate,
-                            la_start,
-                            la_end
+                            wave_batch.la_start,
+                            wave_batch.la_end
                         );
-                        finalise_wavelength_batch(state, la_start, la_end);
+                        finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                     }
                     yakl::fence();
+                    wave_dist.wait_for_all(state.mpi_state);
                     state.config.sparse_calculation = true;
                 }
                 num_iter = i;
@@ -1030,26 +1037,31 @@ int main(int argc, char** argv) {
                     state.J_cpu = FP(0.0);
                 }
                 yakl::fence();
-                for (int la_start = 0; la_start < waves.extent(0); la_start += state.c0_size.wave_batch) {
-                    int la_end = std::min(la_start + state.c0_size.wave_batch, int(waves.extent(0)));
-                    setup_wavelength_batch(state, la_start, la_end);
+                wave_dist.reset();
+                WavelengthBatch wave_batch;
+                while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
+                    setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                     fmt::println(
                         "Computing wavelengths [{}, {}] ({}, {})",
-                        la_start,
-                        la_end,
-                        waves(la_start),
-                        waves(la_end-1)
+                        wave_batch.la_start,
+                        wave_batch.la_end,
+                        waves(wave_batch.la_start),
+                        waves(wave_batch.la_end-1)
                     );
                     bool lambda_iterate = true;
-                    dynamic_formal_sol_rc(state, casc_state, lambda_iterate, la_start, la_end);
-                    finalise_wavelength_batch(state, la_start, la_end);
+                    dynamic_formal_sol_rc(state, casc_state, lambda_iterate, wave_batch.la_start, wave_batch.la_end);
+                    finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                 }
+                wave_dist.wait_for_all(state.mpi_state);
             }
             yakl::timer_stop("DexRT");
+            wave_dist.reduce_J(&state);
             save_results(state, casc_state, num_iter);
         }
         finalize_state(&state);
     }
     yakl::finalize();
     finalise_mpi();
+    return 0;
+
 }

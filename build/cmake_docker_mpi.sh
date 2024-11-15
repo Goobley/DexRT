@@ -18,7 +18,7 @@ module load nvhpc-openmpi3/24.5
       # -DMPI_INCLUDE_PATH="${MPI_INCLUDE_PATH}" \
 cmake -DCMAKE_CXX_COMPILER=g++     \
       -DCMAKE_CUDA_COMPILER=nvcc    \
-      -DCMAKE_C_COMPILER=gcc        \
+      -DCMAKE_C_COMPILER=gcc         \
       -DCMAKE_Fortran_COMPILER=gfortran \
       -DYAKL_ARCH="CUDA"              \
       -DYAKL_AUTO_PROFILE="On"         \
@@ -31,3 +31,7 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \
       -DLDLIBS="$(nc-config --libs) -L${MAGMA_LIB_PATH} ${MAGMA_LIB}" \
       ..
+
+# run as
+# mpirun -mca btl_smcuda_use_cuda_ipc 0 -np 2 ./dexrt
+# when running on one gpu. Cuda ipc is frequently causing issues where it gets stuck and the array gets filled with zeros during a broadcast?? Probably not an issue with multiple cards?

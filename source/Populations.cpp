@@ -349,7 +349,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         yakl::fence();
         int max_change_level = max_change_loc % new_pops.extent(1);
         max_change_loc /= new_pops.extent(1);
-        fmt::println(
+        state->println(
             "     Max Change (ele: {}, Z={}): {} (@ l={}, ks={}) [T={}]",
             ia,
             state->adata_host.Z(ia),
@@ -370,5 +370,14 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) { r
 #endif
 
 fp_t stat_eq(State* state, const StatEqOptions& args) {
+#ifdef HAVE_MPI
+    fp_t max_rel_change;
+    if (state->mpi_state.rank == 0) {
+        max_rel_change = stat_eq_impl<StatEqPrecision>(state, args);
+    }
+    MPI_Bcast(&max_rel_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    return max_rel_change;
+#else
     return stat_eq_impl<StatEqPrecision>(state, args);
+#endif
 }

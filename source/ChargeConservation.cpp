@@ -428,7 +428,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     int max_change_level = max_change_acc % F.extent(1);
     max_change_acc /= F.extent(1);
     i64 max_change_ks = max_change_acc;
-    fmt::println(
+    state->println(
         "     NR Update Max Change (level: {}): {} (@ {}), step_size: {}",
         max_change_level == (num_eqn - 1) ? "n_e": std::to_string(max_change_level),
         max_change,
@@ -444,5 +444,14 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 #endif
 
 fp_t nr_post_update(State* state, const NrPostUpdateOptions& args) {
+#ifdef HAVE_MPI
+    fp_t max_rel_change;
+    if (state->mpi_state.rank == 0) {
+        max_rel_change = nr_post_update_impl<StatEqPrecision>(state, args);
+    }
+    MPI_Bcast(&max_rel_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    return max_rel_change;
+#else
     return nr_post_update_impl<StatEqPrecision>(state, args);
+#endif
 }

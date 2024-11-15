@@ -238,7 +238,7 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
         }
     );
     probes_to_compute.emplace_back(probes_to_compute_c0);
-    fmt::println(
+    state.println(
         "C0 Active Probes {}/{} ({}%)",
         num_active,
         prev_active.extent(0)*prev_active.extent(1),
@@ -311,7 +311,7 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
         auto probes_to_compute_ci = probes_to_compute_h.createDeviceCopy();
         probes_to_compute.emplace_back(probes_to_compute_ci);
         prev_active = curr_active;
-        fmt::println(
+        state.println(
             "C{} Active Probes {}/{} ({}%)",
             cascade_idx,
             num_active,

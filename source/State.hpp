@@ -11,6 +11,8 @@
 #include "DexrtConfig.hpp"
 #include "MpiWrapper.hpp"
 
+#include <fmt/core.h>
+
 #ifdef DEXRT_USE_MAGMA
     #include <magma_v2.h>
 #endif
@@ -43,6 +45,13 @@ struct State {
 #ifdef DEXRT_USE_MAGMA
     magma_queue_t magma_queue;
 #endif
+
+    template <typename ...T>
+    void println(fmt::format_string<T...> fmt, T&&... args) const {
+        // if (mpi_state.rank == 0) {
+            fmt::println(fmt, std::forward<T>(args)...);
+        // }
+    }
 };
 
 #else
