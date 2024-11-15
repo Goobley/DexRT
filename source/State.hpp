@@ -48,9 +48,9 @@ struct State {
 
     template <typename ...T>
     void println(fmt::format_string<T...> fmt, T&&... args) const {
-        // if (mpi_state.rank == 0) {
+        if (mpi_state.rank == 0) {
             fmt::println(fmt, std::forward<T>(args)...);
-        // }
+        }
     }
 };
 
