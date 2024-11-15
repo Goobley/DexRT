@@ -35,3 +35,6 @@ cmake -DCMAKE_CXX_COMPILER=g++     \
 # run as
 # mpirun -mca btl_smcuda_use_cuda_ipc 0 -np 2 ./dexrt
 # when running on one gpu. Cuda ipc is frequently causing issues where it gets stuck and the array gets filled with zeros during a broadcast?? Probably not an issue with multiple cards?
+# problem seems similar to: https://github.com/open-mpi/ompi/issues/6001 (albeit on same GPU)
+# See also: https://docs.open-mpi.org/en/v5.0.x/tuning-apps/networking/cuda.html#can-i-get-additional-cuda-debug-level-information-at-run-time
+# "In addition, it is assumed that CUDA IPC is possible when running on the same GPU, and this is typically true." In this instance, it was not.
