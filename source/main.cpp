@@ -9,6 +9,7 @@
 #include "CrtafParser.hpp"
 #include "Collisions.hpp"
 #include "Voigt.hpp"
+#include "NgAcceleration.hpp"
 #include "StaticFormalSolution.hpp"
 #include "DynamicFormalSolution.hpp"
 #include "ChargeConservation.hpp"
@@ -927,7 +928,12 @@ int main(int argc, char** argv) {
                 }
 
                 state.println("-- Non-LTE Iterations --");
-                while ((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) {
+                NgAccelerator ng;
+                if (config.ng.enable) {
+                    ng.init(state.pops.extent(1), state.pops.extent(0), config.ng.threshold);
+                }
+                bool accelerated = false;
+                while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
                     state.println("==== FS {} ====", i);
                     compute_nh0(state);
 
@@ -988,6 +994,12 @@ int main(int argc, char** argv) {
                         }
                         if (actually_conserve_pressure) {
                             wave_dist.update_nh_tot(&state);
+                        }
+                    }
+                    if (config.ng.enable) {
+                        accelerated = ng.accelerate(state, max_change);
+                        if (accelerated) {
+                            state.println("  ~~ Ng Acceleration! (📉 or 💣) ~~");
                         }
                     }
                     wave_dist.update_pops(&state);
