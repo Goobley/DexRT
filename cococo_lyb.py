@@ -10,11 +10,11 @@ except:
     plt.ion()
 
 prefix = "jk20200550"
-atmos_file = "JackHighRes/jk20200550_dex.nc"
-synth_file = "JackHighRes/jk20200550_synth.nc"
-ray_file = "JackHighRes/jk20200550_ray.nc"
+atmos_file = "JackHighRes/jk20200550_dex_zerovy.nc"
+synth_file = "JackHighRes/jk20200550_synth_zerovy.nc"
+ray_file = "JackHighRes/jk20200550_ray_zerovy.nc"
 # cfn_file = "JackHighRes/jk20200550_ray_lyb_cfn_all_active.nc"
-cfn_file = "JackHighRes/jk20200550_ray_lyb_cfn.nc"
+cfn_file = "JackHighRes/jk20200550_ray_lyb_cfn_zerovy.nc"
 lambda0_idx = 1
 # cfn_file = "JackHighRes/jk20200550_ray_caiik_cfn.nc"
 # lambda0_idx = 11
@@ -89,6 +89,7 @@ def tonemap(c, mode='aces', Gamma=2.2, bias=None):
         color = np.tensordot(acesIn, c, axes=(0, 0))
         color = RRTAndODTFit(color)
         color = np.tensordot(acesOut, color, axes=(0, 0))
+        print(np.min(color))
         color = np.clip(color, 0.0, 1.0)
         color = LinearTosRGB(color * bias)
         color = np.clip(color, 0.0, 1.0)
@@ -120,13 +121,13 @@ def coco_plot(
     if log:
         cococfn[cococfn > 0.0] = np.log10(cococfn[cococfn > 0.0])
 
+    if not normalise_channels_individually:
+        max_val = np.nanmax(cococfn)
+        min_val = np.nanmin(cococfn)
     for chan in range(cococfn.shape[0]):
         if normalise_channels_individually:
             max_val = np.nanmax(cococfn[chan])
             min_val = np.nanmin(cococfn[chan])
-        else:
-            max_val = np.nanmax(cococfn)
-            min_val = np.nanmin(cococfn)
 
         cococfn[chan] = (cococfn[chan] - min_val) / (max_val - min_val) * max_pre_tonemap
 
@@ -184,10 +185,14 @@ if __name__ == "__main__":
     dex_means = np.array([lambda0+offset for offset in J_offsets])
     dex_stds = np.array([0.01, 0.01, 0.01])
     dex_wave = np.array(dex.wavelength)
+    wave_weights = np.zeros_like(dex_wave)
+    wave_weights[1:-1] = 0.5 * (dex_wave[2:] - dex_wave[:-2])
     start_idx = np.searchsorted(dex_wave, lambda0 + 3 * min(offsets))
     end_idx = np.searchsorted(dex_wave, lambda0 + 3 * max(offsets))
     dex_wave = dex_wave[start_idx:end_idx]
+    wave_weights = wave_weights[start_idx:end_idx]
     dex_filt = np.exp(-0.5 * ((dex_wave[:, None] - dex_means[None, :]) / dex_stds[None, :])**2)
+    dex_filt *= wave_weights[:, None]
     dex_filt /= dex_filt.sum(axis=0)
 
     fig, ax = plt.subplot_mosaic(
@@ -216,7 +221,7 @@ if __name__ == "__main__":
     line = line_emission.reshape(101, 1, 2048)
     coco_plot(ax["B"], line, filt, edges=(slit_pos_edges, [0.0, 1.0]))
     coco_cfn = coco_plot(ax["C"], full_cfn, filt, thresh=0.8e-10, log=True, edges=(slit_pos_edges, z_pos_edges))
-    coco_J = coco_plot(ax["D"], dex.J[start_idx:end_idx], dex_filt, edges=(slit_pos_edges, z_pos_edges[::-1]), thresh=1e-3)
+    coco_J = coco_plot(ax["D"], dex.J[start_idx:end_idx], dex_filt, edges=(slit_pos_edges, z_pos_edges[::-1]), thresh=None, normalise_channels_individually=True)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[0, :], 'r', lw=0.5, alpha=0.8)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[2, :], 'b', lw=0.5, alpha=0.8)
     ax["C"].plot(slit_pos_cen / 1e6, tau1_lines[1, :], 'w', lw=0.5, alpha=0.8)
@@ -239,8 +244,8 @@ if __name__ == "__main__":
     ax["D"].set_xlabel(r"Slit position [Mm]")
     ax["D"].text(slit_pos_edges[0] + 1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
 
-    fig.savefig("cocoplot_lyb.png", dpi=400)
-    fig.savefig("cocoplot_lyb.pdf", dpi=400)
+    fig.savefig("cocoplot_lyb_zerovy.png", dpi=400)
+    fig.savefig("cocoplot_lyb_zerovy.pdf", dpi=400)
 
     fig, ax = plt.subplots(2, 3, layout="constrained", sharex=True, sharey=True, figsize=(9, 6))
     ax[0, 0].pcolormesh(slit_pos_edges, z_pos_edges, coco_cfn[:, :, 0], cmap="plasma", rasterized=True)
@@ -260,6 +265,6 @@ if __name__ == "__main__":
     ax[1, 2].set_xlabel("Slit position [Mm]")
     ax[0, 0].text(slit_pos_edges[0] + 1.11, 27, r"$C_I$", c="#dddddd", verticalalignment="top")
     ax[1, 0].text(slit_pos_edges[0] + 1.11, 27, r"$J$", c="#dddddd", verticalalignment="top")
-    fig.savefig("cocoplot_lyb_colourblind_panels.png", dpi=400)
-    fig.savefig("cocoplot_lyb_colourblind_panels.pdf", dpi=400)
+    fig.savefig("cocoplot_lyb_colourblind_panels_zerovy.png", dpi=400)
+    fig.savefig("cocoplot_lyb_colourblind_panels_zerovy.pdf", dpi=400)
 
