@@ -930,7 +930,15 @@ int main(int argc, char** argv) {
                 state.println("-- Non-LTE Iterations --");
                 NgAccelerator ng;
                 if (config.ng.enable) {
-                    ng.init(state.pops.extent(1), state.pops.extent(0), config.ng.threshold);
+                    ng.init(
+                        NgAccelArgs{
+                            .num_level=(i64)state.pops.extent(0),
+                            .num_space=(i64)state.pops.extent(1),
+                            .accel_tol=config.ng.threshold,
+                            .lower_tol=config.ng.lower_threshold
+                        }
+                    );
+                    ng.accelerate(state, FP(1.0));
                 }
                 bool accelerated = false;
                 while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {

@@ -31,6 +31,7 @@ struct DexrtMipConfig {
 struct DexrtNgConfig {
     bool enable = true;
     fp_t threshold = FP(5e-2);
+    fp_t lower_threshold = FP(2e-4);
 };
 
 struct DexrtConfig {
@@ -154,6 +155,9 @@ inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
         }
         if (ng_config["threshold"]) {
             config.ng.threshold = ng_config["threshold"].as<fp_t>();
+        }
+        if (ng_config["lower_threshold"]) {
+            config.ng.lower_threshold = ng_config["lower_threshold"].as<fp_t>();
         }
     }
 }

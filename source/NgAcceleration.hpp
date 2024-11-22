@@ -3,17 +3,25 @@
 
 #include "Config.hpp"
 
+struct NgAccelArgs {
+    i64 num_level;
+    i64 num_space;
+    fp_t accel_tol = FP(5e-2);
+    fp_t lower_tol = FP(2e-4);
+};
+
 struct NgAccelerator {
     static constexpr i32 num_steps = 5;
     i32 step_count = 0;
     Fp3dHost pops; // [level, iter_step, ks]
-    // Accelerate if all of the previous steps are below this threshold
-    fp_t accel_tol = FP(3e-2);
+    fp_t accel_tol = FP(5e-2); /// Accelerate if all of the previous steps are below this threshold
+    fp_t lower_tol = FP(2e-4); /// Tolerance below which to disable acceleration
     yakl::SArray<fp_t, 1, num_steps> change_hist;
 
-    bool init(i64 num_space, i32 num_level, fp_t accel_tol_=FP(3e-2)) {
-        pops = decltype(pops)("ng_pops", num_level, num_steps, num_space);
-        accel_tol = accel_tol_;
+    bool init(const NgAccelArgs& args) {
+        pops = decltype(pops)("ng_pops", args.num_level, num_steps, args.num_space);
+        accel_tol = args.accel_tol;
+        lower_tol = args.lower_tol;
         return true;
     }
 
@@ -31,7 +39,7 @@ struct NgAccelerator {
     /// Copies the populations into the Ng buffer and returns true if they were
     /// updated (i.e. accelerated)
     bool accelerate(const State& state, fp_t change) {
-        yakl::timer_start("Ng Accleration");
+        yakl::timer_start("Ng Acceleration");
         i32 storage_idx = step_count % num_steps;
         step_count += 1;
 
@@ -40,14 +48,14 @@ struct NgAccelerator {
         copy_pops(storage_idx, pops_in);
         change_hist(storage_idx) = change;
 
-        if (storage_idx != num_steps - 1) {
-            yakl::timer_stop("Ng Accleration");
+        if (storage_idx != num_steps - 1 || change < lower_tol) {
+            yakl::timer_stop("Ng Acceleration");
             return false;
         }
 
         for (int i = 0; i < num_steps; ++i) {
             if (change_hist(i) > accel_tol) {
-                yakl::timer_stop("Ng Accleration");
+                yakl::timer_stop("Ng Acceleration");
                 return false;
             }
         }
@@ -150,7 +158,7 @@ struct NgAccelerator {
         );
         yakl::fence();
 
-        yakl::timer_stop("Ng Accleration");
+        yakl::timer_stop("Ng Acceleration");
         return true;
     }
 
