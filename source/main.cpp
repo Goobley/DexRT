@@ -821,10 +821,10 @@ int main(int argc, char** argv) {
 
     const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
 
+    Kokkos::initialize();
     yakl::init(
         yakl::InitConfig()
-            .set_pool_initial_mb(config.mem_pool_initial_gb * 1024)
-            .set_pool_grow_mb(config.mem_pool_grow_gb * 1024)
+            .set_pool_size_mb(config.mem_pool_initial_gb * 1024)
     );
 
     {
@@ -1082,6 +1082,7 @@ int main(int argc, char** argv) {
     }
     yakl::finalize();
     finalise_mpi();
+    Kokkos::finalize();
     return 0;
 
 }

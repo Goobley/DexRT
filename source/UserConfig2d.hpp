@@ -1,6 +1,7 @@
 #if !defined(DEXRT_USER_CONFIG_HPP)
 #define DEXRT_USER_CONFIG_HPP
 #include "YAKL.h"
+#include "stdint.h"
 
 /*== Precision ================================================================*/
 

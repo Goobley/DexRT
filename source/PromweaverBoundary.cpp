@@ -27,12 +27,10 @@ PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryTyp
     Fp2d I("pw_bc", wavelength.extent(0), mu_dim);
     result.I = I;
 
-    using yakl::c::parallel_outer;
-    using yakl::c::parallel_inner;
-    parallel_outer(
+    parallel_for(
         "Promweaver BC Interp",
-        SimpleBounds<1>(wavelength.extent(0)),
-        YAKL_LAMBDA (int la, yakl::InnerHandler inner_handler) {
+        SimpleBounds<2>(wavelength.extent(0), mu_dim),
+        YAKL_LAMBDA (int la, int mu) {
             fp_t wavelength_sought = wavelength(la);
             // NOTE(cmo): Corresponding fractional index in loaded data
             int idx, idxp;
@@ -49,13 +47,7 @@ PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryTyp
                 t = (wl(idxp) - wavelength_sought) / (wl(idxp) - wl(idx));
             }
 
-            parallel_inner(
-                SimpleBounds<1>(mu_dim),
-                [&la, &idx, &idxp, &t, &I, &I_load] (int mu) {
-                    I(la, mu) = t * I_load(idx, mu) + (FP(1.0) - t) * I_load(idxp, mu);
-                },
-                inner_handler
-            );
+            I(la, mu) = t * I_load(idx, mu) + (FP(1.0) - t) * I_load(idxp, mu);
         }
     );
     yakl::fence();

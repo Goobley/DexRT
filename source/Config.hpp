@@ -11,6 +11,32 @@
 #define DEXRT_DEBUG
 #endif
 
+#define YAKL_INLINE KOKKOS_INLINE_FUNCTION
+#define YAKL_LAMBDA KOKKOS_LAMBDA
+#define YAKL_CLASS_LAMBDA KOKKOS_CLASS_LAMBDA
+#define YAKL_EXECUTE_ON_HOST_ONLY KOKKOS_IF_ON_HOST
+
+namespace yakl {
+    inline void fence() {
+        Kokkos::fence();
+    }
+
+    template <typename str>
+    YAKL_INLINE void yakl_throw(str in) {
+        Kokkos::abort(in);
+    }
+
+    template <typename T>
+    YAKL_INLINE void atomicAdd(T& ref, T update) {
+        Kokkos::atomic_add(&ref, update);
+    }
+
+    template <typename T>
+    YAKL_INLINE void atomicMax(T& ref, T update) {
+        Kokkos::atomic_max(&ref, update);
+    }
+}
+
 // NOTE(cmo): The spacing between probes on cascade 0 -- this isn't actually configurable
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 

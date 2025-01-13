@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/nvhpc:24.5-devel-cuda12.4-ubuntu22.04
+FROM nvcr.io/nvidia/nvhpc:24.5-devel-cuda12.4-ubuntu22.04 AS cuda-base
 
 RUN apt update && apt install -y git curl libcurl4-openssl-dev
 
@@ -20,7 +20,7 @@ RUN ./docker_setup.sh
 
 WORKDIR /src/kokkos
 COPY docker_deps/kokkos/docker_setup.sh .
-RUN ./docker_setup.sh "-DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_AMPERE86=ON -DKokkos_ENABLE_THREADS=ON -DKokkos_ENABLE_CUDA_CONSTEXPR=ON -DKokkos_ENABLE_CUDA_LAMBDA=ON -DCMAKE_BUILD_TYPE=Release"
+RUN ./docker_setup.sh "-DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_AMPERE86=ON -DKokkos_ENABLE_THREADS=ON -DKokkos_ENABLE_CUDA_CONSTEXPR=ON -DKokkos_ENABLE_CUDA_LAMBDA=ON -DKokkos_ENABLE_COMPILE_AS_CMAKE_LANGUAGE=ON -DCMAKE_BUILD_TYPE=Release"
 
 WORKDIR /src/conda
 COPY docker_deps/miniconda/docker_setup.sh .

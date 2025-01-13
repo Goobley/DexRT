@@ -12,20 +12,23 @@
 // template <typename T>
 // using DexComplex = cuda::std::complex<T>;
 // #elif defined(YAKL_ARCH_HIP)
-#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
-#include <thrust/complex.h>
+
+// #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
+// #include <thrust/complex.h>
+// template <typename T>
+// using DexComplex = thrust::complex<T>;
+// #elif defined(YAKL_ARCH_SYCL)
+// #define SYCL_EXT_ONEAPI_COMPLEX
+// #include <sycl/ext/oneapi/experimental/complex/complex.hpp>
+// template <typename T>
+// using DexComplex = sycl::_V1::ext::oneapi::experimental::complex<T>;
+// #else
+// #include <complex>
+// template <typename T>
+// using DexComplex = std::complex<T>;
+// #endif
 template <typename T>
-using DexComplex = thrust::complex<T>;
-#elif defined(YAKL_ARCH_SYCL)
-#define SYCL_EXT_ONEAPI_COMPLEX
-#include <sycl/ext/oneapi/experimental/complex/complex.hpp>
-template <typename T>
-using DexComplex = sycl::_V1::ext::oneapi::experimental::complex<T>;
-#else
-#include <complex>
-template <typename T>
-using DexComplex = std::complex<T>;
-#endif
+using DexComplex = Kokkos::complex<T>;
 
 namespace DexVoigtDetail {
 template <typename T>
@@ -33,13 +36,15 @@ YAKL_INLINE T cexp(const T& x) {
 // #if defined(YAKL_ARCH_CUDA)
     // return cuda::std::exp(x);
 // #elif defined(YAKL_ARCH_HIP)
-#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
-    return thrust::exp(x);
-#elif defined(YAKL_ARCH_SYCL)
-    return sycl::_V1::ext::oneapi::experimental::exp(x);
-#else
-    return std::exp(x);
-#endif
+
+// #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
+//     return thrust::exp(x);
+// #elif defined(YAKL_ARCH_SYCL)
+//     return sycl::_V1::ext::oneapi::experimental::exp(x);
+// #else
+//     return std::exp(x);
+// #endif
+    return Kokkos::exp(x);
 }
 }
 
@@ -219,39 +224,39 @@ struct VoigtProfile {
 
 
     void compute_samples() {
-        if constexpr (!USE_LUT) {
-            throw std::runtime_error("No samples to compute: not using LUT for Voigt");
-        }
-        // NOTE(cmo): Allocate storage
-        yakl::Array<Voigt_t, 2, mem_space> mut_samples("Voigt Samples", a_range.n, v_range.n);
+        // if constexpr (!USE_LUT) {
+        //     throw std::runtime_error("No samples to compute: not using LUT for Voigt");
+        // }
+        // // NOTE(cmo): Allocate storage
+        // yakl::Array<Voigt_t, 2, mem_space> mut_samples("Voigt Samples", a_range.n, v_range.n);
 
-        auto voigt_sample = YAKL_CLASS_LAMBDA (int ia, int iv) {
-            T a = a_range.min + ia * a_step;
-            T v = v_range.min + iv * v_step;
-            auto sample = humlicek_voigt(a, v);
-            return sample;
-        };
+        // auto voigt_sample = YAKL_CLASS_LAMBDA (int ia, int iv) {
+        //     T a = a_range.min + ia * a_step;
+        //     T v = v_range.min + iv * v_step;
+        //     auto sample = humlicek_voigt(a, v);
+        //     return sample;
+        // };
 
-        // NOTE(cmo): Compute storage
-        // Man, C++ makes this a pain sometimes... unless I'm just being an idiot.
-        using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
-        if constexpr (mem_space == yakl::memDevice) {
-            parallel_for(
-                "compute voigt",
-                SimpleBounds<2>(a_range.n, v_range.n),
-                YAKL_LAMBDA (int ia, int iv) {
-                    const auto sample = voigt_sample(ia, iv);
-                    mut_samples(ia, iv) = result_t::value(sample);
-                }
-            );
-        } else {
-            for (int ia = 0; ia < a_range.n; ++ia) {
-                for (int iv = 0; iv < v_range.n; ++iv) {
-                    mut_samples(ia, iv) = result_t::value(voigt_sample(ia, iv));
-                }
-            }
-        }
-        samples = mut_samples;
+        // // NOTE(cmo): Compute storage
+        // // Man, C++ makes this a pain sometimes... unless I'm just being an idiot.
+        // using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
+        // if constexpr (mem_space == yakl::memDevice) {
+        //     parallel_for(
+        //         "compute voigt",
+        //         SimpleBounds<2>(a_range.n, v_range.n),
+        //         YAKL_LAMBDA (int ia, int iv) {
+        //             const auto sample = voigt_sample(ia, iv);
+        //             mut_samples(ia, iv) = result_t::value(sample);
+        //         }
+        //     );
+        // } else {
+        //     for (int ia = 0; ia < a_range.n; ++ia) {
+        //         for (int iv = 0; iv < v_range.n; ++iv) {
+        //             mut_samples(ia, iv) = result_t::value(voigt_sample(ia, iv));
+        //         }
+        //     }
+        // }
+        // samples = mut_samples;
     }
 
     /// Simple clamped bilinear lookup
@@ -278,7 +283,7 @@ struct VoigtProfile {
         const i32 max_a = a_range.n - 1;
         const i32 max_v = v_range.n - 1;
         if (frac_a < FP(0.0) || frac_a >= (a_range.n - 1)) {
-            ia = yakl::min(yakl::max(ia, 0), a_range.n - 1);
+            ia = std::min(std::max(ia, 0), a_range.n - 1);
             iap = ia;
             ta = FP(1.0);
             tap = FP(0.0);
@@ -294,7 +299,7 @@ struct VoigtProfile {
         T tv, tvp;
 
         if (frac_v < FP(0.0) || frac_v >= (v_range.n - 1)) {
-            iv = yakl::min(yakl::max(iv, 0), v_range.n - 1);
+            iv = std::min(std::max(iv, 0), v_range.n - 1);
             ivp = iv;
             tv = FP(1.0);
             tvp = FP(0.0);

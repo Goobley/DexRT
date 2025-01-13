@@ -881,8 +881,7 @@ void cascade_i_25d(
             if constexpr (dev_compute_alo) {
                 dev_casc_state.alo(lin_idx) = average_ri.alo;
             }
-        },
-        yakl::LaunchConfig<128>()
+        }
     );
     yakl::fence();
     if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {

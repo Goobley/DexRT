@@ -896,7 +896,7 @@ void lte_pops(
 
     for (int i = 1; i < n_level; ++i) {
         FPT pop_i = pops(i, x) * pop_0;
-        pop_i = yakl::max(pop_i, std::numeric_limits<FPT>::min());
+        pop_i = std::max(pop_i, std::numeric_limits<FPT>::min());
         pops(i, x) = pop_i;
     }
 }
