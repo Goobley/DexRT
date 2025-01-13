@@ -19,6 +19,10 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
 endif()
 include_directories(YAKL)
 
+if (${DEXRT_USE_MPI})
+    find_package(MPI REQUIRED)
+endif()
+
 list(APPEND DEX_SOURCE_FILES
     "source/main.cpp"
     "source/StaticFormalSolution.cpp"
@@ -72,12 +76,20 @@ target_include_directories(dexrt SYSTEM PUBLIC
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
+    "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_link_libraries(dexrt "${LDLIBS}")
 target_link_libraries(dexrt fmt::fmt)
 target_link_libraries(dexrt yaml-cpp::yaml-cpp)
 target_link_libraries(dexrt argparse)
 target_link_libraries(dexrt git_version)
+if (${DEXRT_USE_MPI})
+    message(${MPI_CXX_COMPILER})
+    target_include_directories(dexrt PRIVATE ${MPI_CXX_INCLUDE_PATH})
+    target_link_libraries(dexrt MPI::MPI_CXX)
+    target_compile_definitions(dexrt PUBLIC HAVE_MPI)
+endif()
+
 set_target_properties(dexrt PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
@@ -99,6 +111,7 @@ target_include_directories(dexrt_ray SYSTEM PUBLIC
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
+    "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_link_libraries(dexrt_ray "${LDLIBS}")
 target_link_libraries(dexrt_ray fmt::fmt)

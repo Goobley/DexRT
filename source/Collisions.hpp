@@ -29,7 +29,7 @@ YAKL_INLINE void collision_omega(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp3d& C,
+    const GammaMat& C,
     const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
     i64 ks
@@ -46,7 +46,7 @@ YAKL_INLINE void collision_ci(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp3d& C,
+    const GammaMat& C,
     const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
     i64 ks
@@ -70,7 +70,7 @@ YAKL_INLINE void collision_ce(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp3d& C,
+    const GammaMat& C,
     const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
     i64 ks
@@ -88,7 +88,7 @@ YAKL_INLINE void collision_cp(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp3d& C,
+    const GammaMat& C,
     const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
     i64 ks
@@ -108,7 +108,7 @@ YAKL_INLINE void collision_ch(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp3d& C,
+    const GammaMat& C,
     const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
     i64 ks
@@ -126,7 +126,7 @@ YAKL_INLINE void collision_charge_exc_h(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp3d& C,
+    const GammaMat& C,
     const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
     i64 ks
@@ -142,7 +142,7 @@ YAKL_INLINE void collision_charge_exc_p(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const Fp3d& C,
+    const GammaMat& C,
     const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
     i64 ks
@@ -159,7 +159,7 @@ YAKL_INLINE void collision_charge_exc_p(
 YAKL_INLINE void compute_collisions(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
-    const Fp3d& C,
+    const GammaMat& C,
     const FpConst2d& n_star,
     const HPartFn<>& nh_lte,
     i64 ks

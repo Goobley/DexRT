@@ -95,6 +95,8 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         JasUnpack((*state), pops);
         const auto& Gamma = state->Gamma[ia];
         // GammaT has shape [ks, Nlevel, Nlevel]
+        const fp_t abundance = state->adata_host.abundance(ia);
+        const auto nh_tot = state->atmos.nh_tot;
         yakl::Array<T, 3, yakl::memDevice> GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
         yakl::Array<T*, 1, yakl::memDevice> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0));
         yakl::Array<T, 2, yakl::memDevice> new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));
@@ -105,6 +107,8 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", new_pops.extent(0));
         yakl::Array<i32, 1, yakl::memDevice> info("info", new_pops.extent(0));
 
+        constexpr bool fractional_pops = true;
+
         const int pops_start = state->adata_host.level_start(ia);
         const int num_level = state->adata_host.num_level(ia);
         parallel_for(
@@ -113,12 +117,14 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             YAKL_LAMBDA (int64_t k) {
                 fp_t n_max = FP(0.0);
                 i_elim(k) = 0;
-                n_total(k) = FP(0.0);
+                // n_total(k) = FP(0.0);
+                n_total(k) = nh_tot(k) * abundance;
                 for (int i = pops_start; i < pops_start + num_level; ++i) {
                     fp_t n = pops(i, k);
-                    n_total(k) += n;
+                    // n_total(k) += n;
                     if (n > n_max) {
                         i_elim(k) = i - pops_start;
+                        n_max = n;
                     }
                 }
             }
@@ -153,7 +159,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
             YAKL_LAMBDA (i64 k, int i) {
                 if (i_elim(k) == i) {
-                    new_pops(k, i) = n_total(k);
+                    if (fractional_pops) {
+                        new_pops(k, i) = FP(1.0);
+                    } else {
+                        new_pops(k, i) = n_total(k);
+                    }
                 } else {
                     new_pops(k, i) = FP(0.0);
                 }
@@ -187,7 +197,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             "What type are you asking the poor stat_eq function to use internally?"
         );
         if constexpr (std::is_same_v<T, f32>) {
-            magma_sgesv_batched_small(
+            magma_sgesv_batched(
                 GammaT.extent(1),
                 1,
                 GammaT_ptrs.get_data(),
@@ -200,7 +210,20 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 state->magma_queue
             );
         } else if constexpr (std::is_same_v<T, f64>) {
-            magma_dgesv_batched_small(
+            constexpr bool iterative_improvement = true;
+            constexpr int num_refinement_passes = 2;
+            yakl::Array<T, 3, yakl::memDevice> gamma_copy;
+            yakl::Array<T, 2, yakl::memDevice> lhs_copy;
+            yakl::Array<T, 2, yakl::memDevice> residuals;
+            yakl::Array<T*, 1, yakl::memDevice> residuals_ptrs;
+            if constexpr (iterative_improvement) {
+                gamma_copy = GammaT.createDeviceCopy();
+                lhs_copy = new_pops.createDeviceCopy();
+                residuals = new_pops.createDeviceCopy();
+                residuals_ptrs = decltype(residuals_ptrs)("residuals_ptrs", residuals.extent(0));
+            }
+
+            magma_dgesv_batched(
                 GammaT.extent(1),
                 1,
                 GammaT_ptrs.get_data(),
@@ -212,10 +235,72 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 GammaT.extent(0),
                 state->magma_queue
             );
+            magma_queue_sync(state->magma_queue);
+
+            if constexpr (iterative_improvement) {
+                for (int refinement = 0; refinement < num_refinement_passes; ++refinement) {
+                    // r_i = b_i
+                    parallel_for(
+                        "Copy residual",
+                        SimpleBounds<2>(residuals.extent(0), residuals.extent(1)),
+                        YAKL_LAMBDA (i64 ks, i32 i) {
+                            if (i == 0) {
+                                residuals_ptrs(ks) = &residuals(ks, 0);
+                            }
+                            residuals(ks, i) = lhs_copy(ks, i);
+                        }
+                    );
+                    yakl::fence();
+                    // r -= A x
+                    magmablas_dgemv_batched_strided(
+                        MagmaNoTrans,
+                        residuals.extent(1),
+                        residuals.extent(1),
+                        -1,
+                        gamma_copy.get_data(),
+                        gamma_copy.extent(1),
+                        square(gamma_copy.extent(1)),
+                        new_pops.get_data(),
+                        1,
+                        new_pops.extent(1),
+                        1,
+                        residuals.get_data(),
+                        1,
+                        residuals.extent(1),
+                        residuals.extent(0),
+                        state->magma_queue
+                    );
+                    magma_queue_sync(state->magma_queue);
+
+                    // Solve A x' = r
+                    magma_dgetrs_batched(
+                        MagmaNoTrans,
+                        GammaT.extent(1),
+                        1,
+                        GammaT_ptrs.get_data(),
+                        GammaT.extent(1),
+                        ipiv_ptrs.get_data(),
+                        residuals_ptrs.get_data(),
+                        residuals.extent(1),
+                        GammaT.extent(0),
+                        state->magma_queue
+                    );
+                    magma_queue_sync(state->magma_queue);
+
+                    // x += x'
+                    parallel_for(
+                        "Apply residual",
+                        SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
+                        YAKL_LAMBDA (i64 ks, i32 i) {
+                            new_pops(ks, i) += residuals(ks, i);
+                        }
+                    );
+                    yakl::fence();
+                }
+            }
         }
 
         magma_queue_sync(state->magma_queue);
-        yakl::fence();
         parallel_for(
             "info check",
             SimpleBounds<1>(info.extent(0)),
@@ -235,7 +320,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 if (pops(pops_start + i, k) < ignore_change_below_ntot_frac * n_total(k)) {
                     change = FP(0.0);
                 } else {
-                    change = std::abs(FP(1.0) - pops(pops_start + i, k) / new_pops(k, i));
+                    if (fractional_pops) {
+                        change = std::abs(FP(1.0) - pops(pops_start + i, k) / (new_pops(k, i) * n_total(k)));
+                    } else {
+                        change = std::abs(FP(1.0) - pops(pops_start + i, k) / new_pops(k, i));
+                    }
                 }
                 max_rel_change(k, i) = change;
             }
@@ -245,7 +334,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             "Copy & transpose pops",
             SimpleBounds<2>(new_pops.extent(1), new_pops.extent(0)),
             YAKL_LAMBDA (int i, int64_t k) {
-                pops(pops_start + i, k) = new_pops(k, i);
+                if (fractional_pops) {
+                    pops(pops_start + i, k) = new_pops(k, i) * n_total(k);
+                } else {
+                    pops(pops_start + i, k) = new_pops(k, i);
+                }
             }
         );
 
@@ -256,7 +349,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         yakl::fence();
         int max_change_level = max_change_loc % new_pops.extent(1);
         max_change_loc /= new_pops.extent(1);
-        fmt::println(
+        state->println(
             "     Max Change (ele: {}, Z={}): {} (@ l={}, ks={}) [T={}]",
             ia,
             state->adata_host.Z(ia),
@@ -277,5 +370,14 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) { r
 #endif
 
 fp_t stat_eq(State* state, const StatEqOptions& args) {
+#ifdef HAVE_MPI
+    fp_t max_rel_change;
+    if (state->mpi_state.rank == 0) {
+        max_rel_change = stat_eq_impl<StatEqPrecision>(state, args);
+    }
+    MPI_Bcast(&max_rel_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    return max_rel_change;
+#else
     return stat_eq_impl<StatEqPrecision>(state, args);
+#endif
 }

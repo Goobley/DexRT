@@ -28,6 +28,12 @@ struct DexrtMipConfig {
     std::vector<int> mip_levels;
 };
 
+struct DexrtNgConfig {
+    bool enable = true;
+    fp_t threshold = FP(5e-2);
+    fp_t lower_threshold = FP(2e-4);
+};
+
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_initial_gb = FP(2.0);
@@ -52,6 +58,7 @@ struct DexrtConfig {
     int initial_lambda_iterations = 2;
     int max_cascade = 5;
     DexrtMipConfig mip_config;
+    DexrtNgConfig ng;
 };
 
 inline void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
@@ -140,6 +147,18 @@ inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     }
     if (file["final_dense_fs"]) {
         config.final_dense_fs = file["final_dense_fs"].as<bool>();
+    }
+    if (file["ng_config"]) {
+        auto ng_config = file["ng_config"];
+        if (ng_config["enable"]) {
+            config.ng.enable = ng_config["enable"].as<bool>();
+        }
+        if (ng_config["threshold"]) {
+            config.ng.threshold = ng_config["threshold"].as<fp_t>();
+        }
+        if (ng_config["lower_threshold"]) {
+            config.ng.lower_threshold = ng_config["lower_threshold"].as<fp_t>();
+        }
     }
 }
 

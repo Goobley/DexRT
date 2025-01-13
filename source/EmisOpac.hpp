@@ -27,6 +27,10 @@ struct UV {
     fp_t Vij;
 };
 
+struct UvOptions {
+    bool include_hc_4pi = true;
+};
+
 struct LineParams {
     /// Doppler width [nm]
     fp_t dop_width;
@@ -183,11 +187,15 @@ YAKL_INLINE UV compute_uv(
     const CompLine<fp_t>& l,
     const VoigtProfile<fp_t, false, mem_space>& phi,
     const LineParams& params,
-    fp_t lambda
+    fp_t lambda,
+    const UvOptions& opts = UvOptions()
 ) {
     using namespace ConstantsFP;
     // [kJ]
-    const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
+    fp_t hnu_4pi = FP(1.0) / lambda;
+    if (opts.include_hc_4pi) {
+        hnu_4pi *= hc_kJ_nm / four_pi;
+    }
     const fp_t a = damping_from_gamma(params.gamma, lambda, params.dop_width);
     const fp_t v = ((lambda - l.lambda0) + (params.vel * l.lambda0) / c) / params.dop_width;
     // [nm-1]
@@ -206,12 +214,16 @@ template <int mem_space=yakl::memDevice>
 YAKL_INLINE UV compute_uv(
     const CompCont<fp_t>& cont,
     const ContParams<mem_space>& params,
-    fp_t lambda
+    fp_t lambda,
+    const UvOptions& opts = UvOptions()
 ) {
     using namespace ConstantsFP;
     UV result;
     // [m2]
     result.Vij = params.sigma_grid.sigma(params.la - cont.blue_idx);
+    if (!opts.include_hc_4pi) {
+        result.Vij /= (hc_kJ_nm / four_pi);
+    }
     // [m2]
     result.Vji = params.thermal_ratio * result.Vij;
     // [kW nm2 / (nm3 m2)] = [kW nm-1] (sr implicit)
@@ -222,7 +234,8 @@ YAKL_INLINE UV compute_uv(
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE UV compute_uv_line(
     const EmisOpacState<T, mem_space>& args,
-    int line_idx
+    int line_idx,
+    const UvOptions& opts = UvOptions()
 ) {
     JasUnpack(args, adata, profile, la, k, atmos);
     const fp_t lambda = adata.wavelength(la);
@@ -237,7 +250,8 @@ YAKL_INLINE UV compute_uv_line(
         l,
         profile,
         params,
-        lambda
+        lambda,
+        opts
     );
     return uv;
 }
@@ -245,7 +259,8 @@ YAKL_INLINE UV compute_uv_line(
 template <typename T=fp_t, int mem_space=yakl::memDevice>
 YAKL_INLINE UV compute_uv_cont(
     const EmisOpacState<T, mem_space>& args,
-    int cont_idx
+    int cont_idx,
+    const UvOptions& opts = UvOptions()
 ) {
     JasUnpack(args, adata, profile, la, n, n_star_scratch, k, atmos, mode, active_set);
     const auto& n_star = args.n_star_scratch;
@@ -262,7 +277,8 @@ YAKL_INLINE UV compute_uv_cont(
     const UV uv = compute_uv<mem_space>(
         cont,
         params,
-        lambda
+        lambda,
+        opts
     );
     return uv;
 }

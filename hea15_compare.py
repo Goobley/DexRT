@@ -11,10 +11,10 @@ except:
 
 prefix = "jk20200550"
 proxy_file = "jk20200550_hea2015_proxy.nc"
-atmos_file = "JackHighRes/jk20200550_dex.nc"
-ray_file = "JackHighRes/jk20200550_ray.nc"
+atmos_file = "JackHighRes/jk20200550_dex_zerovy.nc"
+ray_file = "JackHighRes/jk20200550_ray_zerovy.nc"
 lambda0 = 656.4691622298104
-xlims = (-0.14, 0.14)
+ylims = (-0.14, 0.14)
 
 def centres_to_edges(x):
     centres = 0.5 * (x[1:] + x[:-1])
@@ -55,43 +55,40 @@ if __name__ == "__main__":
     slit_pos_fil = vox_slit_pos_fil * voxel_scale + float(atmos.offset_x)
 
     cmap = "magma"
-    fig, ax = plt.subplots(2, 3, constrained_layout=True, figsize=(8, 5.5))
+    fig, ax = plt.subplots(2, 3, constrained_layout=True, figsize=(8, 4))
 
     prom_min = min(proxy.intens_prom.min(), ray_prom.min())
     prom_max = max(proxy.intens_prom.max(), ray_prom.max())
 
     mappable = ax[0, 0].pcolormesh(
-        wave_edges,
         centres_to_edges(slit_pos_prom) / 1e6,
-        proxy.intens_prom,
+        wave_edges,
+        ray_prom,
         cmap=cmap,
         vmin=prom_min,
         vmax=prom_max,
         rasterized=True,
     )
-    ax[0, 0].set_xlim(*xlims)
-    ax[0, 0].set_title("Hea15 Hα Proxy")
-    ax[0, 0].set_ylabel("Slit Position [Mm]")
-    ax[0, 0].tick_params(
-        labelbottom=False,
-    )
+    # fig.colorbar(mappable, ax=ax[0, 1])
+    ax[0, 0].set_ylim(*ylims)
+    ax[0, 0].set_title("DexRT Hα")
+    ax[0, 0].set_ylabel(r"$\Delta\lambda$ [nm]")
 
     mappable = ax[0, 1].pcolormesh(
-        wave_edges,
         centres_to_edges(slit_pos_prom) / 1e6,
-        ray_prom.T,
+        wave_edges,
+        proxy.intens_prom.T,
         cmap=cmap,
         vmin=prom_min,
         vmax=prom_max,
         rasterized=True,
     )
-    fig.colorbar(mappable, ax=ax[0, 1])
-    ax[0, 1].set_xlim(*xlims)
-    ax[0, 1].set_title("DexRT Hα")
+    ax[0, 1].set_ylim(*ylims)
+    ax[0, 1].set_title("Hea15 Hα Proxy")
     ax[0, 1].tick_params(
         labelleft=False,
-        labelbottom=False,
     )
+
 
     def density_plot(ax, proxy_flat, ray_flat, proxy_tau=None, ray_tau=None, tau_threshold=1e-6):
         if proxy_tau is not None and ray_tau is not None:
@@ -133,8 +130,9 @@ if __name__ == "__main__":
         )
         ax.legend(frameon=False, loc="lower right")
         ax.plot([min_intens, max_intens], [min_intens, max_intens], '--k')
-        ax.set_xlabel("Hea15 Hα proxy")
-        ax.set_ylabel("DexRT Hα specific intensity")
+        # ax.set_xlabel("Hea15 Hα proxy")
+        # ax.set_ylabel("DexRT Hα specific intensity")
+        ax.tick_params(labelbottom=False, labelleft=False, bottom=False, left=False)
 
     proxy_prom_flat = np.array(proxy.intens_prom).flatten()
     proxy_prom_tau_flat = np.array(proxy.tau_prom).flatten()
@@ -149,37 +147,37 @@ if __name__ == "__main__":
     )
     ax[0, 2].set_title("Correlation")
 
-
     fil_min = min(proxy.intens_fil.min(), ray_fil.min())
     fil_max = max(proxy.intens_fil.max(), ray_fil.max())
     mappable = ax[1, 0].pcolormesh(
-        wave_edges,
         centres_to_edges(slit_pos_fil) / 1e6,
-        proxy.intens_fil,
+        wave_edges,
+        ray_fil,
         cmap=cmap,
         vmin=fil_min,
         vmax=fil_max,
         rasterized=True,
     )
-    ax[1, 0].set_xlim(*xlims)
-    ax[1, 0].set_ylabel("Slit Position [Mm]")
-    ax[1, 0].set_xlabel(r"$\Delta\lambda$ [nm]")
+    ax[1, 0].set_ylim(*ylims)
+    ax[1, 0].set_ylabel(r"$\Delta\lambda$ [nm]")
+    ax[1, 0].set_xlabel("Slit Position [Mm]")
 
     mappable = ax[1, 1].pcolormesh(
-        wave_edges,
         centres_to_edges(slit_pos_fil) / 1e6,
-        ray_fil.T,
+        wave_edges,
+        proxy.intens_fil.T,
         cmap=cmap,
         vmin=fil_min,
         vmax=fil_max,
         rasterized=True,
     )
-    fig.colorbar(mappable, ax=ax[1, 1])
-    ax[1, 1].set_xlim(*xlims)
-    ax[1, 1].set_xlabel(r"$\Delta\lambda$ [nm]")
+    # fig.colorbar(mappable, ax=ax[1, 1])
+    ax[1, 1].set_ylim(*ylims)
+    ax[1, 1].set_xlabel("Slit Position [Mm]")
     ax[1, 1].tick_params(
         labelleft=False,
     )
+
 
     proxy_fil_flat = np.array(proxy.intens_fil).flatten()
     proxy_fil_tau_flat = np.array(proxy.tau_fil).flatten()

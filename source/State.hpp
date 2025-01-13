@@ -9,6 +9,9 @@
 #include "BoundaryType.hpp"
 #include "BlockMap.hpp"
 #include "DexrtConfig.hpp"
+#include "MpiWrapper.hpp"
+
+#include <fmt/core.h>
 
 #ifdef DEXRT_USE_MAGMA
     #include <magma_v2.h>
@@ -16,6 +19,7 @@
 
 struct State {
     DexrtConfig config;
+    MpiState mpi_state;
     CascadeStorage c0_size;
     GivenEmisOpac given_state;
     SparseAtmosphere atmos;
@@ -34,13 +38,20 @@ struct State {
     Fp2d pops; /// [num_level, ks]
     Fp2d J; /// [num_wave, ks] -- if we're paging J to cpu, the first axis is wave_batch
     Fp2dHost J_cpu; /// [num_wave, ks] -- The full J in host memory, if we're paging after each batch.
-    std::vector<Fp3d> Gamma; /// [i, j, ks]
+    std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;
 #ifdef DEXRT_USE_MAGMA
     magma_queue_t magma_queue;
 #endif
+
+    template <typename ...T>
+    void println(fmt::format_string<T...> fmt, T&&... args) const {
+        if (mpi_state.rank == 0) {
+            fmt::println(fmt, std::forward<T>(args)...);
+        }
+    }
 };
 
 #else

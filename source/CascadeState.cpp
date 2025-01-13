@@ -18,7 +18,7 @@ bool CascadeState::init(const State& state, int max_cascades) {
         for (int i = 0; i <= max_cascades; ++i) {
             auto dims = cascade_size(c0, i);
             IntervalLength length = cascade_interval_length(max_cascades, i);
-            fmt::println("Cascade {}: {}x{} {} directions [{}->{}]", i, dims.num_probes(0), dims.num_probes(1), dims.num_flat_dirs * PROBE0_NUM_RAYS, length.from, length.to);
+            state.println("Cascade {}: {}x{} {} directions [{}->{}]", i, dims.num_probes(0), dims.num_probes(1), dims.num_flat_dirs * PROBE0_NUM_RAYS, length.from, length.to);
             max_entries = std::max(max_entries, cascade_entries(dims));
         }
         for (int i = 0; i < 2; ++i) {

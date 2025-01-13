@@ -95,12 +95,13 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
     const i64 min_k = min_loc % wphi.extent(1);
     auto wphi_host = wphi.createHostCopy();
     yakl::fence();
-    fmt::print("  Lowest normalisation factors (wphi): ");
+    std::string output("  Lowest normalisation factors (wphi): ");
     for (int kr = 0; kr < wphi_host.extent(0); ++kr) {
-        fmt::print("{:e}", wphi_host(kr, min_k));
+        output += fmt::format("{:e}", wphi_host(kr, min_k));
         if (kr != wphi_host.extent(0) - 1) {
-            fmt::print(", ");
+            output += ", ";
         }
     }
-    fmt::println("\n");
+    output += "\n";
+    state.println("{}", output);
 }

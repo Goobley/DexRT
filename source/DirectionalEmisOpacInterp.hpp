@@ -132,7 +132,7 @@ struct DirectionalEmisOpacInterp {
         i32 count = thermal_vel_frac_over_count.createHostCopy()(0);
         if (count > 0) {
             fp_t max_frac = max_thermal_vel_frac.createHostCopy()(0);
-            fmt::println(
+            state.println(
                 "{} cells with velocity sampling over {} thermal widths (max: {}), consider increasing INTERPOLATE_DIRECTIONAL_BINS",
                 count,
                 INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH,

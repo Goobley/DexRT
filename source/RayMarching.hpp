@@ -484,14 +484,8 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             fp_t source_fn = eta_s / chi_s;
 
             fp_t tau_mu = tau * inv_sin_theta;
-            fp_t edt;
-            if (tau_mu < FP(1e-2)) {
-                edt = FP(1.0) + (-tau_mu) + FP(0.5) * square(tau_mu);
-                one_m_edt = -std::expm1(-tau_mu);
-            } else {
-                edt = std::exp(-tau_mu);
-                one_m_edt = -std::expm1(-tau_mu);
-            }
+            fp_t edt = std::exp(-tau_mu);
+            one_m_edt = -std::expm1(-tau_mu);
             result.tau += tau_mu;
             result.I = result.I * edt + source_fn * one_m_edt;
         }
