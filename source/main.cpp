@@ -1081,8 +1081,8 @@ int main(int argc, char** argv) {
         finalize_state(&state);
     }
     yakl::finalize();
-    finalise_mpi();
     Kokkos::finalize();
+    finalise_mpi();
     return 0;
 
 }

@@ -11,6 +11,8 @@ typedef yakl::Array<fp_t, 3, memDevice> Fp3d;
 typedef yakl::Array<fp_t, 4, memDevice> Fp4d;
 typedef yakl::Array<fp_t, 5, memDevice> Fp5d;
 
+typedef Kokkos::View<fp_t**> Fp2dK;
+
 typedef yakl::Array<fp_t const, 1, memDevice> FpConst1d;
 typedef yakl::Array<fp_t const, 2, memDevice> FpConst2d;
 typedef yakl::Array<fp_t const, 3, memDevice> FpConst3d;
@@ -175,15 +177,15 @@ struct Atmosphere {
     fp_t offset_y = FP(0.0);
     fp_t offset_z = FP(0.0);
     bool moving = false;
-    Fp2d temperature;
-    Fp2d pressure;
-    Fp2d ne;
-    Fp2d nh_tot;
-    Fp2d nh0;
-    Fp2d vturb;
-    Fp2d vx;
-    Fp2d vy;
-    Fp2d vz;
+    Fp2dK temperature;
+    Fp2dK pressure;
+    Fp2dK ne;
+    Fp2dK nh_tot;
+    Fp2dK nh0;
+    Fp2dK vturb;
+    Fp2dK vx;
+    Fp2dK vy;
+    Fp2dK vz;
 };
 
 struct SparseAtmosphere {

@@ -4,15 +4,15 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include <string>
-#include "YAKL_netcdf.h"
+#include "ExYakl/netcdf.hpp"
 #include "JasPP.hpp"
 
 inline Atmosphere load_atmos(const std::string& path) {
-    typedef yakl::Array<f32, 1, yakl::memHost> Fp1dLoad;
-    typedef yakl::Array<f32, 2, yakl::memHost> Fp2dLoad;
+    typedef Kokkos::View<f32*, Kokkos::HostSpace> Fp1dLoad;
+    typedef Kokkos::View<f32**, Kokkos::HostSpace> Fp2dLoad;
 
-    yakl::SimpleNetCDF nc;
-    nc.open(path, yakl::NETCDF_MODE_READ);
+    ExYakl::SimpleNetCDF nc;
+    nc.open(path, ExYakl::NETCDF_MODE_READ);
     int x_dim = nc.getDimSize("x");
     int z_dim = nc.getDimSize("z");
 
@@ -56,14 +56,19 @@ inline Atmosphere load_atmos(const std::string& path) {
         .offset_z = offset_z
     };
 #ifdef DEXRT_SINGLE_PREC
-    result.temperature = temperature.createDeviceCopy();
-    result.pressure = pressure.createDeviceCopy();
-    result.ne = ne.createDeviceCopy();
-    result.nh_tot = nh_tot.createDeviceCopy();
-    result.vturb = vturb.createDeviceCopy();
-    result.vx = vx.createDeviceCopy();
-    result.vy = vy.createDeviceCopy();
-    result.vz = vz.createDeviceCopy();
+    auto copy_via_mirror = [&] (auto& dest, auto src) {
+        auto dest_mirror = Kokkos::create_mirror_view(dest);
+        Kokkos::deep_copy(dest_mirror, src);
+        Kokkos::deep_copy(dest, dest_mirror);
+    };
+    copy_via_mirror(result.temperature, temperature);
+    copy_via_mirror(result.pressure, pressure);
+    copy_via_mirror(result.ne, ne);
+    copy_via_mirror(result.nh_tot, nh_tot);
+    copy_via_mirror(result.vturb, vturb);
+    copy_via_mirror(result.vx, vx);
+    copy_via_mirror(result.vy, vy);
+    copy_via_mirror(result.vz, vz);
 #else
     result.temperature = Fp2d("temperature", z_dim, x_dim);
     result.pressure = Fp2d("pressure", z_dim, x_dim);
@@ -107,10 +112,10 @@ inline Atmosphere load_atmos(const std::string& path) {
 
 #endif
 
-    result.nh0 = Fp2d("nh0", z_dim, x_dim);
-    result.nh0 = FP(0.0);
+    result.nh0 = Fp2dK("nh0", z_dim, x_dim);
+    Kokkos::deep_copy(result.nh0, FP(0.0));
 
-    Fp2d vel2 = result.vz.createDeviceObject();
+    Fp2dK vel2("vel2", result.vz.layout());
     parallel_for(
         SimpleBounds<2>(z_dim, x_dim),
         YAKL_LAMBDA (int z, int x) {
@@ -118,7 +123,21 @@ inline Atmosphere load_atmos(const std::string& path) {
         }
     );
     yakl::fence();
-    result.moving = yakl::intrinsics::maxval(vel2) > FP(10.0);
+
+    // result.moving = yakl::intrinsics::maxval(vel2) > FP(10.0);
+
+    fp_t max_vel_2;
+    Kokkos::Max<fp_t> max_reducer(max_vel_2);
+    Kokkos::parallel_reduce(
+        "Max",
+        Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {vel2.extent(0), vel2.extent(1)}),
+        KOKKOS_LAMBDA (const fp_t& x, fp_t& running_max) {
+            max_reducer.join(running_max, x);
+        },
+        max_reducer
+    );
+
+    result.moving = max_vel_2 > FP(10.0);
 
     return result;
 }
