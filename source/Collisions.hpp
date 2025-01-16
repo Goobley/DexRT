@@ -12,16 +12,8 @@ YAKL_INLINE fp_t interp_rates(
     const CompColl<fp_t>& coll,
     i64 ks
 ) {
-    yakl::Array<fp_t const, 1, yakl::memDevice> temp_view(
-        "temp_view",
-        &atom.temperature(coll.start_idx),
-        coll.end_idx - coll.start_idx
-    );
-    yakl::Array<fp_t const, 1, yakl::memDevice> rate_view(
-        "rate_view",
-        &atom.coll_rates(coll.start_idx),
-        coll.end_idx - coll.start_idx
-    );
+    auto temp_view = Kokkos::subview(atom.temperature, Kokkos::make_pair(coll.start_idx, coll.end_idx));
+    auto rate_view = Kokkos::subview(atom.coll_rates, Kokkos::make_pair(coll.start_idx, coll.end_idx));
     return interp(atmos.temperature(ks), temp_view, rate_view);
 }
 

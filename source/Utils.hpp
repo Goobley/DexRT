@@ -43,11 +43,11 @@ YAKL_INLINE constexpr auto cube(T t) -> decltype(t * t * t) {
     return t * t * t;
 }
 
-/** Upper bound on YAKL arrays, returns index rather than iterator.
+/** Upper bound on Kokkos views, returns index rather than iterator.
  *
 */
-template <typename T, int mem_space=yakl::memDevice>
-YAKL_INLINE int upper_bound(const yakl::Array<const T, 1, mem_space>& x, T value) {
+template <typename T>
+YAKL_INLINE int upper_bound(const KView<const T*>& x, T value) {
     int count = x.extent(0);
     int step;
     const T* first = &x(0);
@@ -74,11 +74,11 @@ YAKL_INLINE int upper_bound(const yakl::Array<const T, 1, mem_space>& x, T value
 /** Linearly interpolate a sample (at alpha) from array y on grid x. Assumes x is positive sorted.
  * Clamps on ends.
 */
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t>
 YAKL_INLINE T interp(
     T alpha,
-    const yakl::Array<T const, 1, mem_space>& x,
-    const yakl::Array<T const, 1, mem_space>& y
+    const Kokkos::View<const T*>& x,
+    const Kokkos::View<const T*>& y
 ) {
     if (alpha <= x(0)) {
         return y(0);
@@ -96,71 +96,80 @@ YAKL_INLINE T interp(
     return t * y(idx) + (FP(1.0) - t) * y(idxp);
 }
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
-YAKL_INLINE T interp(
-    T alpha,
-    const yakl::Array<T, 1, mem_space>& x,
-    const yakl::Array<T, 1, mem_space>& y
-) {
-    // NOTE(cmo): The optimiser should eat this up
-    // Narrator: It did not (because of the mutex in OpenMP land)
-    yakl::Array<T const, 1, mem_space> xx(x);
-    yakl::Array<T const, 1, mem_space> yy(y);
-    return interp(alpha, xx, yy);
-}
+// template <typename T=fp_t, int mem_space=yakl::memDevice>
+// YAKL_INLINE T interp(
+//     T alpha,
+//     const yakl::Array<T, 1, mem_space>& x,
+//     const yakl::Array<T, 1, mem_space>& y
+// ) {
+//     // NOTE(cmo): The optimiser should eat this up
+//     // Narrator: It did not (because of the mutex in OpenMP land)
+//     yakl::Array<T const, 1, mem_space> xx(x);
+//     yakl::Array<T const, 1, mem_space> yy(y);
+//     return interp(alpha, xx, yy);
+// }
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t>
 YAKL_INLINE
-yakl::Array<const u16, 1, mem_space> slice_active_set(const AtomicData<T, mem_space>& atom, int la) {
+KView<const u16*> slice_active_set(const AtomicData<T>& atom, int la) {
     // NOTE(cmo): I have no idea why the original slicing (taking
     // &atom.active_lines(start)) as the pointer wasn't working... and was
     // causing "host array being accessed in a device kernel". This seems fine on nvhpc12.1
     const int start = atom.active_lines_start(la);
     const int end = atom.active_lines_end(la);
-    yakl::Array<const u16, 1, mem_space> result(
-        "active set",
-        atom.active_lines.data() + start,
-        end - start
-    );
+    auto result = Kokkos::subview(atom.active_lines, std::make_pair(start, end));
     return result;
 }
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t>
 YAKL_INLINE
-yakl::Array<const u16, 1, mem_space> slice_active_cont_set(const AtomicData<T, mem_space>& atom, int la) {
+KView<const u16*> slice_active_cont_set(const AtomicData<T>& atom, int la) {
     const int start = atom.active_cont_start(la);
     const int end = atom.active_cont_end(la);
-    yakl::Array<const u16, 1, mem_space> result(
-        "active set",
-        atom.active_cont.data() + start,
-        end - start
-    );
+    auto result = Kokkos::subview(atom.active_lines, std::make_pair(start, end));
     return result;
 }
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 YAKL_INLINE
 Fp3d slice_pops(const Fp3d& pops, const AtomicData<T, mem_space>& adata, int ia) {
-    Fp3d result(
-        "pops_slice",
-        pops.data() + adata.level_start(ia) * (pops.extent(1) * pops.extent(2)),
-        adata.num_level(ia),
-        pops.extent(1),
-        pops.extent(2)
-    );
+    int start = adata.level_start(ia);
+    int num = adata.num_level(ia);
+    auto result = Kokkos::subview(pops, std::make_pair(start, start+num), Kokkos::ALL(), Kokkos::ALL());
     return result;
 }
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 YAKL_INLINE
 Fp2d slice_pops(const Fp2d& pops, const AtomicData<T, mem_space>& adata, int ia) {
-    Fp2d result(
-        "pops_slice",
-        pops.data() + adata.level_start(ia) * pops.extent(1),
-        adata.num_level(ia),
-        pops.extent(1)
-    );
+    int start = adata.level_start(ia);
+    int num = adata.num_level(ia);
+    auto result = Kokkos::subview(pops, std::make_pair(start, start+num), Kokkos::ALL());
     return result;
+}
+
+template <class ViewType>
+auto create_device_copy(const ViewType& arr) -> KView<typename ViewType::data_type, DefaultMemSpace> {
+    KView<typename ViewType::data_type, DefaultMemSpace> result(arr.label(), arr.layout());
+    // NOTE(cmo): Directly accessible or layout is the same... no intermediate needed
+    if constexpr (
+        Kokkos::SpaceAccessibility<typename ViewType::memory_space, DefaultMemSpace>::accessible || std::is_same_v<typename ViewType::array_layout, typename decltype(result)::array_layout>
+    ) {
+        Kokkos::deep_copy(result, arr);
+    // NOTE(cmo): Need intermediate
+    } else {
+        auto host_temp = Kokkos::create_mirror_view(result);
+        Kokkos::deep_copy(host_temp, arr);
+        Kokkos::deep_copy(result, host_temp);
+    }
+    return result;
+}
+
+/// Returns a flattened (but unowned) View, i.e. points to the same memory
+template <class ViewType>
+auto collapse(const ViewType& arr) {
+    assert(arr.span_is_contiguous() && "Span must be contiguous to be collapsed");
+    return KView<typename ViewType::value_type*, typename ViewType::memory_space>(arr.data(), arr.size());
 }
 
 /// Converts from normalised direction vector dir to polar angles [theta, phi] -- theta relative to y

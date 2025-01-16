@@ -193,7 +193,7 @@ namespace DexVoigtDetail {
     };
 }
 
-template <typename T=fp_t, bool Complex=false, int mem_space=yakl::memDevice, bool USE_LUT=false>
+template <typename T=fp_t, bool Complex=false, typename mem_space=DefaultMemSpace, bool USE_LUT=false>
 struct VoigtProfile {
     /// Voigt function interpolator (if USE_LUT = true), otherwise using humlicek_wei24_voigt direct evaluation.
     /// Assumes a and v are linearly interpolated on linspaces, so
@@ -206,7 +206,7 @@ struct VoigtProfile {
     T a_step;
     Linspace v_range;
     T v_step;
-    yakl::Array<Voigt_t const, 2, mem_space> samples;
+    KView<const Voigt_t**, mem_space> samples;
 
     VoigtProfile() {};
     VoigtProfile(Linspace _a_range, Linspace _v_range) :

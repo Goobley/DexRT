@@ -3,33 +3,24 @@
 #include "Config.hpp"
 #include "Constants.hpp"
 
-constexpr auto memDevice = yakl::memDevice;
-// constexpr auto memDevice = yakl::memHost;
-typedef yakl::Array<fp_t, 1, memDevice> Fp1d;
-typedef yakl::Array<fp_t, 2, memDevice> Fp2d;
-typedef yakl::Array<fp_t, 3, memDevice> Fp3d;
-typedef yakl::Array<fp_t, 4, memDevice> Fp4d;
-typedef yakl::Array<fp_t, 5, memDevice> Fp5d;
+typedef Kokkos::LayoutRight Layout;
+template <class T, typename... Args>
+using KView = Kokkos::View<T, Layout, Args...>;
 
-typedef Kokkos::View<fp_t**> Fp2dK;
+typedef Kokkos::DefaultExecutionSpace::memory_space DefaultMemSpace;
+typedef Kokkos::HostSpace HostSpace;
 
-typedef yakl::Array<fp_t const, 1, memDevice> FpConst1d;
-typedef yakl::Array<fp_t const, 2, memDevice> FpConst2d;
-typedef yakl::Array<fp_t const, 3, memDevice> FpConst3d;
-typedef yakl::Array<fp_t const, 4, memDevice> FpConst4d;
-typedef yakl::Array<fp_t const, 5, memDevice> FpConst5d;
+typedef Kokkos::View<fp_t*    , Layout> Fp1d;
+typedef Kokkos::View<fp_t**   , Layout> Fp2d;
+typedef Kokkos::View<fp_t***  , Layout> Fp3d;
+typedef Kokkos::View<fp_t**** , Layout> Fp4d;
+typedef Kokkos::View<fp_t*****, Layout> Fp5d;
 
-typedef yakl::Array<fp_t, 1, yakl::memHost> Fp1dHost;
-typedef yakl::Array<fp_t, 2, yakl::memHost> Fp2dHost;
-typedef yakl::Array<fp_t, 3, yakl::memHost> Fp3dHost;
-typedef yakl::Array<fp_t, 4, yakl::memHost> Fp4dHost;
-typedef yakl::Array<fp_t, 5, yakl::memHost> Fp5dHost;
-
-typedef yakl::Array<fp_t const, 1, yakl::memHost> FpConst1dHost;
-typedef yakl::Array<fp_t const, 2, yakl::memHost> FpConst2dHost;
-typedef yakl::Array<fp_t const, 3, yakl::memHost> FpConst3dHost;
-typedef yakl::Array<fp_t const, 4, yakl::memHost> FpConst4dHost;
-typedef yakl::Array<fp_t const, 5, yakl::memHost> FpConst5dHost;
+typedef Kokkos::View<const fp_t*    , Layout> FpConst1d;
+typedef Kokkos::View<const fp_t**   , Layout> FpConst2d;
+typedef Kokkos::View<const fp_t***  , Layout> FpConst3d;
+typedef Kokkos::View<const fp_t**** , Layout> FpConst4d;
+typedef Kokkos::View<const fp_t*****, Layout> FpConst5d;
 
 typedef yakl::SArray<fp_t, 1, 2> vec2;
 typedef yakl::SArray<fp_t, 1, 3> vec3;
@@ -47,9 +38,14 @@ struct Coord2 {
     }
 };
 
-using yakl::c::parallel_for;
-using yakl::c::SimpleBounds;
-using yakl::Dims;
+template <int R, typename... Args>
+using MDRange = Kokkos::MDRangePolicy<Kokkos::Rank<R, Kokkos::Iterate::Right, Kokkos::Iterate::Right>, Args...>;
+
+using Kokkos::parallel_for;
+
+// using yakl::c::parallel_for;
+// using yakl::c::SimpleBounds;
+// using yakl::Dims;
 struct State;
 
 enum class DexrtMode {
@@ -177,15 +173,15 @@ struct Atmosphere {
     fp_t offset_y = FP(0.0);
     fp_t offset_z = FP(0.0);
     bool moving = false;
-    Fp2dK temperature;
-    Fp2dK pressure;
-    Fp2dK ne;
-    Fp2dK nh_tot;
-    Fp2dK nh0;
-    Fp2dK vturb;
-    Fp2dK vx;
-    Fp2dK vy;
-    Fp2dK vz;
+    Fp2d temperature;
+    Fp2d pressure;
+    Fp2d ne;
+    Fp2d nh_tot;
+    Fp2d nh0;
+    Fp2d vturb;
+    Fp2d vx;
+    Fp2d vy;
+    Fp2d vz;
 };
 
 struct SparseAtmosphere {
@@ -447,37 +443,37 @@ inline bool has_gamma(AtomicTreatment t) {
     );
 }
 
-template <typename T=fp_t, int mem_space=memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 struct CompAtom {
     T mass;
     T abundance;
     int Z;
     AtomicTreatment treatment = AtomicTreatment::Active;
 
-    yakl::Array<T const, 1, mem_space> energy;
-    yakl::Array<T const, 1, mem_space> g;
-    yakl::Array<T const, 1, mem_space> stage;
+    KView<const T*, mem_space> energy;
+    KView<const T*, mem_space> g;
+    KView<const T*, mem_space> stage;
 
-    yakl::Array<CompLine<T> const, 1, mem_space> lines;
+    KView<const CompLine<T>*, mem_space> lines;
     /// Shared array of broadeners
-    yakl::Array<ScaledExponentsBroadening<T> const, 1, mem_space> broadening;
+    KView<const ScaledExponentsBroadening<T>*, mem_space> broadening;
 
-    yakl::Array<T const, 1, mem_space> wavelength;
-    yakl::Array<CompCont<T> const, 1, mem_space> continua;
-    yakl::Array<T const, 1, mem_space> sigma;
+    KView<const T*, mem_space> wavelength;
+    KView<const CompCont<T>*, mem_space> continua;
+    KView<const T*, mem_space> sigma;
 
-    yakl::Array<CompColl<T> const, 1, mem_space> collisions;
-    yakl::Array<T const, 1, mem_space> temperature;
-    yakl::Array<T const, 1, mem_space> coll_rates;
+    KView<const CompColl<T>*, mem_space> collisions;
+    KView<const T*, mem_space> temperature;
+    KView<const T*, mem_space> coll_rates;
 };
 
-template <typename T=fp_t, int mem_space=memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 struct LteTerms {
     T mass;
     T abundance;
-    yakl::Array<T const, 1, mem_space> energy;
-    yakl::Array<T const, 1, mem_space> g;
-    yakl::Array<T const, 1, mem_space> stage;
+    KView<const T*, mem_space> energy;
+    KView<const T*, mem_space> g;
+    KView<const T*, mem_space> stage;
 };
 
 
@@ -488,47 +484,47 @@ struct TransitionIndex {
 };
 
 
-template <typename T=fp_t, int mem_space=memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 struct AtomicData {
-    yakl::Array<AtomicTreatment const, 1, mem_space> treatment; // num_atom
-    yakl::Array<T const, 1, mem_space> mass; // num_atom
-    yakl::Array<T const, 1, mem_space> abundance; // num_atom
-    yakl::Array<int const, 1, mem_space> Z; // num_atom
+    KView<const AtomicTreatment*, mem_space> treatment; // num_atom
+    KView<const T*, mem_space> mass; // num_atom
+    KView<const T*, mem_space> abundance; // num_atom
+    KView<const int*, mem_space> Z; // num_atom
 
-    yakl::Array<int const, 1, mem_space> level_start; // num_atom
-    yakl::Array<int const, 1, mem_space> num_level; // num_atom
-    yakl::Array<int const, 1, mem_space> line_start; // num_atom
-    yakl::Array<int const, 1, mem_space> num_line; // num_atom
-    yakl::Array<int const, 1, mem_space> cont_start; // num_atom
-    yakl::Array<int const, 1, mem_space> num_cont; // num_atom
-    yakl::Array<int const, 1, mem_space> coll_start; // num_atom
-    yakl::Array<int const, 1, mem_space> num_coll; // num_atom
+    KView<const int*, mem_space> level_start; // num_atom
+    KView<const int*, mem_space> num_level; // num_atom
+    KView<const int*, mem_space> line_start; // num_atom
+    KView<const int*, mem_space> num_line; // num_atom
+    KView<const int*, mem_space> cont_start; // num_atom
+    KView<const int*, mem_space> num_cont; // num_atom
+    KView<const int*, mem_space> coll_start; // num_atom
+    KView<const int*, mem_space> num_coll; // num_atom
 
-    yakl::Array<T const, 1, mem_space> energy; // num_atom * num_level
-    yakl::Array<T const, 1, mem_space> g; // num_atom * num_level
-    yakl::Array<T const, 1, mem_space> stage; // num_atom * num_level
+    KView<const T*, mem_space> energy; // num_atom * num_level
+    KView<const T*, mem_space> g; // num_atom * num_level
+    KView<const T*, mem_space> stage; // num_atom * num_level
 
-    yakl::Array<CompLine<T> const, 1, mem_space> lines; // num_atom * num_line
+    KView<const CompLine<T>*, mem_space> lines; // num_atom * num_line
     /// Shared array of broadeners
-    yakl::Array<ScaledExponentsBroadening<T> const, 1, mem_space> broadening;
+    KView<const ScaledExponentsBroadening<T>*, mem_space> broadening;
 
-    yakl::Array<CompCont<T> const, 1, mem_space> continua; // num_atom * num_cont
-    yakl::Array<T const, 1, mem_space> sigma;
+    KView<const CompCont<T>*, mem_space> continua; // num_atom * num_cont
+    KView<const T*, mem_space> sigma;
 
-    yakl::Array<T const, 1, mem_space> wavelength;
-    yakl::Array<TransitionIndex const, 1, mem_space> governing_trans;
+    KView<const T*, mem_space> wavelength;
+    KView<const TransitionIndex*, mem_space> governing_trans;
 
-    yakl::Array<CompColl<T> const, 1, mem_space> collisions; // num_atom * num_coll
-    yakl::Array<T const, 1, mem_space> temperature;
-    yakl::Array<T const, 1, mem_space> coll_rates;
+    KView<const CompColl<T>*, mem_space> collisions; // num_atom * num_coll
+    KView<const T*, mem_space> temperature;
+    KView<const T*, mem_space> coll_rates;
 
     // Active set stuff
-    yakl::Array<u16 const, 1, mem_space> active_lines;
-    yakl::Array<i32 const, 1, mem_space> active_lines_start;
-    yakl::Array<i32 const, 1, mem_space> active_lines_end;
-    yakl::Array<u16 const, 1, mem_space> active_cont;
-    yakl::Array<i32 const, 1, mem_space> active_cont_start;
-    yakl::Array<i32 const, 1, mem_space> active_cont_end;
+    KView<const u16*, mem_space> active_lines;
+    KView<const i32*, mem_space> active_lines_start;
+    KView<const i32*, mem_space> active_lines_end;
+    KView<const u16*, mem_space> active_cont;
+    KView<const i32*, mem_space> active_cont_start;
+    KView<const i32*, mem_space> active_cont_end;
 };
 
 struct MipmapComputeState {

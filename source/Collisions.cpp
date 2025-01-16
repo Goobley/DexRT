@@ -4,11 +4,10 @@ void compute_collisions_to_gamma(State* state) {
     const auto& atmos = state->atmos;
     const auto& Gamma_store = state->Gamma;
     const auto& nh_lte = state->nh_lte;
-    const auto atmos_dims = atmos.temperature.get_dimensions();
     const auto& mr_block_map = state->mr_block_map;
 
     // TODO(cmo): Get rid of this!
-    auto n_star = state->pops.createDeviceObject();
+    Fp2d n_star("n_star", state->pops.layout());
     // NOTE(cmo): Zero Gamma before we start to refill it.
     for (int i = 0; i < Gamma_store.size(); ++i) {
         Gamma_store[i] = FP(0.0);

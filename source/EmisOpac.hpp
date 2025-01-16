@@ -50,40 +50,39 @@ struct AtmosPointParams {
     fp_t nh0 = FP(0.0);
 };
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 struct EmisOpacState {
     const AtomicData<T, mem_space>& adata;
     const VoigtProfile<T, false, mem_space>& profile;
     int la;
-    const yakl::Array<fp_t, 2, mem_space>& n;
-    const yakl::Array<fp_t, 2, mem_space>& n_star_scratch = {};
+    const KView<fp_t**, mem_space>& n;
+    const KView<fp_t**, mem_space>& n_star_scratch = {};
     int64_t k;
     const AtmosPointParams& atmos;
-    const yakl::Array<u16 const, 1, mem_space>& active_set = {};
-    const yakl::Array<u16 const, 1, mem_space>& active_set_cont = {};
+    const KView<const u16*, mem_space>& active_set = {};
+    const KView<const u16*, mem_space>& active_set_cont = {};
     bool update_n_star = true;
     EmisOpacMode mode = EmisOpacMode::All;
 };
 
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 struct EmisOpacSpecState {
     const AtomicData<T, mem_space>& adata;
     const VoigtProfile<T, false, mem_space>& profile;
     fp_t lambda;
-    // const yakl::Array<fp_t const, 2, mem_space>& n;
-    const yakl::Array<fp_t, 2, mem_space>& n;
-    const yakl::Array<fp_t, 2, mem_space>& n_star_scratch;
+    const KView<fp_t**, mem_space>& n;
+    const KView<fp_t**, mem_space>& n_star_scratch;
     int64_t k;
     const AtmosPointParams& atmos;
 };
 
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 struct SigmaInterp {
-    yakl::Array<fp_t const, 1, mem_space> sigma;
+    KView<fp_t*, mem_space> sigma;
 };
 
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 struct ContParams {
     /// n_i* / n_j* exp(-h nu / (k_B T)) (gij in RH/Lw)
     fp_t thermal_ratio;
@@ -92,16 +91,11 @@ struct ContParams {
     SigmaInterp<mem_space> sigma_grid;
 };
 
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 YAKL_INLINE SigmaInterp<mem_space> get_sigma(const AtomicData<fp_t, mem_space>& adata, const CompCont<fp_t>& cont) {
     SigmaInterp<mem_space> result;
 
-    result.sigma = yakl::Array<fp_t const, 1, mem_space>(
-        "cont_sigma",
-        &adata.sigma(cont.sigma_start),
-        // TODO(cmo): Can we do away with sigma end? The array length should be the same as red_idx - blue_idx
-        cont.sigma_end - cont.sigma_start
-    );
+    result.sigma = Kokkos::subview(adata.sigma, Kokkos::make_pair(cont.sigma_start, cont.sigma_end));
     return result;
 }
 
@@ -149,10 +143,10 @@ YAKL_INLINE fp_t damping_from_gamma(fp_t gamma, fp_t lambda, fp_t dop_width) {
  * \param nh0
  * \return gamma [rad / s]
 */
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 YAKL_INLINE fp_t gamma_from_broadening(
     const CompLine<fp_t>& line,
-    const yakl::Array<ScaledExponentsBroadening<fp_t> const, 1, mem_space>& broadeners,
+    const KView<const ScaledExponentsBroadening<fp_t>*, mem_space>& broadeners,
     fp_t temperature,
     fp_t ne,
     fp_t nh0
@@ -182,7 +176,7 @@ YAKL_INLINE fp_t gamma_from_broadening(
 }
 
 
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 YAKL_INLINE UV compute_uv(
     const CompLine<fp_t>& l,
     const VoigtProfile<fp_t, false, mem_space>& phi,
@@ -210,7 +204,7 @@ YAKL_INLINE UV compute_uv(
     return result;
 }
 
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 YAKL_INLINE UV compute_uv(
     const CompCont<fp_t>& cont,
     const ContParams<mem_space>& params,
@@ -231,7 +225,7 @@ YAKL_INLINE UV compute_uv(
     return result;
 }
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 YAKL_INLINE UV compute_uv_line(
     const EmisOpacState<T, mem_space>& args,
     int line_idx,
@@ -256,7 +250,7 @@ YAKL_INLINE UV compute_uv_line(
     return uv;
 }
 
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 YAKL_INLINE UV compute_uv_cont(
     const EmisOpacState<T, mem_space>& args,
     int cont_idx,
@@ -291,7 +285,7 @@ YAKL_INLINE UV compute_uv_cont(
 /// the same spatial cell k at a time (e.g. multiple angles). If the LTE
 /// populations are precomputed, and provided it can be made thread-safe (and a
 /// little faster), by setting args.update_n_star = false
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacState<T, mem_space>& args
 ) {
@@ -408,7 +402,7 @@ YAKL_INLINE EmisOpac emis_opac(
 }
 
 // NOTE(cmo): An overload for a specific lambda that may not be in the atomic data grid
-template <typename T=fp_t, int mem_space=yakl::memDevice>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 YAKL_INLINE EmisOpac emis_opac(
     const EmisOpacSpecState<T, mem_space>& args
 ) {

@@ -27,7 +27,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     auto bounds = block_map.loop_bounds();
     parallel_for(
         "Copy eta, chi",
-        SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+        MDRange<3>({0, 0, 0}, {bounds.dim(0), bounds.dim(1), wave_batch}),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);

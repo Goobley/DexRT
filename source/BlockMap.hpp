@@ -12,10 +12,10 @@ struct GridBbox {
     yakl::SArray<i32, 1, NUM_DIM> max;
 };
 
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 struct BlockMapLookup {
     // NOTE(cmo): This is a separate class so it can be switch to e.g. Morton ordering
-    yakl::Array<i64, 2, mem_space> entries;
+    KView<i64**, mem_space> entries;
 
     void init(i32 num_x, i32 num_z) {
         entries = decltype(entries)("BlockMapEntries", num_z, num_x);
@@ -27,23 +27,24 @@ struct BlockMapLookup {
         return entries(z, x);
     }
 
-    BlockMapLookup<yakl::memHost> createHostCopy() {
-        if constexpr (mem_space == yakl::memHost) {
+    BlockMapLookup<HostSpace> createHostCopy() {
+        if constexpr (std::is_same_v<mem_space, HostSpace>) {
             return *this;
         }
 
-        BlockMapLookup<yakl::memHost> result;
-        result.entries = entries.createHostCopy();
+        BlockMapLookup<HostSpace> result;
+        result.entries = Kokkos::create_mirror_view_and_copy(entries);
         return result;
     }
 
-    BlockMapLookup<yakl::memDevice> createDeviceCopy() {
-        if constexpr (mem_space == yakl::memDevice) {
+    BlockMapLookup<DefaultMemSpace> createDeviceCopy() {
+        if constexpr (std::is_same_v<mem_space, DefaultMemSpace>) {
             return *this;
         }
 
-        BlockMapLookup<yakl::memDevice> result;
-        result.entries = entries.createDeviceCopy();
+        BlockMapLookup<DefaultMemSpace> result;
+        result.entries = KView<typename decltype(entries)::data_type, DefaultMemSpace>(entries.label(), entries.layout());
+        Kokkos::deep_copy(result.entries, entries);
         return result;
     }
 
@@ -57,8 +58,8 @@ struct BlockMap {
     GridBbox bbox;
 
     Lookup lookup;
-    yakl::Array<uint32_t, 1, yakl::memDevice> morton_traversal_order;
-    yakl::Array<uint32_t, 1, yakl::memDevice> active_tiles;
+    KView<uint32_t*> morton_traversal_order;
+    KView<uint32_t*> active_tiles;
 
     void init(const Atmosphere& atmos, fp_t cutoff_temperature) {
         if (atmos.temperature.extent(0) % BLOCK_SIZE != 0 || atmos.temperature.extent(1) % BLOCK_SIZE != 0) {
@@ -72,18 +73,20 @@ struct BlockMap {
         bbox.max(0) = atmos.temperature.extent(1);
         bbox.max(1) = atmos.temperature.extent(0);
 
-        yakl::Array<uint32_t, 1, yakl::memHost> morton_order("morton_traversal_order", num_x_tiles * num_z_tiles);
+        // TODO(cmo): This can all be done with standard Kokkos things
+        KView<uint32_t*, HostSpace> morton_order("morton_traversal_order", num_x_tiles * num_z_tiles);
         for (int z = 0; z < num_z_tiles; ++z) {
             for (int x = 0; x < num_x_tiles; ++x) {
                 morton_order(z * num_x_tiles + x) = encode_morton_2(Coord2{.x = x, .z = z});
             }
         }
-        std::sort(morton_order.begin(), morton_order.end());
-        morton_traversal_order = morton_order.createDeviceCopy();
+        assert(morton_order.span_is_contiguous());
+        std::sort(morton_order.data(), morton_order.data() + morton_order.size());
+        morton_traversal_order = create_device_copy(morton_order);
 
         lookup.init(num_x_tiles, num_z_tiles);
 
-        yakl::Array<bool, 2, yakl::memDevice> active("active tiles", num_z_tiles, num_x_tiles);
+        KView<bool**> active("active tiles", num_z_tiles, num_x_tiles);
         bool all_active = cutoff_temperature == FP(0.0);
         if (all_active) {
             active = true;
@@ -92,7 +95,7 @@ struct BlockMap {
             auto& temperature = atmos.temperature;
             parallel_for(
                 "Compute active cells",
-                SimpleBounds<2>(num_z_tiles, num_x_tiles),
+                MDRange<2>({0, 0}, {num_z_tiles, num_x_tiles}),
                 YAKL_LAMBDA (int zt, int xt) {
                     active(zt, xt) = false;
                     for (int z = zt * BLOCK_SIZE; z < (zt + 1) * BLOCK_SIZE; ++z) {
@@ -107,8 +110,9 @@ struct BlockMap {
             );
         }
         yakl::fence();
-        auto active_host = active.createHostCopy();
+        auto active_host = Kokkos::create_mirror_view_and_copy(HostSpace{}, active);
         auto lookup_host = lookup.createHostCopy();
+        Kokkos::fence();
         i64 grid_idx = 0;
 
         for (int m_idx = 0; m_idx < morton_order.extent(0); ++m_idx) {
@@ -125,7 +129,8 @@ struct BlockMap {
         if (all_active) {
             active_tiles = morton_traversal_order;
         } else {
-            yakl::Array<uint32_t, 1, yakl::memHost> active_tiles_host("morton_traversal_active", num_active_tiles);
+            active_tiles = KView<uint32_t*>("morton_traversal_active", num_active_tiles);
+            auto active_tiles_host = Kokkos::create_mirror_view(active_tiles);
             int entry = 0;
             for (int m_idx = 0; m_idx < morton_order.extent(0); ++m_idx) {
                 uint32_t code = morton_order(m_idx);
@@ -134,7 +139,7 @@ struct BlockMap {
                     active_tiles_host(entry++) = code;
                 }
             }
-            active_tiles = active_tiles_host.createDeviceCopy();
+            Kokkos::deep_copy(active_tiles, active_tiles_host);
         }
     }
 
@@ -157,14 +162,16 @@ struct BlockMap {
         bbox.max(1) = z_size;
 
 
-        yakl::Array<uint32_t, 1, yakl::memHost> morton_order("morton_traversal_order", num_x_tiles * num_z_tiles);
+        morton_traversal_order = KView<uint32_t*>("morton_traversal_order", num_x_tiles * num_z_tiles);
+        auto morton_order = Kokkos::create_mirror_view_and_copy(HostSpace{}, morton_traversal_order);
         for (int z = 0; z < num_z_tiles; ++z) {
             for (int x = 0; x < num_x_tiles; ++x) {
                 morton_order(z * num_x_tiles + x) = encode_morton_2(Coord2{.x = x, .z = z});
             }
         }
-        std::sort(morton_order.begin(), morton_order.end());
-        morton_traversal_order = morton_order.createDeviceCopy();
+        assert(morton_order.span_is_contiguous());
+        std::sort(morton_order.data(), morton_order.data() + morton_order.size());
+        Kokkos::deep_copy(morton_traversal_order, morton_order);
         active_tiles = morton_traversal_order;
 
         lookup.init(num_x_tiles, num_z_tiles);
@@ -181,10 +188,10 @@ struct BlockMap {
         return i64(num_active_tiles) * i64(square(BLOCK_SIZE) / square(mip_px_size));
     }
 
-    SimpleBounds<2> loop_bounds(i32 mip_px_size=1) const {
-        return SimpleBounds<2>(
-            num_active_tiles,
-            square(BLOCK_SIZE) / square(mip_px_size)
+    MDRange<2> loop_bounds(i32 mip_px_size=1) const {
+        return MDRange<2>(
+            {0, 0},
+            {num_active_tiles, square(BLOCK_SIZE) / square(mip_px_size)}
         );
     }
 };
@@ -256,11 +263,11 @@ struct MultiLevelLookup {
     /// Pack an array of entries into the u64 storage backing array. This isn't
     /// really const, but it only changes the array contents... ehhhhh
     template <typename T>
-    void pack_entries(const yakl::Array<T, 1, memDevice>& single_entries) const {
+    void pack_entries(const Kokkos::View<T*>& single_entries) const {
         JasUnpack((*this), entries);
         parallel_for(
             "Pack T entries into u64",
-            SimpleBounds<1>(entries.extent(0)),
+            entries.extent(0),
             YAKL_LAMBDA (int block_idx) {
                 u64 block = 0;
                 const int max_entry = std::min(

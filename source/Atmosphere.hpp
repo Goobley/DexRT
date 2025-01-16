@@ -8,8 +8,8 @@
 #include "JasPP.hpp"
 
 inline Atmosphere load_atmos(const std::string& path) {
-    typedef Kokkos::View<f32*, Kokkos::HostSpace> Fp1dLoad;
-    typedef Kokkos::View<f32**, Kokkos::HostSpace> Fp2dLoad;
+    typedef KView<f32*, Kokkos::HostSpace> Fp1dLoad;
+    typedef KView<f32**, Kokkos::HostSpace> Fp2dLoad;
 
     ExYakl::SimpleNetCDF nc;
     nc.open(path, ExYakl::NETCDF_MODE_READ);
@@ -61,15 +61,16 @@ inline Atmosphere load_atmos(const std::string& path) {
         Kokkos::deep_copy(dest_mirror, src);
         Kokkos::deep_copy(dest, dest_mirror);
     };
-    copy_via_mirror(result.temperature, temperature);
-    copy_via_mirror(result.pressure, pressure);
-    copy_via_mirror(result.ne, ne);
-    copy_via_mirror(result.nh_tot, nh_tot);
-    copy_via_mirror(result.vturb, vturb);
-    copy_via_mirror(result.vx, vx);
-    copy_via_mirror(result.vy, vy);
-    copy_via_mirror(result.vz, vz);
+    result.temperature = create_device_copy(temperature);
+    result.pressure = create_device_copy(pressure);
+    result.ne = create_device_copy(ne);
+    result.nh_tot = create_device_copy(nh_tot);
+    result.vturb = create_device_copy(vturb);
+    result.vx = create_device_copy(vx);
+    result.vy = create_device_copy(vy);
+    result.vz = create_device_copy(vz);
 #else
+    static_assert(false, "Has not been updated for Kokkos yet")
     result.temperature = Fp2d("temperature", z_dim, x_dim);
     result.pressure = Fp2d("pressure", z_dim, x_dim);
     result.ne = Fp2d("ne", z_dim, x_dim);
@@ -112,29 +113,21 @@ inline Atmosphere load_atmos(const std::string& path) {
 
 #endif
 
-    result.nh0 = Fp2dK("nh0", z_dim, x_dim);
+    result.nh0 = Fp2d("nh0", z_dim, x_dim);
     Kokkos::deep_copy(result.nh0, FP(0.0));
-
-    Fp2dK vel2("vel2", result.vz.layout());
-    parallel_for(
-        SimpleBounds<2>(z_dim, x_dim),
-        YAKL_LAMBDA (int z, int x) {
-            vel2(z, x) = square(result.vz(z, x)) + square(result.vy(z, x)) + square(result.vx(z, x));
-        }
-    );
-    yakl::fence();
-
-    // result.moving = yakl::intrinsics::maxval(vel2) > FP(10.0);
 
     fp_t max_vel_2;
     Kokkos::Max<fp_t> max_reducer(max_vel_2);
     Kokkos::parallel_reduce(
-        "Max",
-        Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {vel2.extent(0), vel2.extent(1)}),
-        KOKKOS_LAMBDA (const fp_t& x, fp_t& running_max) {
-            max_reducer.join(running_max, x);
+        "Atmosphere Max Vel",
+        MDRange<2>({0, 0}, {vx.extent(0), vx.extent(1)}),
+        KOKKOS_LAMBDA (int z, int x, fp_t& running_max) {
+            fp_t vel2 = square(result.vz(z, x)) + square(result.vy(z, x)) + square(result.vx(z, x));
+            if (vel2 > running_max) {
+                running_max = vel2;
+            }
         },
-        max_reducer
+        Kokkos::Max<fp_t>(max_vel_2)
     );
 
     result.moving = max_vel_2 > FP(10.0);
@@ -150,15 +143,15 @@ FlatAtmosphere<T> flatten(const Atmosphere& atmos) {
     result.offset_y = atmos.offset_y;
     result.offset_z = atmos.offset_z;
     result.moving = atmos.moving;
-    result.temperature = atmos.temperature.collapse();
-    result.pressure = atmos.pressure.collapse();
-    result.ne = atmos.ne.collapse();
-    result.nh_tot = atmos.nh_tot.collapse();
-    result.nh0 = atmos.nh0.collapse();
-    result.vturb = atmos.vturb.collapse();
-    result.vx = atmos.vx.collapse();
-    result.vy = atmos.vy.collapse();
-    result.vz = atmos.vz.collapse();
+    result.temperature = collapse(atmos.temperature);
+    result.pressure = collapse(atmos.pressure);
+    result.ne = collapse(atmos.ne);
+    result.nh_tot = collapse(atmos.nh_tot);
+    result.nh0 = collapse(atmos.nh0);
+    result.vturb = collapse(atmos.vturb);
+    result.vx = collapse(atmos.vx);
+    result.vy = collapse(atmos.vy);
+    result.vz = collapse(atmos.vz);
     return result;
 }
 

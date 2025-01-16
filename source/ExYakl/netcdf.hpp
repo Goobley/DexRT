@@ -416,7 +416,7 @@ namespace ExYakl {
         }
       }
 
-      if (myMem == memDevice) {
+      if (myMem == yakl::memDevice) {
         var.putVar(arr.createHostCopy().data());
       } else {
         var.putVar(arr.data());
@@ -424,9 +424,9 @@ namespace ExYakl {
     }
 
     /** @brief Write an entire Array at once */
-    template <class DataType, class LayoutType, class MemorySpace, class MemoryTraits>
+    template <class ViewType>
     void write(
-      Kokkos::View<DataType, LayoutType, MemorySpace, MemoryTraits> const &arr,
+      const ViewType& arr,
       std::string varName,
       std::vector<std::string> dimNames
     ) {
@@ -446,7 +446,7 @@ namespace ExYakl {
           }
           tmp = dimLoc;
         }
-        if constexpr (std::is_same<LayoutType, Kokkos::LayoutRight>::value) {
+        if constexpr (std::is_same<typename ViewType::array_layout, Kokkos::LayoutRight>::value) {
           dims[i] = tmp;
         } else {
           dims[rank-1-i] = tmp;
@@ -474,7 +474,7 @@ namespace ExYakl {
         }
       }
 
-      var.putVar(Kokkos::create_mirror_view_and_copy(arr).data());
+      var.putVar(Kokkos::create_mirror_view_and_copy(HostSpace{}, arr).data());
     }
 
 
