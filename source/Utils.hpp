@@ -46,8 +46,8 @@ YAKL_INLINE constexpr auto cube(T t) -> decltype(t * t * t) {
 /** Upper bound on Kokkos views, returns index rather than iterator.
  *
 */
-template <typename T>
-YAKL_INLINE int upper_bound(const KView<const T*>& x, T value) {
+template <typename ViewType, typename T=ViewType::non_const_value_type>
+YAKL_INLINE int upper_bound(const ViewType& x, const T& value) {
     int count = x.extent(0);
     int step;
     const T* first = &x(0);
@@ -74,11 +74,11 @@ YAKL_INLINE int upper_bound(const KView<const T*>& x, T value) {
 /** Linearly interpolate a sample (at alpha) from array y on grid x. Assumes x is positive sorted.
  * Clamps on ends.
 */
-template <typename T=fp_t>
-YAKL_INLINE T interp(
-    T alpha,
-    const Kokkos::View<const T*>& x,
-    const Kokkos::View<const T*>& y
+template <typename ViewType, typename T=ViewType::non_const_value_type>
+KOKKOS_INLINE_FUNCTION T interp(
+    const T& alpha,
+    const ViewType& x,
+    const ViewType& y
 ) {
     if (alpha <= x(0)) {
         return y(0);
@@ -109,9 +109,9 @@ YAKL_INLINE T interp(
 //     return interp(alpha, xx, yy);
 // }
 
-template <typename T=fp_t>
+template <typename T=fp_t, typename mem_space=DefaultMemSpace>
 YAKL_INLINE
-KView<const u16*> slice_active_set(const AtomicData<T>& atom, int la) {
+KView<const u16*, mem_space> slice_active_set(const AtomicData<T, mem_space>& atom, int la) {
     // NOTE(cmo): I have no idea why the original slicing (taking
     // &atom.active_lines(start)) as the pointer wasn't working... and was
     // causing "host array being accessed in a device kernel". This seems fine on nvhpc12.1
@@ -150,7 +150,7 @@ Fp2d slice_pops(const Fp2d& pops, const AtomicData<T, mem_space>& adata, int ia)
 
 template <class ViewType>
 auto create_device_copy(const ViewType& arr) -> KView<typename ViewType::data_type, DefaultMemSpace> {
-    KView<typename ViewType::data_type, DefaultMemSpace> result(arr.label(), arr.layout());
+    KView<typename ViewType::non_const_data_type, DefaultMemSpace> result(arr.label(), arr.layout());
     // NOTE(cmo): Directly accessible or layout is the same... no intermediate needed
     if constexpr (
         Kokkos::SpaceAccessibility<typename ViewType::memory_space, DefaultMemSpace>::accessible || std::is_same_v<typename ViewType::array_layout, typename decltype(result)::array_layout>

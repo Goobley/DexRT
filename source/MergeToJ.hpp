@@ -32,11 +32,15 @@ inline FpConst2d merge_c0_to_J(
     // For a dense J, this is effectively filling in the flattened array
     parallel_for(
         "final_cascade_to_J",
-        SimpleBounds<4>(
-            probes_to_compute.num_active_probes(),
-            c0_dims.num_flat_dirs,
-            wave_batch,
-            c0_dims.num_incl),
+        MDRange<4>(
+            {0, 0, 0, 0},
+            {
+                probes_to_compute.num_active_probes(),
+                c0_dims.num_flat_dirs,
+                wave_batch,
+                c0_dims.num_incl
+            }
+        ),
         YAKL_LAMBDA (i64 k, int phi_idx, int wave, int theta_idx) {
             fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
             int la = la_start + wave;
@@ -57,7 +61,8 @@ inline FpConst2d merge_c0_to_J(
                 ks = coord(1) * c0_dims.num_probes(0) + coord(0);
             }
             const fp_t sample = probe_fetch<RcMode>(c0, c0_dims, idx);
-            yakl::atomicAdd(J(la, ks), ray_weight * sample);
+            // TODO(cmo): The loop over directions can be moved to a parallel_reduce now
+            Kokkos::atomic_add(&J(la, ks), ray_weight * sample);
         }
     );
     return J;

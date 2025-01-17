@@ -44,12 +44,15 @@ void dynamic_compute_gamma_atomic(
         const auto& wavelength = adata.wavelength;
         parallel_for(
             "compute Gamma",
-            SimpleBounds<5>(
-                spatial_bounds.dim(0),
-                spatial_bounds.dim(1),
-                ray_subset.num_flat_dirs,
-                wave_batch,
-                ray_subset.num_incl
+            MDRange<5>(
+                {0, 0, 0, 0, 0},
+                {
+                    spatial_bounds.m_upper[0],
+                    spatial_bounds.m_upper[1],
+                    ray_subset.num_flat_dirs,
+                    wave_batch,
+                    ray_subset.num_incl
+                }
             ),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int phi_idx, int wave, int theta_idx) {
                 IdxGen idx_gen(mr_block_map);
@@ -207,7 +210,7 @@ void dynamic_compute_gamma_nonatomic(
 
     int wave_batch = la_end - la_start;
     wave_batch = std::min(wave_batch, ray_subset.wave_batch);
-    Fp1dHost wl_ray_weights_h("wl_ray_weights", wave_batch);
+    KView<fp_t*, HostSpace> wl_ray_weights_h("wl_ray_weights", wave_batch);
     constexpr bool include_hc_4pi = false;
     constexpr fp_t hc_4pi = hc_kJ_nm / four_pi;
     for (int wave = 0; wave < wave_batch; ++wave) {
@@ -231,7 +234,7 @@ void dynamic_compute_gamma_nonatomic(
         const fp_t wl_ray_weight = wl_weight / fp_t(c0_dirs_to_average<RcMode>());
         wl_ray_weights_h(wave) = wl_ray_weight;
     }
-    Fp1d wl_ray_weights(wl_ray_weights_h.createDeviceCopy());
+    Fp1d wl_ray_weights = create_device_copy(wl_ray_weights_h);
 
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
@@ -241,9 +244,12 @@ void dynamic_compute_gamma_nonatomic(
 
         parallel_for(
             "compute Gamma",
-            SimpleBounds<2>(
-                spatial_bounds.dim(0),
-                spatial_bounds.dim(1)
+            MDRange<2>(
+                {0, 0},
+                {
+                    spatial_bounds.m_upper[0],
+                    spatial_bounds.m_upper[1]
+                }
             ),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
                 IdxGen idx_gen(mr_block_map);
@@ -415,8 +421,11 @@ void dynamic_compute_gamma(
 void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
     // it, for now, trust the pool allocator
-    auto pops_dims = state.pops.get_dimensions();
-    Fp2d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1));
+    Fp2d lte_scratch(
+        "lte_scratch",
+        state.pops.extent(0),
+        state.pops.extent(1)
+    );
 
     JasUnpack(casc_state, mip_chain);
 
@@ -455,8 +464,8 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
-        if (casc_state.alo.initialized()) {
-            casc_state.alo = FP(0.0);
+        if (casc_state.alo.is_allocated()) {
+            Kokkos::deep_copy(casc_state.alo, FP(0.0));
         }
         CascadeCalcSubset subset{
             .la_start=la_start,
@@ -481,7 +490,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 mip_chain
             );
         }
-        if (casc_state.alo.initialized() && !lambda_iterate) {
+        if (casc_state.alo.is_allocated() && !lambda_iterate) {
             cascade_i_25d<RcModeAlo>(
                 state,
                 casc_state,
@@ -498,7 +507,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
                 mip_chain
             );
         }
-        if (casc_state.alo.initialized()) {
+        if (casc_state.alo.is_allocated()) {
             // NOTE(cmo): Add terms to Gamma
             dynamic_compute_gamma(
                 state,

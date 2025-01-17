@@ -6,7 +6,7 @@
 bool CascadeState::init(const State& state, int max_cascades) {
     const bool sparse_calc = state.config.sparse_calculation;
     CascadeStorage c0 = state.c0_size;
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes;
+    std::vector<KView<i32*[2]>> active_probes;
     if (sparse_calc) {
         active_probes = compute_active_probe_lists(state, max_cascades);
     }

@@ -621,19 +621,20 @@ namespace ExYakl {
       }
     }
 
-    template <class DataType, class LayoutType, class MemorySpace, class MemoryTraits>
+    template <class DataType, class... Props>
     void read(
-      Kokkos::View<DataType, LayoutType, MemorySpace, MemoryTraits> &arr,
+      Kokkos::View<DataType, Props...> &arr,
       std::string varName
     ) {
       // Make sure the variable is there and is the right dimension
+      using ViewType = std::decay_t<decltype(arr)>;
       int rank = arr.rank();
       auto var = file.getVar(varName);
       std::vector<int> dimSizes(rank);
       if ( ! var.isNull() ) {
         auto varDims = var.getDims();
         if (varDims.size() != rank) { Kokkos::abort("Existing variable's rank != array's rank"); }
-        if constexpr (std::is_same<LayoutType, Kokkos::LayoutRight>::value) {
+        if constexpr (std::is_same<typename ViewType::array_layout, Kokkos::LayoutRight>::value) {
           for (int i=0; i < varDims.size(); i++) { dimSizes[i] = varDims[i].getSize(); }
         } else {
           for (int i=0; i < varDims.size(); i++) { dimSizes[i] = varDims[varDims.size()-1-i].getSize(); }
@@ -649,7 +650,13 @@ namespace ExYakl {
             }
           }
         }
-        if (createArr) { arr = std::decay<decltype(arr)>::type(varName.c_str(), dimSizes); }
+        if (createArr) {
+          Kokkos::LayoutRight layout;
+          for (int i = 0; i < dimSizes.size(); ++i) {
+            layout.dimension[i] = dimSizes[i];
+          }
+          arr = ViewType(varName, layout);
+        }
       } else { Kokkos::abort("Variable does not exist"); }
 
       auto arrHost = create_mirror_view(arr);

@@ -14,7 +14,7 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
     // NOTE(cmo): This is pretty thrown-together
     parallel_for(
         "Compute wphi",
-        SimpleBounds<3>(wphi.extent(0), bounds.dim(0), bounds.dim(1)),
+        MDRange<3>({0, 0, 0}, {wphi.extent_int(0), bounds.m_upper[0], bounds.m_upper[1]}),
         YAKL_LAMBDA (int kr, i64 tile_idx, i32 block_idx) {
             using namespace ConstantsFP;
             fp_t entry = FP(0.0);
@@ -90,18 +90,19 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
         }
     );
     yakl::fence();
-    const auto& wphi_flat = wphi.collapse();
-    const i64 min_loc = yakl::intrinsics::minloc(wphi_flat);
-    const i64 min_k = min_loc % wphi.extent(1);
-    auto wphi_host = wphi.createHostCopy();
-    yakl::fence();
-    std::string output("  Lowest normalisation factors (wphi): ");
-    for (int kr = 0; kr < wphi_host.extent(0); ++kr) {
-        output += fmt::format("{:e}", wphi_host(kr, min_k));
-        if (kr != wphi_host.extent(0) - 1) {
-            output += ", ";
-        }
-    }
-    output += "\n";
-    state.println("{}", output);
+    // const auto& wphi_flat = wphi.collapse();
+    // const i64 min_loc = yakl::intrinsics::minloc(wphi_flat);
+    // const i64 min_k = min_loc % wphi.extent(1);
+    // auto wphi_host = wphi.createHostCopy();
+    // yakl::fence();
+    // std::string output("  Lowest normalisation factors (wphi): ");
+    // for (int kr = 0; kr < wphi_host.extent(0); ++kr) {
+    //     output += fmt::format("{:e}", wphi_host(kr, min_k));
+    //     if (kr != wphi_host.extent(0) - 1) {
+    //         output += ", ";
+    //     }
+    // }
+    // output += "\n";
+    // state.println("{}", output);
+    fmt::println("Not outputting min wphi... Needs reduction");
 }

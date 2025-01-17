@@ -166,7 +166,7 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
     auto bounds = block_map.loop_bounds(vox_size);
     parallel_for(
         "Compute mip n (CoreAndVoigt)",
-        SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+        MDRange<3>({0, 0, 0}, {bounds.m_upper[0], bounds.m_upper[1], wave_batch}),
         YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
             const fp_t ds = vox_scale;
             const fp_t lambda = adata.wavelength(la_start + wave);
@@ -297,7 +297,7 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
             // ballot across threads, do a popcount, and increment from one
             // thread.
             if (do_increment) {
-                yakl::atomicAdd(mippable_entries(tile_idx), 1);
+                Kokkos::atomic_add(&mippable_entries(tile_idx), 1);
             }
 
             if (wave == 0) {

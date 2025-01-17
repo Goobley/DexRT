@@ -10,7 +10,7 @@ void compute_lte_pops_flat(
     const auto& nhtot = atmos.nh_tot;
     parallel_for(
         "LTE Pops",
-        SimpleBounds<1>(pops.extent(1)),
+        pops.extent(1),
         YAKL_LAMBDA (int64_t ks) {
             lte_pops(
                 atom.energy,
@@ -62,7 +62,7 @@ void compute_nh0(const State& state) {
         const auto& pops = state.pops;
         parallel_for(
             "Copy nh0",
-            SimpleBounds<1>(nh0.extent(0)),
+            nh0.extent(0),
             YAKL_LAMBDA (i64 ks) {
                 nh0(ks) = pops(0, ks);
             }
@@ -71,7 +71,7 @@ void compute_nh0(const State& state) {
         const auto& atmos = state.atmos;
         parallel_for(
             "Compute nh0 in LTE",
-            SimpleBounds<1>(nh0.extent(0)),
+            nh0.extent(0),
             YAKL_LAMBDA (i64 ks) {
                 const fp_t temperature = atmos.temperature(ks);
                 const fp_t ne = atmos.ne(ks);

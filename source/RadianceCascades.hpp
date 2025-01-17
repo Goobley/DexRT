@@ -59,7 +59,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
     RadianceInterval<Alo> interp{};
-    if (casc_state.state.upper_I.initialized()) {
+    if (casc_state.state.upper_I.is_allocated()) {
         BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau, upper_dims);
@@ -468,15 +468,18 @@ inline void parallax_fix_inner_merge(
     i64 spatial_bounds = probe_coord_lookup.num_active_probes();
 
     // TODO(cmo): Pre-allocate these somewhere.
-    Fp1d I_temp = dev_casc_state.cascade_I.createDeviceObject();
-    Fp1d tau_temp = dev_casc_state.cascade_tau.createDeviceObject();
+    Fp1d I_temp = Kokkos::create_mirror(dev_casc_state.cascade_I);
+    Fp1d tau_temp = Kokkos::create_mirror(dev_casc_state.cascade_tau);
     parallel_for(
         "RC Separate Merge Loop",
-        SimpleBounds<4>(
-            spatial_bounds,
-            ray_subset.num_flat_dirs / num_rays_per_texel,
-            wave_batch,
-            ray_subset.num_incl
+        MDRange<4>(
+            {0, 0, 0, 0},
+            {
+                spatial_bounds,
+                ray_subset.num_flat_dirs / num_rays_per_texel,
+                wave_batch,
+                ray_subset.num_incl
+            }
         ),
         YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
             ivec2 probe_coord = probe_coord_lookup(ks);
@@ -579,11 +582,14 @@ inline void parallax_fix_inner_merge(
 
     parallel_for(
         "RC Post-Merge Copy",
-        SimpleBounds<4>(
-            spatial_bounds,
-            ray_subset.num_flat_dirs / num_rays_per_texel,
-            wave_batch,
-            ray_subset.num_incl
+        MDRange<4>(
+            {0, 0, 0, 0},
+            {
+                spatial_bounds,
+                ray_subset.num_flat_dirs / num_rays_per_texel,
+                wave_batch,
+                ray_subset.num_incl
+            }
         ),
         YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
             ivec2 probe_coord = probe_coord_lookup(ks);
@@ -773,11 +779,14 @@ void cascade_i_25d(
     yakl::timer_start(name.c_str());
     parallel_for(
         "RC Loop",
-        SimpleBounds<4>(
-            spatial_bounds,
-            ray_subset.num_flat_dirs / num_rays_per_texel,
-            wave_batch,
-            ray_subset.num_incl
+        MDRange<4>(
+            {0, 0, 0, 0},
+            {
+                spatial_bounds,
+                ray_subset.num_flat_dirs / num_rays_per_texel,
+                wave_batch,
+                ray_subset.num_incl
+            }
         ),
         YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
             constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
@@ -885,7 +894,7 @@ void cascade_i_25d(
     );
     yakl::fence();
     if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
-        if (cascade_idx > INNER_PARALLAX_MERGE_ABOVE_CASCADE && dev_casc_state.upper_I.initialized()) {
+        if (cascade_idx > INNER_PARALLAX_MERGE_ABOVE_CASCADE && dev_casc_state.upper_I.is_allocated()) {
             parallax_fix_inner_merge<RcMode>(state, dev_casc_state, probe_coord_lookup, ray_set, subset);
         }
     }

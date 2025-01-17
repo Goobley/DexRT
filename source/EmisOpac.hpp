@@ -79,7 +79,7 @@ struct EmisOpacSpecState {
 
 template <typename mem_space=DefaultMemSpace>
 struct SigmaInterp {
-    KView<fp_t*, mem_space> sigma;
+    KView<const fp_t*, mem_space> sigma;
 };
 
 template <typename mem_space=DefaultMemSpace>
@@ -296,7 +296,7 @@ YAKL_INLINE EmisOpac emis_opac(
     const bool conts = (mode == EmisOpacMode::All) || (mode == EmisOpacMode::StaticOnly);
 
     if (lines) {
-        if (active_set.initialized()) {
+        if (active_set.is_allocated()) {
             for (int kr = 0; kr < active_set.extent(0); ++kr) {
                 const auto& l = adata.lines(active_set(kr));
                 const UV uv = compute_uv_line(
@@ -329,8 +329,8 @@ YAKL_INLINE EmisOpac emis_opac(
     }
 
     if (conts) {
-        bool any_active = false || (active_set_cont.initialized() && active_set_cont.extent(0) > 0);
-        if (!active_set_cont.initialized()) {
+        bool any_active = false || (active_set_cont.is_allocated() && active_set_cont.extent(0) > 0);
+        if (!active_set_cont.is_allocated()) {
             for (int kr = 0; kr < adata.continua.extent(0); ++kr) {
                 const auto& cont = adata.continua(kr);
                 any_active = any_active || cont.is_active(la);
@@ -351,7 +351,7 @@ YAKL_INLINE EmisOpac emis_opac(
                     ia
                 );
                 const auto lte_data = extract_lte_terms_dev(adata, ia);
-                lte_pops<T, fp_t, mem_space>(
+                lte_pops<T, fp_t>(
                     lte_data.energy,
                     lte_data.g,
                     lte_data.stage,
@@ -363,7 +363,7 @@ YAKL_INLINE EmisOpac emis_opac(
                 );
             }
         }
-        if (active_set_cont.initialized()) {
+        if (active_set_cont.is_allocated()) {
             for (int i = 0; i < active_set_cont.extent(0); ++i) {
                 const int kr = active_set_cont(i);
                 const auto& cont = adata.continua(kr);

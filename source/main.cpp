@@ -141,8 +141,8 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     if (config.mode != DexrtMode::GivenFs) {
         return CascadeRays{};
     }
-    yakl::SimpleNetCDF nc;
-    nc.open(config.atmos_path, yakl::NETCDF_MODE_READ);
+    ExYakl::SimpleNetCDF nc;
+    nc.open(config.atmos_path, ExYakl::NETCDF_MODE_READ);
     int x_dim = nc.getDimSize("x");
     int z_dim = nc.getDimSize("z");
     int wave_dim = nc.getDimSize("wavelength");
@@ -265,8 +265,8 @@ void finalize_state(State* state) {
 /// dimensions are wrong etc.
 int handle_restart(State* st, const std::string& restart_path) {
     State& state(*st);
-    yakl::SimpleNetCDF nc;
-    nc.open(restart_path, yakl::NETCDF_MODE_READ);
+    ExYakl::SimpleNetCDF nc;
+    nc.open(restart_path, ExYakl::NETCDF_MODE_READ);
 
     i64 num_active = nc.getDimSize("ks");
     i64 num_level = nc.getDimSize("level");
@@ -310,7 +310,7 @@ void save_snapshot(const State& state, int num_iter) {
         name.replace(nc_pos, ext.size(), new_ext);
     }
 
-    nc.create(name, yakl::NETCDF_MODE_REPLACE);
+    nc.create(name, ExYakl::NETCDF_MODE_REPLACE);
     state.println("Saving snapshot to {}...", name);
 
     int ncid = nc.file.ncid;
@@ -333,8 +333,8 @@ void save_snapshot(const State& state, int num_iter) {
 /// or dense otherwise.
 void load_initial_pops(State* st, const std::string& initial_pops_path) {
     State& state(*st);
-    yakl::SimpleNetCDF nc;
-    nc.open(initial_pops_path, yakl::NETCDF_MODE_READ);
+    ExYakl::SimpleNetCDF nc;
+    nc.open(initial_pops_path, ExYakl::NETCDF_MODE_READ);
 
     bool load_sparse = nc.dimExists("ks");
     state.println(
@@ -376,10 +376,13 @@ void load_initial_pops(State* st, const std::string& initial_pops_path) {
         auto bounds = mr_block_map.block_map.loop_bounds();
         parallel_for(
             "Sparsify new pops",
-            SimpleBounds<3>(
-                num_level,
-                bounds.dim(0),
-                bounds.dim(1)
+            MDRange<3>(
+                {0, 0, 0},
+                {
+                    num_level,
+                    bounds.m_upper[0],
+                    bounds.m_upper[1]
+                }
             ),
             YAKL_LAMBDA (i32 level, i64 tile_idx, i32 block_idx) {
                 IdxGen idx_gen(mr_block_map);
@@ -421,7 +424,7 @@ void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
     JasUnpack(state, max_block_mip, mr_block_map);
     parallel_for(
         "Copy max mip",
-        state.mr_block_map.block_map.loop_bounds().dim(0),
+        state.mr_block_map.block_map.loop_bounds().m_upper[0],
         YAKL_LAMBDA (i64 tile_idx) {
             MRIdxGen idx_gen(mr_block_map);
             Coord2 coord = idx_gen.loop_coord(0, tile_idx, 0);
@@ -780,7 +783,7 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         maybe_rehydrate_and_write(state.pops, "pops", {"level"});
     }
     if (out_cfg.lte_pops) {
-        auto lte_pops = Kokkos::create_mirror(state.pops);
+        auto lte_pops = Kokkos::create_mirror(DefaultMemSpace{}, state.pops);
         compute_lte_pops(&state, lte_pops);
         yakl::fence();
         maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});

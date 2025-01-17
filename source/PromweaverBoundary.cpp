@@ -3,8 +3,8 @@
 
 
 PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryType type) {
-    yakl::SimpleNetCDF nc;
-    nc.open(path, yakl::NETCDF_MODE_READ);
+    ExYakl::SimpleNetCDF nc;
+    nc.open(path, ExYakl::NETCDF_MODE_READ);
 
     if (!nc.varExists("prom_bc_I")) {
         if (type == BoundaryType::Promweaver) {
@@ -29,7 +29,7 @@ PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryTyp
 
     parallel_for(
         "Promweaver BC Interp",
-        SimpleBounds<2>(wavelength.extent(0), mu_dim),
+        MDRange<2>({0, 0}, {wavelength.extent_int(0), mu_dim}),
         YAKL_LAMBDA (int la, int mu) {
             fp_t wavelength_sought = wavelength(la);
             // NOTE(cmo): Corresponding fractional index in loaded data

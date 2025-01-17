@@ -45,13 +45,13 @@ SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLO
     return result;
 }
 
-yakl::Array<u8, 2, yakl::memDevice> reify_active_c0(const BlockMap<BLOCK_SIZE>& block_map) {
-    yakl::Array<u8, 2, yakl::memDevice> result(
+KView<u8**> reify_active_c0(const BlockMap<BLOCK_SIZE>& block_map) {
+    KView<u8**> result(
         "active c0",
         block_map.num_z_tiles * BLOCK_SIZE,
         block_map.num_x_tiles * BLOCK_SIZE
     );
-    result = 0;
+    Kokkos::deep_copy(result, 0);
     yakl::fence();
 
     parallel_for(
@@ -70,7 +70,7 @@ yakl::Array<u8, 2, yakl::memDevice> reify_active_c0(const BlockMap<BLOCK_SIZE>& 
 void ProbesToCompute::init(
     const CascadeStorage& c0,
     bool sparse_,
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> probes_to_compute
+    std::vector<KView<i32*[2]>> probes_to_compute
 ) {
     c0_size = c0;
     sparse = sparse_;
@@ -86,7 +86,7 @@ void ProbesToCompute::init(
 ) {
     const bool sparse_calc = state.config.sparse_calculation;
     CascadeStorage c0 = state.c0_size;
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes;
+    std::vector<KView<i32*[2]>> active_probes;
     if (sparse_calc) {
         active_probes = compute_active_probe_lists(state, max_cascades);
     }
@@ -120,11 +120,11 @@ DeviceProbesToCompute ProbesToCompute::bind(int cascade_idx) const {
 // Rehydrates the page from page_idx into qty_page
 void rehydrate_page(
     const BlockMap<BLOCK_SIZE>& block_map,
-    const Fp2d& quantity,
+    const FpConst2d& quantity,
     const Fp2d& qty_page,
     int page_idx
 ) {
-    qty_page = FP(0.0);
+    Kokkos::deep_copy(qty_page, FP(0.0));
     yakl::fence();
 
     parallel_for(
@@ -141,11 +141,46 @@ void rehydrate_page(
     yakl::fence();
 }
 
-Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp2d& quantity) {
+KView<fp_t***, HostSpace> rehydrate_sparse_quantity_host(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const Kokkos::View<const fp_t**, HostSpace>& quantity
+) {
+    // NOTE(cmo): This is not efficient, it just reuses the GPU machinery,
+    // copying a page of CPU memory over at a time
     const int num_x = block_map.num_x_tiles * BLOCK_SIZE;
     const int num_z = block_map.num_z_tiles * BLOCK_SIZE;
-    Fp3dHost result(
-        quantity.myname,
+    KView<fp_t***, HostSpace> result(
+        quantity.label(),
+        quantity.extent(0),
+        num_z,
+        num_x
+    );
+    KView<fp_t**, HostSpace> qty_page_host("qty_page_host", num_z, num_x);
+    Fp2d qty_page("qty_page", num_z, num_x);
+    Fp2d qty_gpu("qty_gpu", 1, quantity.extent(1));
+
+    for (int n = 0; n < quantity.extent(0); ++n) {
+        Kokkos::deep_copy(qty_gpu, KView<const fp_t**, HostSpace>(&quantity(n, 0), 1, quantity.extent(1)));
+        rehydrate_page(block_map, qty_gpu, qty_page, 0);
+        Kokkos::deep_copy(qty_page_host, qty_page);
+
+        for (int z = 0; z < num_z; ++z) {
+            for (int x = 0; x < num_x; ++x) {
+                result(n, z, x) = qty_page_host(z, x);
+            }
+        }
+    }
+    return result;
+}
+
+KView<fp_t***, HostSpace> rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Kokkos::View<const fp_t**>& quantity) {
+    if constexpr(std::is_same_v<std::decay<decltype(quantity)>::type::memory_space, HostSpace> && !HostDevSameSpace) {
+        return rehydrate_sparse_quantity_host(block_map, quantity);
+    }
+    const int num_x = block_map.num_x_tiles * BLOCK_SIZE;
+    const int num_z = block_map.num_z_tiles * BLOCK_SIZE;
+    KView<fp_t***, HostSpace> result(
+        quantity.label(),
         quantity.extent(0),
         num_z,
         num_x
@@ -154,7 +189,7 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
 
     for (int n = 0; n < quantity.extent(0); ++n) {
         rehydrate_page(block_map, quantity, qty_page, n);
-        Fp2dHost qty_page_host = qty_page.createHostCopy();
+        auto qty_page_host = Kokkos::create_mirror_view_and_copy(HostSpace{}, qty_page);
 
         for (int z = 0; z < num_z; ++z) {
             for (int x = 0; x < num_x; ++x) {
@@ -165,53 +200,25 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
     return result;
 }
 
-Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp2dHost& quantity) {
-    // NOTE(cmo): This is not efficient, it just reuses the GPU machinery,
-    // copying a page of CPU memory over at a time
-    const int num_x = block_map.num_x_tiles * BLOCK_SIZE;
-    const int num_z = block_map.num_z_tiles * BLOCK_SIZE;
-    Fp3dHost result(
-        quantity.myname,
-        quantity.extent(0),
-        num_z,
-        num_x
-    );
-    Fp2d qty_page("qty_page", num_z, num_x);
-    Fp2d qty_gpu("qty_gpu", 1, quantity.extent(1));
-
-    for (int n = 0; n < quantity.extent(0); ++n) {
-        qty_gpu = Fp2dHost("qty_slice", &quantity(n, 0), 1, quantity.extent(1)).createDeviceCopy();
-        rehydrate_page(block_map, qty_gpu, qty_page, 0);
-        Fp2dHost qty_page_host = qty_page.createHostCopy();
-
-        for (int z = 0; z < num_z; ++z) {
-            for (int x = 0; x < num_x; ++x) {
-                result(n, z, x) = qty_page_host(z, x);
-            }
-        }
-    }
-    return result;
-}
-
-Fp2dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp1d& quantity) {
-    Fp2d qtyx1("1 x qty", quantity.data(), 1, quantity.extent(0));
+KView<fp_t**, HostSpace> rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const FpConst1d& quantity) {
+    FpConst2d qtyx1(quantity.data(), 1, quantity.extent(0));
     Fp2d qty_page("qty_page", block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
     rehydrate_page(block_map, qtyx1, qty_page, 0);
-    Fp2dHost result = qty_page.createHostCopy();
+    auto result = Kokkos::create_mirror_view_and_copy(HostSpace{}, qty_page);
     return result;
 }
 
-std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(const State& state, int max_cascades) {
+std::vector<KView<i32*[2]>> compute_active_probe_lists(const State& state, int max_cascades) {
     // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if
     // Really this function is backwards. We can loop over each probe of i+1 and
     // check the dependents in i, in parallel. The merge process remains the
     // same.
     JasUnpack(state, mr_block_map);
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> probes_to_compute;
+    std::vector<KView<i32*[2]>> probes_to_compute;
     probes_to_compute.reserve(max_cascades + 1);
 
-    yakl::Array<u64, 2, yakl::memDevice> prev_active("active c0", state.atmos.num_z, state.atmos.num_x);
-    prev_active = 0;
+    KView<u64**> prev_active("active c0", state.atmos.num_z, state.atmos.num_x);
+    Kokkos::deep_copy(prev_active, 0);
     yakl::fence();
     parallel_for(
         mr_block_map.block_map.loop_bounds(),
@@ -224,9 +231,9 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
     yakl::fence();
     u64 num_active = mr_block_map.get_num_active_cells();
 
-    auto prev_active_h = prev_active.createHostCopy();
+    auto prev_active_h = Kokkos::create_mirror_view_and_copy(HostSpace{}, prev_active);
     yakl::fence();
-    yakl::Array<i32, 2, yakl::memDevice> probes_to_compute_c0("c0 to compute", num_active, 2);
+    KView<i32*[2]> probes_to_compute_c0("c0 to compute", num_active);
     parallel_for(
         mr_block_map.block_map.loop_bounds(),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
@@ -248,12 +255,12 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
 
     for (int cascade_idx = 1; cascade_idx <= max_cascades; ++cascade_idx) {
         CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
-        yakl::Array<u64, 2, yakl::memDevice> curr_active(
+        KView<u64**> curr_active(
             "casc_active",
             dims.num_probes(1),
             dims.num_probes(0)
         );
-        curr_active = 0;
+        Kokkos::deep_copy(curr_active, 0);
         yakl::fence();
         auto my_atomic_max = YAKL_LAMBDA (u64& ref, unsigned long long int val) {
             yakl::atomicMax(
@@ -262,7 +269,7 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
             );
         };
         parallel_for(
-            SimpleBounds<2>(prev_active.extent(0), prev_active.extent(1)),
+            MDRange<2>({0, 0}, {prev_active.extent(0), prev_active.extent(1)}),
             YAKL_LAMBDA (int z, int x) {
                 int z_bc = std::max(int((z - 1) / 2), 0);
                 int x_bc = std::max(int((x - 1) / 2), 0);
@@ -288,10 +295,18 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
             }
         );
         yakl::fence();
-        i64 num_active = yakl::intrinsics::sum(curr_active);
-        auto curr_active_h = curr_active.createHostCopy();
+        i64 num_active = 0;
+        Kokkos::parallel_reduce(
+            MDRange<2>({0, 0}, {curr_active.extent(0), curr_active.extent(1)}),
+            KOKKOS_LAMBDA (const int i, const int j, i64& acc) {
+                acc += curr_active(i, j);
+            },
+            Kokkos::Sum<i64>(num_active)
+        );
+        Kokkos::fence();
+        auto curr_active_h = Kokkos::create_mirror_view_and_copy(HostSpace{}, curr_active);
         yakl::fence();
-        yakl::Array<u32, 1, yakl::memHost> probes_to_compute_morton("probes to compute morton", num_active);
+        KView<u32*, HostSpace> probes_to_compute_morton("probes to compute morton", num_active);
         i32 idx = 0;
         for (int z = 0; z < curr_active_h.extent(0); ++z) {
             for (int x = 0; x < curr_active_h.extent(1); ++x) {
@@ -301,14 +316,15 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
             }
         }
         // NOTE(cmo): These are now being launched in morton order... should be close to tile order
-        std::sort(probes_to_compute_morton.begin(), probes_to_compute_morton.end());
-        yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("probes to compute", num_active, 2);
+        assert(probes_to_compute_morton.span_is_contiguous());
+        std::sort(probes_to_compute_morton.data(), probes_to_compute_morton.data() + probes_to_compute.size());
+        KView<i32*[2], HostSpace> probes_to_compute_h("probes_to_compute", num_active);
         for (int idx = 0; idx < num_active; ++idx) {
             Coord2 coord = decode_morton_2(probes_to_compute_morton(idx));
             probes_to_compute_h(idx, 0) = coord.x;
             probes_to_compute_h(idx, 1) = coord.z;
         }
-        auto probes_to_compute_ci = probes_to_compute_h.createDeviceCopy();
+        auto probes_to_compute_ci = create_device_copy(probes_to_compute_h);
         probes_to_compute.emplace_back(probes_to_compute_ci);
         prev_active = curr_active;
         state.println(

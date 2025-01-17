@@ -30,7 +30,7 @@ inline fp_t simple_conserve_pressure(State* state) {
         Fp1d rel_change("nhtot_rel_change", flatmos.nh_tot.extent(0));
         parallel_for(
             "Compute correction",
-            SimpleBounds<1>(flatmos.nh_tot.extent(0)),
+            flatmos.nh_tot.extent(0),
             YAKL_LAMBDA (i64 k) {
                 const fp_t N = total_abund * flatmos.nh_tot(k) + flatmos.ne(k);
                 const fp_t N_error = flatmos.pressure(k) / (k_B * flatmos.temperature(k)) - N;
@@ -49,13 +49,28 @@ inline fp_t simple_conserve_pressure(State* state) {
             }
         );
         yakl::fence();
-        max_change = yakl::intrinsics::maxval(rel_change);
-        i64 max_change_loc = yakl::intrinsics::maxloc(rel_change);
-        yakl::fence();
+        typedef Kokkos::MaxLoc<fp_t, i64> MaxLoc;
+        MaxLoc::value_type maxloc;
+
+        Kokkos::parallel_reduce(
+            "PressureConsMaxLoc",
+            rel_change.extent(0),
+            KOKKOS_LAMBDA (const int i, MaxLoc::value_type& max_loc) {
+                const fp_t val = rel_change(i);
+                if (val < max_loc.val) {
+                    max_loc.val = val;
+                    max_loc.loc = i;
+                }
+            },
+            MaxLoc(maxloc)
+        );
+        Kokkos::fence();
+        max_change = maxloc.val;
+        i64 max_change_loc = maxloc.loc;
 
         parallel_for(
             "Apply updates",
-            SimpleBounds<1>(flatmos.nh_tot.extent(0)),
+            flatmos.nh_tot.extent(0),
             YAKL_LAMBDA (i64 k) {
                 flatmos.ne(k) += nh_tot_correction(k) * h_pops(h_pops.extent(0)-1, k) / flatmos.nh_tot(k);
                 flatmos.nh_tot(k) *= nh_tot_ratio(k);
@@ -65,7 +80,7 @@ inline fp_t simple_conserve_pressure(State* state) {
         const auto& pops = state->pops;
         parallel_for(
             "Rescale pops",
-            SimpleBounds<2>(pops.extent(0), pops.extent(1)),
+            MDRange<2>({0, 0}, {pops.extent(0), pops.extent(1)}),
             YAKL_LAMBDA (int i, i64 k) {
                 pops(i, k) *= nh_tot_ratio(k);
             }

@@ -4,14 +4,14 @@
 #include "Types.hpp"
 #include "BoundaryType.hpp"
 #include "Utils.hpp"
-#include "YAKL_netcdf.h"
+#include "ExYakl/netcdf.hpp"
 
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 struct PwBc {
     fp_t mu_min;
     fp_t mu_max;
     fp_t mu_step;
-    yakl::Array<fp_t, 2, mem_space> I; // [wl, mu]
+    KView<fp_t**, mem_space> I; // [wl, mu]
 };
 PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryType type);
 

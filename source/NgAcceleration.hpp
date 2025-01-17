@@ -13,7 +13,7 @@ struct NgAccelArgs {
 struct NgAccelerator {
     static constexpr i32 num_steps = 5;
     i32 step_count = 0;
-    Fp3dHost pops; // [level, iter_step, ks]
+    KView<fp_t***, HostSpace> pops; // [level, iter_step, ks]
     fp_t accel_tol = FP(5e-2); /// Accelerate if all of the previous steps are below this threshold
     fp_t lower_tol = FP(2e-4); /// Tolerance below which to disable acceleration
     yakl::SArray<fp_t, 1, num_steps> change_hist;
@@ -25,9 +25,9 @@ struct NgAccelerator {
         return true;
     }
 
-    void copy_pops(i32 storage_idx, const Fp2d& pops_in) {
+    void copy_pops(i32 storage_idx, const FpConst2d& pops_in) {
         JasUnpack((*this), pops);
-        auto pops_in_h = pops_in.createHostCopy();
+        auto pops_in_h = Kokkos::create_mirror_view_and_copy(HostSpace{}, pops_in);
         // TODO(cmo): Tidy this up when we move to kokkos
         for (i32 l = 0; l < pops.extent(0); ++l) {
             for (i64 ks = 0; ks < pops.extent(2); ++ks) {
@@ -144,10 +144,10 @@ struct NgAccelerator {
         state.println("Need magma for Ng acceleration (or bring your own matrix solver)");
 #endif
 
-        auto pops_hist = pops.createDeviceCopy();
+        auto pops_hist = create_device_copy(pops);
         parallel_for(
             "Update pops",
-            SimpleBounds<2>(num_level, num_space),
+            MDRange<2>({0, 0}, {num_level, num_space}),
             YAKL_LAMBDA (i32 l, i64 ks) {
                 f64 new_val = (FP(1.0) - bb_d(l, 0) - bb_d(l, 1) - bb_d(l, 2)) * pops_hist(l, 4, ks);
                 new_val += bb_d(l, 0) * pops_hist(l, 3, ks);

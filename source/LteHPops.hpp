@@ -21,8 +21,8 @@ YAKL_INLINE fp_t nh0_lte(fp_t temperature, fp_t ne, fp_t nh_tot, fp_t* nhii=null
     constexpr fp_t ion_energy_k_B = FP(157887.51240204);
     constexpr fp_t u_hii = FP(1.0);
 
-    const yakl::Array<fp_t const, 1, yakl::memDevice> log_t_grid("log_t_grid", (fp_t*)log_T, grid_size);
-    const yakl::Array<fp_t const, 1, yakl::memDevice> partfn_grid("partfn_grid", (fp_t*)h_partfn, grid_size);
+    const KView<const fp_t*> log_t_grid((fp_t*)log_T, grid_size);
+    const KView<const fp_t*> partfn_grid((fp_t*)h_partfn, grid_size);
     const fp_t log_temp = std::log10(temperature);
     const fp_t u_hi = interp(log_temp, log_t_grid, partfn_grid);
     // NOTE(cmo): nhii / nhi
@@ -45,28 +45,28 @@ namespace LteHPopsDetail {
  * broadening things. Uses tabulated partition function based on classical 5+1
  * level H.
 */
-template <int mem_space=yakl::memDevice>
+template <typename mem_space=DefaultMemSpace>
 struct HPartFn {
-    yakl::Array<const fp_t, 1, mem_space> log_T;
-    yakl::Array<const fp_t, 1, mem_space> h_partfn;
+    KView<const fp_t*, mem_space> log_T;
+    KView<const fp_t*, mem_space> h_partfn;
 
     HPartFn() {
         using namespace LteHPopsDetail;
-        Fp1dHost log_T_host("log_T", (fp_t*)log_T_data, grid_size);
-        Fp1dHost partfn_host("h_partfn", (fp_t*)h_partfn_data, grid_size);
-        if constexpr (mem_space == yakl::memHost) {
+        KView<fp_t*, HostSpace> log_T_host((fp_t*)log_T_data, grid_size);
+        KView<fp_t*, HostSpace> partfn_host((fp_t*)h_partfn_data, grid_size);
+        if constexpr (std::is_same_v<mem_space, HostSpace>) {
             log_T = log_T_host;
             h_partfn = partfn_host;
         } else {
-            log_T = log_T_host.createDeviceCopy();
-            h_partfn = partfn_host.createDeviceCopy();
+            log_T = create_device_copy(log_T_host);
+            h_partfn = create_device_copy(partfn_host);
         }
     }
 
     YAKL_INLINE fp_t operator()(fp_t temperature, fp_t ne, fp_t nh_tot, fp_t* nhii=nullptr) const {
 #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
-        YAKL_EXECUTE_ON_HOST_ONLY(
-            if constexpr (mem_space == yakl::memDevice) {
+        KOKKOS_IF_ON_HOST(
+            if constexpr (!Kokkos::SpaceAccessibility<mem_space, DefaultMemSpace>::accessible) {
                 throw std::runtime_error(fmt::format("Cannot access a partition function in device memory from CPU..."));
             }
         );

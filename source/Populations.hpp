@@ -423,7 +423,7 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
             n_max_wavelengths += cont.wavelength.size();
         }
     }
-    KView<CompCont<T>*> continua("continua", total_n_cont);
+    KView<CompCont<T>*, HostSpace> continua("continua", total_n_cont);
     for (int ia = 0; ia < n_atom; ++ia) {
         const auto& model = models[ia];
         const int kr_base = cont_start(ia);
@@ -603,8 +603,8 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
     for (int kr = 0; kr < continua.extent(0); ++kr) {
         auto& cont = continua(kr);
         const auto& model_cont = models[cont.atom].continua[kr - cont_start(cont.atom)];
-        auto model_wave = KView(model_cont.wavelength.data(), model_cont.wavelength.size());
-        auto model_sigma = KView(model_cont.sigma.data(), model_cont.sigma.size());
+        KView<const U*, HostSpace> model_wave(model_cont.wavelength.data(), model_cont.wavelength.size());
+        KView<const U*, HostSpace> model_sigma(model_cont.sigma.data(), model_cont.sigma.size());
 
         cont.sigma_start = sigma_offset;
         for (int la = cont.blue_idx; la < cont.red_idx; ++la) {
@@ -845,16 +845,16 @@ extract_atoms_with_gamma_and_mapping(
     return result;
 }
 
-template <typename FPT=fp_t, typename T=fp_t, typename mem_space=DefaultMemSpace>
+template <typename FPT=fp_t, typename T=fp_t>
 YAKL_INLINE
 void lte_pops(
-    const KView<T*, mem_space>& energy,
-    const KView<T*, mem_space>& g,
-    const KView<T*, mem_space>& stage,
+    const Kokkos::View<const T*>& energy,
+    const Kokkos::View<const T*>& g,
+    const Kokkos::View<const T*>& stage,
     fp_t temperature,
     fp_t ne,
     fp_t ntot,
-    const KView<T**, mem_space>& pops,
+    const Kokkos::View<T**>& pops,
     int64_t x
 ) {
     using namespace ConstantsF64;

@@ -9,8 +9,8 @@ void compute_min_max_vel(
     const Fp1d& min_vel,
     const Fp1d& max_vel
 ) {
-    min_vel = FP(1e8);
-    max_vel = -FP(1e8);
+    Kokkos::deep_copy(min_vel, FP(1e8));
+    Kokkos::deep_copy(max_vel, -FP(1e8));
     yakl::fence();
 
     constexpr i32 RcMode = RC_flags_storage();
@@ -152,9 +152,9 @@ void DirectionalEmisOpacInterp::init(i64 num_active_zones, i32 wave_batch) {
 }
 
 void DirectionalEmisOpacInterp::zero() const {
-    emis_opac_vel = FP(0.0);
-    vel_start = FP(0.0);
-    vel_step = FP(0.0);
+    Kokkos::deep_copy(emis_opac_vel, FP(0.0));
+    Kokkos::deep_copy(vel_start, FP(0.0));
+    Kokkos::deep_copy(vel_step, FP(0.0));
     yakl::fence();
 }
 
@@ -197,11 +197,14 @@ void DirectionalEmisOpacInterp::compute_subset_mip_n(
     auto bounds = block_map.loop_bounds(vox_size);
     parallel_for(
         "Compute mip (dir interp)",
-        SimpleBounds<4>(
-            bounds.dim(0),
-            bounds.dim(1),
-            INTERPOLATE_DIRECTIONAL_BINS,
-            wave_batch
+        MDRange<4>(
+            {0, 0, 0, 0},
+            {
+                bounds.m_upper[0],
+                bounds.m_upper[1],
+                INTERPOLATE_DIRECTIONAL_BINS,
+                wave_batch
+            }
         ),
         YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx, i32 vel_idx, i32 wave) {
             MRIdxGen idx_gen(mr_block_map);

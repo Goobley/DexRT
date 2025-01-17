@@ -10,7 +10,7 @@ void compute_collisions_to_gamma(State* state) {
     Fp2d n_star("n_star", state->pops.layout());
     // NOTE(cmo): Zero Gamma before we start to refill it.
     for (int i = 0; i < Gamma_store.size(); ++i) {
-        Gamma_store[i] = FP(0.0);
+        Kokkos::deep_copy(Gamma_store[i], FP(0.0));
     }
     compute_lte_pops(state, n_star);
     yakl::fence();

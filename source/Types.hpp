@@ -9,6 +9,7 @@ using KView = Kokkos::View<T, Layout, Args...>;
 
 typedef Kokkos::DefaultExecutionSpace::memory_space DefaultMemSpace;
 typedef Kokkos::HostSpace HostSpace;
+constexpr bool HostDevSameSpace = std::is_same_v<DefaultMemSpace, HostSpace>;
 
 typedef Kokkos::View<fp_t*    , Layout> Fp1d;
 typedef Kokkos::View<fp_t**   , Layout> Fp2d;
@@ -21,6 +22,8 @@ typedef Kokkos::View<const fp_t**   , Layout> FpConst2d;
 typedef Kokkos::View<const fp_t***  , Layout> FpConst3d;
 typedef Kokkos::View<const fp_t**** , Layout> FpConst4d;
 typedef Kokkos::View<const fp_t*****, Layout> FpConst5d;
+
+typedef KView<GammaFp***, DefaultMemSpace> GammaMat;
 
 typedef yakl::SArray<fp_t, 1, 2> vec2;
 typedef yakl::SArray<fp_t, 1, 3> vec3;
@@ -107,7 +110,7 @@ struct RayProps {
 struct DeviceProbesToCompute {
     bool sparse;
     ivec2 num_probes;
-    yakl::Array<i32, 2, yakl::memDevice> active_probes; // [n, 2 (u, v)]
+    KView<i32*[2]> active_probes; // [n, 2 (u, v)]
 
     YAKL_INLINE ivec2 operator()(i64 ks) const {
         if (!sparse) {
@@ -139,13 +142,13 @@ struct DeviceProbesToCompute {
 struct ProbesToCompute {
     bool sparse;
     CascadeStorage c0_size;
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes; // [n, 2 (u, v)]
+    std::vector<KView<i32*[2]>> active_probes; // [n, 2 (u, v)]
 
     /// Setup object, low-level
     void init(
         const CascadeStorage& c0,
         bool sparse,
-        std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes = decltype(active_probes)()
+        std::vector<KView<i32*[2]>> active_probes = decltype(active_probes)()
     );
 
     /// Setup object, high-level, from state
@@ -211,15 +214,15 @@ struct FlatAtmosphere {
     fp_t offset_y = FP(0.0);
     fp_t offset_z = FP(0.0);
     bool moving = false;
-    yakl::Array<T, 1, yakl::memDevice> temperature;
-    yakl::Array<T, 1, yakl::memDevice> pressure;
-    yakl::Array<T, 1, yakl::memDevice> ne;
-    yakl::Array<T, 1, yakl::memDevice> nh_tot;
-    yakl::Array<T, 1, yakl::memDevice> nh0;
-    yakl::Array<T, 1, yakl::memDevice> vturb;
-    yakl::Array<T, 1, yakl::memDevice> vx;
-    yakl::Array<T, 1, yakl::memDevice> vy;
-    yakl::Array<T, 1, yakl::memDevice> vz;
+    Kokkos::View<T*, DefaultMemSpace> temperature;
+    Kokkos::View<T*, DefaultMemSpace> pressure;
+    Kokkos::View<T*, DefaultMemSpace> ne;
+    Kokkos::View<T*, DefaultMemSpace> nh_tot;
+    Kokkos::View<T*, DefaultMemSpace> nh0;
+    Kokkos::View<T*, DefaultMemSpace> vturb;
+    Kokkos::View<T*, DefaultMemSpace> vx;
+    Kokkos::View<T*, DefaultMemSpace> vy;
+    Kokkos::View<T*, DefaultMemSpace> vz;
 };
 
 /// Storage for emissivity/opacity when we load a model from file. Planes from
@@ -531,7 +534,7 @@ struct MipmapComputeState {
     i32 max_mip_factor;
     i32 la_start;
     i32 la_end;
-    const yakl::Array<i32, 1, yakl::memDevice>& mippable_entries;
+    const KView<i32*, DefaultMemSpace>& mippable_entries;
     const Fp2d& emis;
     const Fp2d& opac;
     const Fp1d& vx;

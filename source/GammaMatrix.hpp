@@ -33,8 +33,8 @@ YAKL_INLINE void add_to_gamma(const GammaAccumState& args) {
     integrand = uv.Vij * I_eff;
     GammaFp G_ji = GammaFp(integrand) * GammaFp(wlamu);
     if constexpr (atomic) {
-        yakl::atomicAdd(Gamma(i, j, k), G_ij);
-        yakl::atomicAdd(Gamma(j, i, k), G_ji);
+        Kokkos::atomic_add(&Gamma(i, j, k), G_ij);
+        Kokkos::atomic_add(&Gamma(j, i, k), G_ji);
     } else {
         Gamma(i, j, k) += G_ij;
         Gamma(j, i, k) += G_ji;
@@ -42,7 +42,7 @@ YAKL_INLINE void add_to_gamma(const GammaAccumState& args) {
 }
 
 template <typename T>
-inline void fixup_gamma(const yakl::Array<T, 3, yakl::memDevice>& Gamma) {
+inline void fixup_gamma(const Kokkos::View<T***>& Gamma) {
     parallel_for(
         "Gamma fixup",
         SimpleBounds<1>(Gamma.extent(2)),

@@ -19,7 +19,7 @@ struct BlockMapLookup {
 
     void init(i32 num_x, i32 num_z) {
         entries = decltype(entries)("BlockMapEntries", num_z, num_x);
-        entries = -1;
+        Kokkos::deep_copy(entries, -1);
         yakl::fence();
     }
 
@@ -33,7 +33,7 @@ struct BlockMapLookup {
         }
 
         BlockMapLookup<HostSpace> result;
-        result.entries = Kokkos::create_mirror_view_and_copy(entries);
+        result.entries = Kokkos::create_mirror_view_and_copy(HostSpace{}, entries);
         return result;
     }
 
@@ -89,7 +89,7 @@ struct BlockMap {
         KView<bool**> active("active tiles", num_z_tiles, num_x_tiles);
         bool all_active = cutoff_temperature == FP(0.0);
         if (all_active) {
-            active = true;
+            Kokkos::deep_copy(active, true);
             num_active_tiles = num_x_tiles * num_z_tiles;
         } else {
             auto& temperature = atmos.temperature;
@@ -196,7 +196,7 @@ struct BlockMap {
     }
 };
 
-template <u8 entry_size=3, int mem_space=yakl::memDevice>
+template <u8 entry_size=3, typename mem_space=DefaultMemSpace>
 struct MultiLevelLookup {
     static constexpr u8 packed_entries_per_u64 = (sizeof(u64) * CHAR_BIT) / entry_size;
     static constexpr u64 lowest_entry_mask = ((1 << entry_size) - 1);
@@ -207,7 +207,7 @@ struct MultiLevelLookup {
     // NOTE(cmo): We're still laying out these tiles linearly here (unless
     // hyper_blocks are used)... not ideal, but it has a very small footprint --
     // should remain resident in cache.
-    yakl::Array<u64, 1, mem_space> entries;
+    KView<u64*, mem_space> entries;
 
     template <class BlockMap>
     void init(const BlockMap& block_map) {
@@ -284,27 +284,28 @@ struct MultiLevelLookup {
         yakl::fence();
     }
 
-    MultiLevelLookup<entry_size, yakl::memHost> createHostCopy() {
-        if constexpr (mem_space == yakl::memHost) {
+    MultiLevelLookup<entry_size, HostSpace> createHostCopy() {
+        if constexpr (std::is_same_v<mem_space, HostSpace>) {
             return *this;
         }
 
-        MultiLevelLookup<entry_size, yakl::memHost> result;
+        MultiLevelLookup<entry_size, HostSpace> result;
         result.num_x_tiles = num_x_tiles;
         result.num_z_tiles = num_z_tiles;
-        result.entries = entries.createHostCopy();
+        result.entries = Kokkos::create_mirror_view_and_copy(HostSpace{}, entries);
         return result;
     }
 
-    MultiLevelLookup<entry_size, yakl::memDevice> createDeviceCopy() {
-        if constexpr (mem_space == yakl::memDevice) {
+    MultiLevelLookup<entry_size, DefaultMemSpace> createDeviceCopy() {
+        if constexpr (std::is_same_v<mem_space, DefaultMemSpace>) {
             return *this;
         }
 
-        MultiLevelLookup<entry_size, yakl::memDevice> result;
+        MultiLevelLookup<entry_size, DefaultMemSpace> result;
         result.num_x_tiles = num_x_tiles;
         result.num_z_tiles = num_z_tiles;
-        result.entries = entries.createDeviceCopy();
+        result.entries = KView<typename decltype(entries)::data_type, DefaultMemSpace>(entries.label(), entries.layout());
+        Kokkos::deep_copy(result.entries, entries);
         return result;
     }
 };

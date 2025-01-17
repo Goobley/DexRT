@@ -296,7 +296,7 @@ YAKL_INLINE RadianceInterval<Alo> merge_intervals(
 }
 
 struct Raymarch2dDynamicState {
-    const yakl::Array<const u16, 1, yakl::memDevice> active_set;
+    const KView<const u16*> active_set;
     const SparseAtmosphere& atmos;
     const AtomicData<fp_t>& adata;
     const VoigtProfile<fp_t, false>& profile;
@@ -407,13 +407,13 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             } else if constexpr (dynmaic_cav) {
                 JasUnpack(dyn_state, active_set, profile, adata);
                 i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
-                eta_s = mip_chain.emis.get_data()[ks_wave];
-                chi_s = mip_chain.opac.get_data()[ks_wave] + FP(1e-15);
+                eta_s = mip_chain.emis.data()[ks_wave];
+                chi_s = mip_chain.opac.data()[ks_wave] + FP(1e-15);
 
                 const fp_t vel = (
-                    mip_chain.vx.get_data()[ks] * mu(0)
-                    + mip_chain.vy.get_data()[ks] * mu(1)
-                    + mip_chain.vz.get_data()[ks] * mu(2)
+                    mip_chain.vx.data()[ks] * mu(0)
+                    + mip_chain.vy.data()[ks] * mu(1)
+                    + mip_chain.vz.data()[ks] * mu(2)
                 );
                 CavEmisOpacState emis_opac_state {
                     .ks = ks,
@@ -449,17 +449,17 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                         && dyn_state.active_set.extent(0) > 0
                     ) {
                         fp_t vel = (
-                            atmos.vx.get_data()[ks] * mu(0)
-                            + atmos.vy.get_data()[ks] * mu(1)
-                            + atmos.vz.get_data()[ks] * mu(2)
+                            atmos.vx.data()[ks] * mu(0)
+                            + atmos.vy.data()[ks] * mu(1)
+                            + atmos.vz.data()[ks] * mu(2)
                         );
                         AtmosPointParams local_atmos{
-                            .temperature = atmos.temperature.get_data()[ks],
-                            .ne = atmos.ne.get_data()[ks],
-                            .vturb = atmos.vturb.get_data()[ks],
-                            .nhtot = atmos.nh_tot.get_data()[ks],
+                            .temperature = atmos.temperature.data()[ks],
+                            .ne = atmos.ne.data()[ks],
+                            .vturb = atmos.vturb.data()[ks],
+                            .nhtot = atmos.nh_tot.data()[ks],
                             .vel = vel,
-                            .nh0 = dyn_state.nh0.get_data()[ks]
+                            .nh0 = dyn_state.nh0.data()[ks]
                         };
                         auto lines = emis_opac(
                             EmisOpacState<fp_t>{

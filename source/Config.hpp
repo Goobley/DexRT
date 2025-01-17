@@ -40,8 +40,6 @@ namespace yakl {
 // NOTE(cmo): The spacing between probes on cascade 0 -- this isn't actually configurable
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 
-typedef yakl::Array<GammaFp, 3, yakl::memDevice> GammaMat;
-
 constexpr bool VARY_BRANCHING_FACTOR = (BRANCHING_FACTOR_SWITCH > 0);
 static_assert(!(PREAVERAGE && VARY_BRANCHING_FACTOR), "Can't use preaveraging and variable branching factor because I was too lazy to implement it");
 
@@ -128,11 +126,11 @@ yakl::SArray<fp_t, 1, NumIncl> get_incl_weights() {
     return incl_weights;
 }
 
-#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
-#define DEXRT_USE_MAGMA
-#include <magma_v2.h>
-#include <magmablas.h>
-#endif
+// #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
+// #define DEXRT_USE_MAGMA
+// #include <magma_v2.h>
+// #include <magmablas.h>
+// #endif
 
 #else
 #endif

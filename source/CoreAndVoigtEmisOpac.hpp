@@ -46,10 +46,10 @@ struct CoreAndVoigtData {
 #else
         const i64 idx = ks * a_damp.extent(1) + krl;
 
-        fp_t a = a_damp.get_data()[idx];
-        const fp_t inv_dop = inv_dop_width.get_data()[idx];
-        const fp_t eta_s = eta_star.get_data()[idx];
-        const fp_t chi_s = chi_star.get_data()[idx];
+        fp_t a = a_damp.data()[idx];
+        const fp_t inv_dop = inv_dop_width.data()[idx];
+        const fp_t eta_s = eta_star.data()[idx];
+        const fp_t chi_s = chi_star.data()[idx];
 #endif
         constexpr fp_t inv_c = FP(1.0) / c;
         constexpr fp_t inv_sqrt_pi = FP(1.0) / sqrt_pi;

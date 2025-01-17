@@ -56,11 +56,6 @@ inline Atmosphere load_atmos(const std::string& path) {
         .offset_z = offset_z
     };
 #ifdef DEXRT_SINGLE_PREC
-    auto copy_via_mirror = [&] (auto& dest, auto src) {
-        auto dest_mirror = Kokkos::create_mirror_view(dest);
-        Kokkos::deep_copy(dest_mirror, src);
-        Kokkos::deep_copy(dest, dest_mirror);
-    };
     result.temperature = create_device_copy(temperature);
     result.pressure = create_device_copy(pressure);
     result.ne = create_device_copy(ne);

@@ -59,19 +59,22 @@ struct DirectionalEmisOpacInterp {
         const auto flatmos = flatten<const fp_t>(atmos);
         // NOTE(cmo): Was getting segfaults with ScalarLiveOuts
         Fp1d max_thermal_vel_frac("max_thermal_vel_frac", 1);
-        yakl::Array<i32, 1, yakl::memDevice> thermal_vel_frac_over_count("thermal_vel_frac_over_count", 1);
-        max_thermal_vel_frac = FP(0.0);
-        thermal_vel_frac_over_count = 0;
+        KView<i32*, DefaultMemSpace> thermal_vel_frac_over_count("thermal_vel_frac_over_count", 1);
+        Kokkos::deep_copy(max_thermal_vel_frac, FP(0.0));
+        Kokkos::deep_copy(thermal_vel_frac_over_count, 0);
         yakl::fence();
 
         auto block_bounds = block_map.loop_bounds();
         parallel_for(
             "Emis/Opac Samples",
-            SimpleBounds<4>(
-                block_bounds.dim(0),
-                block_bounds.dim(1),
-                emis_opac_vel.extent(1),
-                wave_batch
+            MDRange<4>(
+                {0, 0, 0, 0},
+                {
+                    block_bounds.m_upper[0],
+                    block_bounds.m_upper[1],
+                    emis_opac_vel.extent(1),
+                    wave_batch
+                }
             ),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int vel_idx, int wave) {
                 IndexGen<BLOCK_SIZE> idx_gen(block_map);
@@ -92,8 +95,8 @@ struct DirectionalEmisOpacInterp {
                     const fp_t vtherm_frac = dv / vtherm;
 
                     if (vtherm_frac > INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH) {
-                        yakl::atomicMax(max_thermal_vel_frac(0), vtherm_frac);
-                        yakl::atomicAdd(thermal_vel_frac_over_count(0), 1);
+                        Kokkos::atomic_max(&max_thermal_vel_frac(0), vtherm_frac);
+                        Kokkos::atomic_add(&thermal_vel_frac_over_count(0), 1);
                     }
                 }
                 AtmosPointParams local_atmos;
@@ -129,9 +132,9 @@ struct DirectionalEmisOpacInterp {
             }
         );
         yakl::fence();
-        i32 count = thermal_vel_frac_over_count.createHostCopy()(0);
+        i32 count = Kokkos::create_mirror_view_and_copy(HostSpace{}, thermal_vel_frac_over_count)(0);
         if (count > 0) {
-            fp_t max_frac = max_thermal_vel_frac.createHostCopy()(0);
+            fp_t max_frac = Kokkos::create_mirror_view_and_copy(HostSpace{}, max_thermal_vel_frac)(0);
             state.println(
                 "{} cells with velocity sampling over {} thermal widths (max: {}), consider increasing INTERPOLATE_DIRECTIONAL_BINS",
                 count,
