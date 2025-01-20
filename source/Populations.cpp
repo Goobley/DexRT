@@ -12,7 +12,7 @@ void compute_lte_pops_flat(
         "LTE Pops",
         pops.extent(1),
         YAKL_LAMBDA (int64_t ks) {
-            lte_pops(
+            lte_pops<fp_t, fp_t>(
                 atom.energy,
                 atom.g,
                 atom.stage,

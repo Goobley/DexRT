@@ -263,7 +263,7 @@ struct MultiLevelLookup {
     /// Pack an array of entries into the u64 storage backing array. This isn't
     /// really const, but it only changes the array contents... ehhhhh
     template <typename T>
-    void pack_entries(const Kokkos::View<T*>& single_entries) const {
+    void pack_entries(const KView<T*>& single_entries) const {
         JasUnpack((*this), entries);
         parallel_for(
             "Pack T entries into u64",

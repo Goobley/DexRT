@@ -848,13 +848,13 @@ extract_atoms_with_gamma_and_mapping(
 template <typename FPT=fp_t, typename T=fp_t>
 YAKL_INLINE
 void lte_pops(
-    const Kokkos::View<const T*>& energy,
-    const Kokkos::View<const T*>& g,
-    const Kokkos::View<const T*>& stage,
+    const KView<const T*>& energy,
+    const KView<const T*>& g,
+    const KView<const T*>& stage,
     fp_t temperature,
     fp_t ne,
     fp_t ntot,
-    const Kokkos::View<T**>& pops,
+    const KView<T**>& pops,
     int64_t x
 ) {
     using namespace ConstantsF64;

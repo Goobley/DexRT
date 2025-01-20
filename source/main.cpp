@@ -739,7 +739,7 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
             dim_names.insert(dim_names.end(), {"ks"});
             nc.write(arr, name, dim_names);
         } else {
-            auto hydrated = rehydrate_sparse_quantity(block_map, arr);
+            KView<std::add_pointer_t<typename decltype(arr)::data_type>, HostSpace> hydrated = rehydrate_sparse_quantity(block_map, arr);
             dim_names.insert(dim_names.end(), {"z", "x"});
             nc.write(hydrated, name, dim_names);
         }

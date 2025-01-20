@@ -456,9 +456,9 @@ namespace ExYakl {
       using ArrayType = std::decay<decltype(arr)>::type;
       auto var = file.getVar(varName);
       if ( var.isNull() ) {
-        var = file.addVar( varName , getType<ArrayType::value_type>() , dims );
+        var = file.addVar( varName , getType<typename ArrayType::value_type>() , dims );
       } else {
-        if ( var.getType() != getType<ArrayType::value_type>() ) { Kokkos::abort("Existing variable's type != array's type"); }
+        if ( var.getType() != getType<typename ArrayType::value_type>() ) { Kokkos::abort("Existing variable's type != array's type"); }
         auto varDims = var.getDims();
         if (varDims.size() != rank) { Kokkos::abort("Existing variable's rank != array's rank"); }
         for (int i=0; i < varDims.size(); i++) {

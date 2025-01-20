@@ -143,7 +143,7 @@ void rehydrate_page(
 
 KView<fp_t***, HostSpace> rehydrate_sparse_quantity_host(
     const BlockMap<BLOCK_SIZE>& block_map,
-    const Kokkos::View<const fp_t**, HostSpace>& quantity
+    const Kokkos::View<const fp_t**, Layout, HostSpace>& quantity
 ) {
     // NOTE(cmo): This is not efficient, it just reuses the GPU machinery,
     // copying a page of CPU memory over at a time
@@ -170,41 +170,6 @@ KView<fp_t***, HostSpace> rehydrate_sparse_quantity_host(
             }
         }
     }
-    return result;
-}
-
-KView<fp_t***, HostSpace> rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Kokkos::View<const fp_t**>& quantity) {
-    if constexpr(std::is_same_v<std::decay<decltype(quantity)>::type::memory_space, HostSpace> && !HostDevSameSpace) {
-        return rehydrate_sparse_quantity_host(block_map, quantity);
-    }
-    const int num_x = block_map.num_x_tiles * BLOCK_SIZE;
-    const int num_z = block_map.num_z_tiles * BLOCK_SIZE;
-    KView<fp_t***, HostSpace> result(
-        quantity.label(),
-        quantity.extent(0),
-        num_z,
-        num_x
-    );
-    Fp2d qty_page("qty_page", num_z, num_x);
-
-    for (int n = 0; n < quantity.extent(0); ++n) {
-        rehydrate_page(block_map, quantity, qty_page, n);
-        auto qty_page_host = Kokkos::create_mirror_view_and_copy(HostSpace{}, qty_page);
-
-        for (int z = 0; z < num_z; ++z) {
-            for (int x = 0; x < num_x; ++x) {
-                result(n, z, x) = qty_page_host(z, x);
-            }
-        }
-    }
-    return result;
-}
-
-KView<fp_t**, HostSpace> rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const FpConst1d& quantity) {
-    FpConst2d qtyx1(quantity.data(), 1, quantity.extent(0));
-    Fp2d qty_page("qty_page", block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
-    rehydrate_page(block_map, qtyx1, qty_page, 0);
-    auto result = Kokkos::create_mirror_view_and_copy(HostSpace{}, qty_page);
     return result;
 }
 
