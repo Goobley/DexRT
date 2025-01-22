@@ -727,7 +727,7 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     add_netcdf_attributes(state, nc, num_iter);
     const auto& block_map = state.mr_block_map.block_map;
 
-    bool sparse_J = (state.J.extent(1) == state.atmos.temperature.extent(0));
+    bool sparse_J = state.config.sparse_calculation && (state.J.extent(1) == state.atmos.temperature.extent(0));
 
     auto maybe_rehydrate_and_write = [&](
         auto arr,
@@ -759,11 +759,13 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
                 );
                 nc.write(J_full, "J", {"wavelength", "z", "x"});
             }
+            nc.write(state.J_cpu, "J_cpu", {"wavelength_a", "ks"});
+            nc.write(state.J, "J_gpu", {"wavelength_b", "ks"});
         } else {
             if (sparse_J) {
                 maybe_rehydrate_and_write(state.J, "J", {"wavelength"});
             } else {
-                assert(state.J_cpu.span_is_contiguous());
+                assert(state.J.span_is_contiguous());
                 KView<fp_t***, DefaultMemSpace> J_full(
                     state.J.data(),
                     state.J.extent(0),

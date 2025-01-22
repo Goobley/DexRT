@@ -32,6 +32,19 @@ typedef yakl::SArray<fp_t, 2, 2, 2> mat2x2;
 typedef yakl::SArray<int, 2, 2, 2> imat2x2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
 
+template <int R, typename... Args>
+using MDRange = Kokkos::MDRangePolicy<Kokkos::Rank<R, Kokkos::Iterate::Right, Kokkos::Iterate::Right>, Args...>;
+// using MDRange = Kokkos::MDRangePolicy<Kokkos::Rank<R, Kokkos::Iterate::Right, Kokkos::Iterate::Left>, Args...>;
+
+typedef Kokkos::TeamPolicy<Kokkos::DefaultExecutionSpace> TeamPolicy;
+typedef TeamPolicy::member_type KTeam;
+template <int R>
+using TVMDRange = Kokkos::TeamVectorMDRange<Kokkos::Rank<R, Kokkos::Iterate::Right, Kokkos::Iterate::Right>, KTeam>;
+// using TVMDRange = Kokkos::TeamVectorMDRange<Kokkos::Rank<R>, KTeam>;
+
+
+using Kokkos::parallel_for;
+
 struct Coord2 {
     i32 x;
     i32 z;
@@ -41,14 +54,6 @@ struct Coord2 {
     }
 };
 
-template <int R, typename... Args>
-using MDRange = Kokkos::MDRangePolicy<Kokkos::Rank<R, Kokkos::Iterate::Right, Kokkos::Iterate::Right>, Args...>;
-
-using Kokkos::parallel_for;
-
-// using yakl::c::parallel_for;
-// using yakl::c::SimpleBounds;
-// using yakl::Dims;
 struct State;
 
 enum class DexrtMode {

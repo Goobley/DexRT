@@ -74,7 +74,7 @@ constexpr BaseMipContents BASE_MIP_CONTAINS =
 static_assert(std::has_single_bit(u32(BLOCK_SIZE)), "BLOCK_SIZE must be a power of two (>= 2)");
 
 #ifdef FLATLAND
-constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);
+constexpr int NUM_GAUSS_LOBATTO = std::max(NUM_INCL - 1, 1);
 constexpr fp_t INCL_RAYS[NUM_INCL] = {FP(0.000000)};
 constexpr fp_t INCL_WEIGHTS[NUM_INCL] = {FP(1.0)};
 #else

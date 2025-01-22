@@ -58,6 +58,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
+    // for (int subset_idx = 0; subset_idx < 1; ++subset_idx) {
         CascadeCalcSubset subset{
             .la_start=la_start,
             .la_end=la_end,

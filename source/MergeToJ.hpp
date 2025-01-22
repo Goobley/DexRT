@@ -30,29 +30,13 @@ inline FpConst2d merge_c0_to_J(
     DeviceProbesToCompute probes_to_compute = casc_state.probes_to_compute.bind(0);
 
     // For a dense J, this is effectively filling in the flattened array
+    const i64 num_probes = probes_to_compute.num_active_probes();
     parallel_for(
         "final_cascade_to_J",
-        MDRange<4>(
-            {0, 0, 0, 0},
-            {
-                probes_to_compute.num_active_probes(),
-                c0_dims.num_flat_dirs,
-                wave_batch,
-                c0_dims.num_incl
-            }
-        ),
-        YAKL_LAMBDA (i64 k, int phi_idx, int wave, int theta_idx) {
-            fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
-            int la = la_start + wave;
-
+        TeamPolicy(num_probes, Kokkos::AUTO()),
+        KOKKOS_LAMBDA (const KTeam& team) {
+            const i64 k = team.league_rank();
             ivec2 coord = probes_to_compute(k);
-            ProbeStorageIndex idx{
-                .coord=coord,
-                .dir=phi_idx,
-                .incl=theta_idx,
-                .wave=wave
-            };
-            // NOTE(cmo): Can't use this when sparse
             i64 ks;
             if (sparse) {
                 IdxGen idx_gen(block_map);
@@ -60,11 +44,72 @@ inline FpConst2d merge_c0_to_J(
             } else {
                 ks = coord(1) * c0_dims.num_probes(0) + coord(0);
             }
-            const fp_t sample = probe_fetch<RcMode>(c0, c0_dims, idx);
-            // TODO(cmo): The loop over directions can be moved to a parallel_reduce now
-            Kokkos::atomic_add(&J(la, ks), ray_weight * sample);
+
+            for (int wave = 0; wave < wave_batch; ++wave) {
+                int la = la_start + wave;
+                fp_t j_sum = FP(0.0);
+                Kokkos::parallel_reduce(
+                    TVMDRange<2>(
+                        team,
+                        c0_dims.num_flat_dirs,
+                        c0_dims.num_incl
+                    ),
+                    [&] (int phi_idx, int theta_idx, fp_t& j_entry) {
+                        const fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
+
+                        ProbeStorageIndex idx{
+                            .coord=coord,
+                            .dir=phi_idx,
+                            .incl=theta_idx,
+                            .wave=wave
+                        };
+
+                        const fp_t sample = probe_fetch<RcMode>(c0, c0_dims, idx);
+                        j_entry += ray_weight * sample;
+                    },
+                    j_sum
+                );
+                Kokkos::single(Kokkos::PerTeam(team), [&] () {
+                    J(la, ks) += j_sum;
+                });
+            }
+
+            // parallel_for(
+            //     TVMDRange<3>(
+            //         team,
+            //         c0_dims.num_flat_dirs,
+            //         wave_batch,
+            //         c0_dims.num_incl
+            //     ),
+            //     [&] (int phi_idx, int wave, int theta_idx) {
+            //         const i64 k = team.league_rank();
+            //         const fp_t ray_weight = phi_weight * incl_quad.wmuy(theta_idx);
+            //         int la = la_start + wave;
+
+            //         ivec2 coord = probes_to_compute(k);
+            //         ProbeStorageIndex idx{
+            //             .coord=coord,
+            //             .dir=phi_idx,
+            //             .incl=theta_idx,
+            //             .wave=wave
+            //         };
+
+            //         i64 ks;
+            //         if (sparse) {
+            //             IdxGen idx_gen(block_map);
+            //             ks = idx_gen.idx(coord(0), coord(1));
+            //         } else {
+            //             ks = coord(1) * c0_dims.num_probes(0) + coord(0);
+            //         }
+            //         const fp_t sample = probe_fetch<RcMode>(c0, c0_dims, idx);
+            //         // TODO(cmo): The loop over directions can be moved to a parallel_reduce now
+            //         Kokkos::atomic_add(&J(la, ks), ray_weight * sample);
+
+            //     }
+            // );
         }
     );
+
     return J;
 }
 
