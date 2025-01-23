@@ -7,6 +7,8 @@
 #include "RcUtilsModes.hpp"
 #include "BlockMap.hpp"
 
+#include "LoopUtils.hpp"
+
 inline FpConst2d merge_c0_to_J(
     const CascadeState& casc_state,
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& block_map,
