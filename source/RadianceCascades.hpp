@@ -5,6 +5,7 @@
 #include "BoundaryDispatch.hpp"
 #include "RayMarching.hpp"
 #include "Atmosphere.hpp"
+#include "LoopUtils.hpp"
 
 template <typename DynamicState>
 struct RaymarchParams {
@@ -777,16 +778,13 @@ void cascade_i_25d(
     );
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());
-    parallel_for(
+    dex_parallel_for(
         "RC Loop",
-        MDRange<4>(
-            {0, 0, 0, 0},
-            {
-                spatial_bounds,
-                ray_subset.num_flat_dirs / num_rays_per_texel,
-                wave_batch,
-                ray_subset.num_incl
-            }
+        FlatLoop<4>(
+            spatial_bounds,
+            ray_subset.num_flat_dirs / num_rays_per_texel,
+            wave_batch,
+            ray_subset.num_incl
         ),
         YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
             constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
