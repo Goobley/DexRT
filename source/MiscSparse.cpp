@@ -22,10 +22,10 @@ SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLO
     result.vy = Fp1d("sparse vy", num_active_cells);
     result.vz = Fp1d("sparse vz", num_active_cells);
 
-    parallel_for(
+    dex_parallel_for(
         "Sparsify atmosphere",
         block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
@@ -54,10 +54,10 @@ KView<u8**> reify_active_c0(const BlockMap<BLOCK_SIZE>& block_map) {
     Kokkos::deep_copy(result, 0);
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "Eval active",
         block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(block_map);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
             result(coord.z, coord.x) = 1;
@@ -127,10 +127,10 @@ void rehydrate_page(
     Kokkos::deep_copy(qty_page, FP(0.0));
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "Rehydrate page",
         block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
@@ -185,9 +185,9 @@ std::vector<KView<i32*[2]>> compute_active_probe_lists(const State& state, int m
     KView<u64**> prev_active("active c0", state.atmos.num_z, state.atmos.num_x);
     Kokkos::deep_copy(prev_active, 0);
     yakl::fence();
-    parallel_for(
+    dex_parallel_for(
         mr_block_map.block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(mr_block_map);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
             prev_active(coord.z, coord.x) = 1;
@@ -199,9 +199,9 @@ std::vector<KView<i32*[2]>> compute_active_probe_lists(const State& state, int m
     auto prev_active_h = Kokkos::create_mirror_view_and_copy(HostSpace{}, prev_active);
     yakl::fence();
     KView<i32*[2]> probes_to_compute_c0("c0 to compute", num_active);
-    parallel_for(
+    dex_parallel_for(
         mr_block_map.block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(mr_block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
@@ -227,15 +227,15 @@ std::vector<KView<i32*[2]>> compute_active_probe_lists(const State& state, int m
         );
         Kokkos::deep_copy(curr_active, 0);
         yakl::fence();
-        auto my_atomic_max = YAKL_LAMBDA (u64& ref, unsigned long long int val) {
+        auto my_atomic_max = KOKKOS_LAMBDA (u64& ref, unsigned long long int val) {
             yakl::atomicMax(
                 *reinterpret_cast<unsigned long long int*>(&ref),
                 val
             );
         };
-        parallel_for(
-            MDRange<2>({0, 0}, {prev_active.extent(0), prev_active.extent(1)}),
-            YAKL_LAMBDA (int z, int x) {
+        dex_parallel_for(
+            FlatLoop<2>(prev_active.extent(0), prev_active.extent(1)),
+            KOKKOS_LAMBDA (int z, int x) {
                 int z_bc = std::max(int((z - 1) / 2), 0);
                 int x_bc = std::max(int((x - 1) / 2), 0);
                 const bool z_clamp = (z_bc == 0) || (z_bc == (curr_active.extent(0) - 1));

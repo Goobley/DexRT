@@ -79,7 +79,7 @@ inline Atmosphere load_atmos(const std::string& path) {
     #define DEX_FLOAT_CONVERT(X) parallel_for( \
         "convert", \
         SimpleBounds<2>(z_dim, x_dim), \
-        YAKL_LAMBDA (int z, int x) { \
+        KOKKOS_LAMBDA (int z, int x) { \
             result.X(z, x) = JasConcat(X, dev)(z, x); \
         } \
     )

@@ -8,10 +8,10 @@ void compute_lte_pops_flat(
     const auto& temperature = atmos.temperature;
     const auto& ne = atmos.ne;
     const auto& nhtot = atmos.nh_tot;
-    parallel_for(
+    dex_parallel_for(
         "LTE Pops",
-        pops.extent(1),
-        YAKL_LAMBDA (int64_t ks) {
+        FlatLoop<1>(pops.extent(1)),
+        KOKKOS_LAMBDA (int64_t ks) {
             lte_pops<fp_t, fp_t>(
                 atom.energy,
                 atom.g,
@@ -60,19 +60,19 @@ void compute_nh0(const State& state) {
     if (state.have_h) {
         // NOTE(cmo): This could just be a pointer shuffle...
         const auto& pops = state.pops;
-        parallel_for(
+        dex_parallel_for(
             "Copy nh0",
-            nh0.extent(0),
-            YAKL_LAMBDA (i64 ks) {
+            FlatLoop<1>(nh0.extent(0)),
+            KOKKOS_LAMBDA (i64 ks) {
                 nh0(ks) = pops(0, ks);
             }
         );
     } else {
         const auto& atmos = state.atmos;
-        parallel_for(
+        dex_parallel_for(
             "Compute nh0 in LTE",
-            nh0.extent(0),
-            YAKL_LAMBDA (i64 ks) {
+            FlatLoop<1>(nh0.extent(0)),
+            KOKKOS_LAMBDA (i64 ks) {
                 const fp_t temperature = atmos.temperature(ks);
                 const fp_t ne = atmos.ne(ks);
                 const fp_t nh_tot = atmos.nh_tot(ks);
@@ -97,24 +97,24 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         // GammaT has shape [ks, Nlevel, Nlevel]
         const fp_t abundance = state->adata_host.abundance(ia);
         const auto nh_tot = state->atmos.nh_tot;
-        yakl::Array<T, 3, yakl::memDevice> GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
-        yakl::Array<T*, 1, yakl::memDevice> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0));
-        yakl::Array<T, 2, yakl::memDevice> new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));
-        yakl::Array<T, 1, yakl::memDevice> n_total("n_total", GammaT.extent(0));
-        yakl::Array<T*, 1, yakl::memDevice> new_pops_ptrs("new_pops_ptrs", GammaT.extent(0));
-        yakl::Array<i32, 1, yakl::memDevice> i_elim("i_elim", GammaT.extent(0));
-        yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", new_pops.extent(0), new_pops.extent(1));
-        yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", new_pops.extent(0));
-        yakl::Array<i32, 1, yakl::memDevice> info("info", new_pops.extent(0));
+        KView<T***> GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
+        KView<intptr_t*> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0)); // T*
+        KView<T**> new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));
+        KView<T*> n_total("n_total", GammaT.extent(0));
+        KView<intptr_t*> new_pops_ptrs("new_pops_ptrs", GammaT.extent(0)); // T*
+        KView<i32*> i_elim("i_elim", GammaT.extent(0));
+        KView<i32**> ipivs("ipivs", new_pops.extent(0), new_pops.extent(1));
+        KView<intptr_t*> ipiv_ptrs("ipiv_ptrs", new_pops.extent(0)); // i32*
+        KView<i32*> info("info", new_pops.extent(0));
 
         constexpr bool fractional_pops = true;
 
         const int pops_start = state->adata_host.level_start(ia);
         const int num_level = state->adata_host.num_level(ia);
-        parallel_for(
+        dex_parallel_for(
             "Max Pops",
-            SimpleBounds<1>(pops.extent(1)),
-            YAKL_LAMBDA (int64_t k) {
+            FlatLoop<1>(pops.extent(1)),
+            KOKKOS_LAMBDA (int64_t k) {
                 fp_t n_max = FP(0.0);
                 i_elim(k) = 0;
                 // n_total(k) = FP(0.0);
@@ -131,19 +131,19 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         );
         yakl::fence();
 
-        parallel_for(
+        dex_parallel_for(
             "Transpose Gamma",
-            SimpleBounds<3>(Gamma.extent(2), Gamma.extent(1), Gamma.extent(0)),
-            YAKL_LAMBDA (int k, int i, int j) {
+            FlatLoop<3>(Gamma.extent(2), Gamma.extent(1), Gamma.extent(0)),
+            KOKKOS_LAMBDA (int k, int i, int j) {
                 GammaT(k, j, i) = Gamma(i, j, k);
             }
         );
         yakl::fence();
 
-        parallel_for(
+        dex_parallel_for(
             "Gamma fixup",
-            SimpleBounds<1>(GammaT.extent(0)),
-            YAKL_LAMBDA (i64 k) {
+            FlatLoop<1>(GammaT.extent(0)),
+            KOKKOS_LAMBDA (i64 k) {
                 for (int i = 0; i < GammaT.extent(1); ++i) {
                     T diag = FP(0.0);
                     GammaT(k, i, i) = FP(0.0);
@@ -154,10 +154,10 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 }
             }
         );
-        parallel_for(
+        dex_parallel_for(
             "Transpose Pops",
-            SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
-            YAKL_LAMBDA (i64 k, int i) {
+            FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
+            KOKKOS_LAMBDA (i64 k, int i) {
                 if (i_elim(k) == i) {
                     if (fractional_pops) {
                         new_pops(k, i) = FP(1.0);
@@ -169,21 +169,21 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 }
             }
         );
-        parallel_for(
+        dex_parallel_for(
             "Setup pointers",
-            SimpleBounds<1>(GammaT_ptrs.extent(0)),
-            YAKL_LAMBDA (i64 k) {
-                GammaT_ptrs(k) = &GammaT(k, 0, 0);
-                new_pops_ptrs(k) = &new_pops(k, 0);
-                ipiv_ptrs(k) = &ipivs(k, 0);
+            FlatLoop<1>(GammaT_ptrs.extent(0)),
+            KOKKOS_LAMBDA (i64 k) {
+                GammaT_ptrs(k) = (intptr_t)&GammaT(k, 0, 0);
+                new_pops_ptrs(k) = (intptr_t)&new_pops(k, 0);
+                ipiv_ptrs(k) = (intptr_t)&ipivs(k, 0);
             }
         );
         yakl::fence();
 
-        parallel_for(
+        dex_parallel_for(
             "Conservation eqn",
-            SimpleBounds<3>(GammaT.extent(0), GammaT.extent(1), GammaT.extent(2)),
-            YAKL_LAMBDA (i64 k, int i, int j) {
+            FlatLoop<3>(GammaT.extent(0), GammaT.extent(1), GammaT.extent(2)),
+            KOKKOS_LAMBDA (i64 k, int i, int j) {
                 if (i_elim(k) == i) {
                     GammaT(k, j, i) = FP(1.0);
                 }
@@ -200,38 +200,38 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             magma_sgesv_batched(
                 GammaT.extent(1),
                 1,
-                GammaT_ptrs.get_data(),
+                (T**)GammaT_ptrs.data(),
                 GammaT.extent(1),
-                ipiv_ptrs.get_data(),
-                new_pops_ptrs.get_data(),
+                (i32**)ipiv_ptrs.data(),
+                (T**)new_pops_ptrs.data(),
                 new_pops.extent(1),
-                info.get_data(),
+                info.data(),
                 GammaT.extent(0),
                 state->magma_queue
             );
         } else if constexpr (std::is_same_v<T, f64>) {
             constexpr bool iterative_improvement = true;
             constexpr int num_refinement_passes = 2;
-            yakl::Array<T, 3, yakl::memDevice> gamma_copy;
-            yakl::Array<T, 2, yakl::memDevice> lhs_copy;
-            yakl::Array<T, 2, yakl::memDevice> residuals;
-            yakl::Array<T*, 1, yakl::memDevice> residuals_ptrs;
+            KView<T***> gamma_copy;
+            KView<T**> lhs_copy;
+            KView<T**> residuals;
+            KView<intptr_t*> residuals_ptrs; // T*
             if constexpr (iterative_improvement) {
-                gamma_copy = GammaT.createDeviceCopy();
-                lhs_copy = new_pops.createDeviceCopy();
-                residuals = new_pops.createDeviceCopy();
+                gamma_copy = create_device_copy(GammaT);
+                lhs_copy = create_device_copy(new_pops);
+                residuals = create_device_copy(new_pops);
                 residuals_ptrs = decltype(residuals_ptrs)("residuals_ptrs", residuals.extent(0));
             }
 
             magma_dgesv_batched(
                 GammaT.extent(1),
                 1,
-                GammaT_ptrs.get_data(),
+                (T**)GammaT_ptrs.data(),
                 GammaT.extent(1),
-                ipiv_ptrs.get_data(),
-                new_pops_ptrs.get_data(),
+                (i32**)ipiv_ptrs.data(),
+                (T**)new_pops_ptrs.data(),
                 new_pops.extent(1),
-                info.get_data(),
+                info.data(),
                 GammaT.extent(0),
                 state->magma_queue
             );
@@ -240,12 +240,12 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             if constexpr (iterative_improvement) {
                 for (int refinement = 0; refinement < num_refinement_passes; ++refinement) {
                     // r_i = b_i
-                    parallel_for(
+                    dex_parallel_for(
                         "Copy residual",
-                        SimpleBounds<2>(residuals.extent(0), residuals.extent(1)),
-                        YAKL_LAMBDA (i64 ks, i32 i) {
+                        FlatLoop<2>(residuals.extent(0), residuals.extent(1)),
+                        KOKKOS_LAMBDA (i64 ks, i32 i) {
                             if (i == 0) {
-                                residuals_ptrs(ks) = &residuals(ks, 0);
+                                residuals_ptrs(ks) = (intptr_t)&residuals(ks, 0);
                             }
                             residuals(ks, i) = lhs_copy(ks, i);
                         }
@@ -257,14 +257,14 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                         residuals.extent(1),
                         residuals.extent(1),
                         -1,
-                        gamma_copy.get_data(),
+                        gamma_copy.data(),
                         gamma_copy.extent(1),
                         square(gamma_copy.extent(1)),
-                        new_pops.get_data(),
+                        new_pops.data(),
                         1,
                         new_pops.extent(1),
                         1,
-                        residuals.get_data(),
+                        residuals.data(),
                         1,
                         residuals.extent(1),
                         residuals.extent(0),
@@ -277,10 +277,10 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                         MagmaNoTrans,
                         GammaT.extent(1),
                         1,
-                        GammaT_ptrs.get_data(),
+                        (T**)GammaT_ptrs.data(),
                         GammaT.extent(1),
-                        ipiv_ptrs.get_data(),
-                        residuals_ptrs.get_data(),
+                        (i32**)ipiv_ptrs.data(),
+                        (T**)residuals_ptrs.data(),
                         residuals.extent(1),
                         GammaT.extent(0),
                         state->magma_queue
@@ -288,10 +288,10 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                     magma_queue_sync(state->magma_queue);
 
                     // x += x'
-                    parallel_for(
+                    dex_parallel_for(
                         "Apply residual",
-                        SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
-                        YAKL_LAMBDA (i64 ks, i32 i) {
+                        FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
+                        KOKKOS_LAMBDA (i64 ks, i32 i) {
                             new_pops(ks, i) += residuals(ks, i);
                         }
                     );
@@ -301,10 +301,10 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         }
 
         magma_queue_sync(state->magma_queue);
-        parallel_for(
+        dex_parallel_for(
             "info check",
-            SimpleBounds<1>(info.extent(0)),
-            YAKL_LAMBDA (int k) {
+            FlatLoop<1>(info.extent(0)),
+            KOKKOS_LAMBDA (int k) {
                 if (info(k) != 0) {
                     printf("LINEAR SOLVER PROBLEM k: %d, info: %d\n", k, info(k));
                 }
@@ -312,10 +312,10 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         );
 
         Fp2d max_rel_change("max rel change", new_pops.extent(0), new_pops.extent(1));
-        parallel_for(
+        dex_parallel_for(
             "Compute max change",
-            SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
-            YAKL_LAMBDA (int64_t k, int i) {
+            FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
+            KOKKOS_LAMBDA (int64_t k, int i) {
                 fp_t change = FP(0.0);
                 if (pops(pops_start + i, k) < ignore_change_below_ntot_frac * n_total(k)) {
                     change = FP(0.0);
@@ -330,10 +330,10 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             }
         );
         yakl::fence();
-        parallel_for(
+        dex_parallel_for(
             "Copy & transpose pops",
-            SimpleBounds<2>(new_pops.extent(1), new_pops.extent(0)),
-            YAKL_LAMBDA (int i, int64_t k) {
+            FlatLoop<2>(new_pops.extent(1), new_pops.extent(0)),
+            KOKKOS_LAMBDA (int i, int64_t k) {
                 if (fractional_pops) {
                     pops(pops_start + i, k) = new_pops(k, i) * n_total(k);
                 } else {
@@ -342,21 +342,66 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             }
         );
 
-        fp_t max_change = yakl::intrinsics::maxval(max_rel_change);
-        int max_change_loc = yakl::intrinsics::maxloc(max_rel_change.collapse());
-        auto temp_h = state->atmos.temperature.createHostCopy();
+        typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<int, int>> Reducer;
+        typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<int, int>, Kokkos::DefaultHostExecutionSpace> ReducerDev;
+        typedef Reducer::value_type ReducerType;
 
-        yakl::fence();
-        int max_change_level = max_change_loc % new_pops.extent(1);
-        max_change_loc /= new_pops.extent(1);
+        const FlatLoop<2> loop(max_rel_change.extent(0), max_rel_change.extent(1));
+        const auto work_div = balance_parallel_work_division(BalanceLoopArgs{.loop = loop});
+        ReducerType max_change_loc;
+        Kokkos::parallel_reduce(
+            TeamPolicy(work_div.team_count, Kokkos::AUTO()),
+            KOKKOS_LAMBDA (const KTeam& team, ReducerType& team_val) {
+                const i64 i_base = team.league_rank() * work_div.inner_work_count;
+                const i64 i_max = std::min(i_base + work_div.inner_work_count, loop.num_iter);
+                const i32 inner_iter_count = i_max - i_base;
+                ReducerType thread_val;
+                ReducerDev thread_reducer(thread_val);
+
+                Kokkos::parallel_reduce(
+                    InnerRange(team, inner_iter_count),
+                    [&] (const int inner_i, ReducerType& inner_val) {
+                        auto idxs = loop.unpack(i_base + inner_i);
+                        const int k = idxs[0];
+                        const int i = idxs[1];
+                        fp_t val = max_rel_change(k, i);
+                        if (val > inner_val.val) {
+                            inner_val.val = val;
+                            inner_val.loc = Kokkos::make_pair(k, i);
+                        }
+                    },
+                    thread_reducer
+                );
+
+                Kokkos::single(Kokkos::PerTeam(team), [&] () {
+                    if (thread_val.val > team_val.val) {
+                        team_val.val = thread_val.val;
+                        team_val.loc = thread_val.loc;
+                    }
+                });
+            },
+            Reducer(max_change_loc)
+        );
+
+        // fp_t max_change = yakl::intrinsics::maxval(max_rel_change);
+        // int max_change_loc = yakl::intrinsics::maxloc(max_rel_change.collapse());
+        // auto temp_h = state->atmos.temperature.createHostCopy();
+        // yakl::fence();
+        // int max_change_level = max_change_loc % new_pops.extent(1);
+        // max_change_loc /= new_pops.extent(1);
+
+        const fp_t max_change = max_change_loc.val;
+        auto temp_val = Kokkos::subview(state->atmos.temperature, max_change_loc.loc.first);
+        auto temp_h = Kokkos::create_mirror_view_and_copy(HostSpace{}, temp_val);
+
         state->println(
             "     Max Change (ele: {}, Z={}): {} (@ l={}, ks={}) [T={}]",
             ia,
             state->adata_host.Z(ia),
             max_change,
-            max_change_level,
-            max_change_loc,
-            temp_h(max_change_loc)
+            max_change_loc.loc.second,
+            max_change_loc.loc.first,
+            temp_h()
         );
         global_max_change = std::max(max_change, global_max_change);
 

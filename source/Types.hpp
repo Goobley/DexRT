@@ -2,6 +2,7 @@
 #define DEXRT_TYPES_HPP
 #include "Config.hpp"
 #include "Constants.hpp"
+#include "LoopUtils.hpp"
 
 typedef Kokkos::LayoutRight Layout;
 template <class T, typename... Args>
@@ -38,10 +39,12 @@ using MDRange = Kokkos::MDRangePolicy<Kokkos::Rank<R, Kokkos::Iterate::Right, Ko
 
 typedef Kokkos::TeamPolicy<Kokkos::DefaultExecutionSpace> TeamPolicy;
 typedef TeamPolicy::member_type KTeam;
-template <int R>
-using TVMDRange = Kokkos::TeamVectorMDRange<Kokkos::Rank<R, Kokkos::Iterate::Right, Kokkos::Iterate::Right>, KTeam>;
-// using TVMDRange = Kokkos::TeamVectorMDRange<Kokkos::Rank<R>, KTeam>;
 
+template <typename Team, typename iType>
+KOKKOS_INLINE_FUNCTION
+auto InnerRange(const Team& team, iType range) -> decltype(Kokkos::TeamVectorRange(team, range)) {
+    return Kokkos::TeamVectorRange(team, range);
+}
 
 using Kokkos::parallel_for;
 

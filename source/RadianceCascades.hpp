@@ -471,18 +471,15 @@ inline void parallax_fix_inner_merge(
     // TODO(cmo): Pre-allocate these somewhere.
     Fp1d I_temp = Kokkos::create_mirror(dev_casc_state.cascade_I);
     Fp1d tau_temp = Kokkos::create_mirror(dev_casc_state.cascade_tau);
-    parallel_for(
+    dex_parallel_for(
         "RC Separate Merge Loop",
-        MDRange<4>(
-            {0, 0, 0, 0},
-            {
-                spatial_bounds,
-                ray_subset.num_flat_dirs / num_rays_per_texel,
-                wave_batch,
-                ray_subset.num_incl
-            }
+        FlatLoop<4>(
+            spatial_bounds,
+            ray_subset.num_flat_dirs / num_rays_per_texel,
+            wave_batch,
+            ray_subset.num_incl
         ),
-        YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
+        KOKKOS_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
             ivec2 probe_coord = probe_coord_lookup(ks);
             phi_idx += ray_subset.start_flat_dirs;
             theta_idx += ray_subset.start_incl;
@@ -581,18 +578,15 @@ inline void parallax_fix_inner_merge(
     );
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "RC Post-Merge Copy",
-        MDRange<4>(
-            {0, 0, 0, 0},
-            {
-                spatial_bounds,
-                ray_subset.num_flat_dirs / num_rays_per_texel,
-                wave_batch,
-                ray_subset.num_incl
-            }
+        FlatLoop<4>(
+            spatial_bounds,
+            ray_subset.num_flat_dirs / num_rays_per_texel,
+            wave_batch,
+            ray_subset.num_incl
         ),
-        YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
+        KOKKOS_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
             ivec2 probe_coord = probe_coord_lookup(ks);
             phi_idx += ray_subset.start_flat_dirs;
             theta_idx += ray_subset.start_incl;
@@ -786,7 +780,7 @@ void cascade_i_25d(
             wave_batch,
             ray_subset.num_incl
         ),
-        YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
+        KOKKOS_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
             constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
             ivec2 probe_coord = probe_coord_lookup(ks);
 

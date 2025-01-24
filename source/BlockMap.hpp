@@ -93,10 +93,10 @@ struct BlockMap {
             num_active_tiles = num_x_tiles * num_z_tiles;
         } else {
             auto& temperature = atmos.temperature;
-            parallel_for(
+            dex_parallel_for(
                 "Compute active cells",
-                MDRange<2>({0, 0}, {num_z_tiles, num_x_tiles}),
-                YAKL_LAMBDA (int zt, int xt) {
+                FlatLoop<2>(num_z_tiles, num_x_tiles),
+                KOKKOS_LAMBDA (int zt, int xt) {
                     active(zt, xt) = false;
                     for (int z = zt * BLOCK_SIZE; z < (zt + 1) * BLOCK_SIZE; ++z) {
                         for (int x = xt * BLOCK_SIZE; x < (xt + 1) * BLOCK_SIZE; ++x) {
@@ -188,10 +188,10 @@ struct BlockMap {
         return i64(num_active_tiles) * i64(square(BLOCK_SIZE) / square(mip_px_size));
     }
 
-    MDRange<2> loop_bounds(i32 mip_px_size=1) const {
-        return MDRange<2>(
-            {0, 0},
-            {num_active_tiles, square(BLOCK_SIZE) / square(mip_px_size)}
+    FlatLoop<2> loop_bounds(i32 mip_px_size=1) const {
+        return FlatLoop<2>(
+            num_active_tiles,
+            square(BLOCK_SIZE) / square(mip_px_size)
         );
     }
 };
@@ -265,10 +265,10 @@ struct MultiLevelLookup {
     template <typename T>
     void pack_entries(const KView<T*>& single_entries) const {
         JasUnpack((*this), entries);
-        parallel_for(
+        dex_parallel_for(
             "Pack T entries into u64",
-            entries.extent(0),
-            YAKL_LAMBDA (int block_idx) {
+            FlatLoop<1>(entries.extent(0)),
+            KOKKOS_LAMBDA (int block_idx) {
                 u64 block = 0;
                 const int max_entry = std::min(
                     i32(single_entries.extent(0) - block_idx * packed_entries_per_u64),

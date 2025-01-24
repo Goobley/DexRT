@@ -1,6 +1,7 @@
 #include "ChargeConservation.hpp"
 
-#ifdef DEXRT_USE_MAGMA
+// #ifdef DEXRT_USE_MAGMA
+#if 0
 template <typename T=fp_t>
 fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions()) {
     yakl::timer_start("Charge conservation");
@@ -44,7 +45,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Transpose Gamma",
         SimpleBounds<3>(GammaH_flat.extent(2), GammaH_flat.extent(1), GammaH_flat.extent(0)),
-        YAKL_LAMBDA (i64 k, int i, int j) {
+        KOKKOS_LAMBDA (i64 k, int i, int j) {
             GammaT(k, j, i) = GammaH_flat(i, j, k);
         }
     );
@@ -53,7 +54,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Gamma fixup",
         SimpleBounds<1>(GammaT.extent(0)),
-        YAKL_LAMBDA (i64 k) {
+        KOKKOS_LAMBDA (i64 k) {
             for (int i = 0; i < GammaT.extent(1); ++i) {
                 T diag = FP(0.0);
                 GammaT(k, i, i) = FP(0.0);
@@ -67,7 +68,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Tranpose Pops",
         SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
-        YAKL_LAMBDA (i64 k, int i) {
+        KOKKOS_LAMBDA (i64 k, int i) {
             new_pops(k, i) = pops(i, k);
         }
     );
@@ -89,7 +90,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Perturb ne",
         SimpleBounds<1>(ne.extent(0)),
-        YAKL_LAMBDA (i64 ks) {
+        KOKKOS_LAMBDA (i64 ks) {
             ne_pert(ks) = ne(ks) * pert_size;
             ne(ks) += ne_pert(ks);
         }
@@ -101,7 +102,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Compute dC",
         SimpleBounds<3>(C.extent(0), C.extent(1), C.extent(2)),
-        YAKL_LAMBDA (int i, int j, i64 ks) {
+        KOKKOS_LAMBDA (int i, int j, i64 ks) {
             C(i, j, ks) = (GammaH(i, j, ks) - C(i, j, ks)) / ne_pert(ks);
         }
     );
@@ -110,7 +111,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Restore n_e",
         SimpleBounds<1>(ne.extent(0)),
-        YAKL_LAMBDA (i64 ks) {
+        KOKKOS_LAMBDA (i64 ks) {
             ne(ks) = ne_copy(ks);
         }
     );
@@ -120,7 +121,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Compute F",
         SimpleBounds<2>(F.extent(0), F.extent(1)),
-        YAKL_LAMBDA (i64 k, int i) {
+        KOKKOS_LAMBDA (i64 k, int i) {
             if (i < (num_level - 1)) {
                 T Fi = FP(0.0);
                 for (int j = 0; j < num_level; ++j) {
@@ -157,7 +158,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Compute dF",
         SimpleBounds<3>(dF.extent(0), dF.extent(1), dF.extent(2)),
-        YAKL_LAMBDA (i64 k, int i, int j) {
+        KOKKOS_LAMBDA (i64 k, int i, int j) {
             if (i < num_level && j < num_level) {
                 dF(k, i, j) = -GammaT(k, i, j);
             }
@@ -222,7 +223,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Setup pointers",
         SimpleBounds<1>(dF_ptrs.extent(0)),
-        YAKL_LAMBDA (i64 k) {
+        KOKKOS_LAMBDA (i64 k) {
             F_ptrs(k) = &F(k, 0);
             dF_ptrs(k) = &dF(k, 0, 0);
             ipiv_ptrs(k) = &ipivs(k, 0);
@@ -281,7 +282,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                 parallel_for(
                     "Copy residual",
                     SimpleBounds<2>(residuals.extent(0), residuals.extent(1)),
-                    YAKL_LAMBDA (i64 ks, i32 i) {
+                    KOKKOS_LAMBDA (i64 ks, i32 i) {
                         if (i == 0) {
                             residuals_ptrs(ks) = &residuals(ks, 0);
                         }
@@ -329,7 +330,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                 parallel_for(
                     "Apply residual",
                     SimpleBounds<2>(F.extent(0), F.extent(1)),
-                    YAKL_LAMBDA (i64 ks, i32 i) {
+                    KOKKOS_LAMBDA (i64 ks, i32 i) {
                         F(ks, i) += residuals(ks, i);
                     }
                 );
@@ -343,7 +344,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "info check",
         SimpleBounds<1>(info.extent(0)),
-        YAKL_LAMBDA (int k) {
+        KOKKOS_LAMBDA (int k) {
             if (info(k) != 0) {
                 printf("LINEAR SOLVER PROBLEM (charge conservation) ks: %d, info: %d\n", k, info(k));
             }
@@ -358,7 +359,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     parallel_for(
         "Update & transpose pops",
         SimpleBounds<1>(F.extent(0)),
-        YAKL_LAMBDA (int64_t k) {
+        KOKKOS_LAMBDA (int64_t k) {
             fp_t step_size = FP(1.0);
             constexpr bool clamp_step_size = true;
             if (clamp_step_size) {
@@ -397,7 +398,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
         parallel_for(
             "Update nh_tot (pressure)",
             SimpleBounds<1>(nh_tot_ratio.extent(0)),
-            YAKL_LAMBDA (i64 k) {
+            KOKKOS_LAMBDA (i64 k) {
                 fp_t pops_sum = FP(0.0);
                 for (int i = 0; i < num_level; ++i) {
                     pops_sum += pops(i, k);
@@ -412,7 +413,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
         parallel_for(
             "Rescale pops (presure)",
             SimpleBounds<2>(full_pops.extent(0), full_pops.extent(1)),
-            YAKL_LAMBDA (int i, i64 k) {
+            KOKKOS_LAMBDA (int i, i64 k) {
                 full_pops(i, k) *= nh_tot_ratio(k);
             }
         );

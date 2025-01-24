@@ -33,10 +33,10 @@ void compute_min_max_vel(
         throw std::runtime_error("Unexpected size in min/max vel calculation");
     }
 
-    parallel_for(
+    dex_parallel_for(
         "Min/Max Vel",
         block_map.loop_bounds(1 << mip_level),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
             MRIdxGen idx_gen(mr_block_map);
             i64 ks = idx_gen.loop_idx(mip_level, tile_idx, block_idx);
 
@@ -195,16 +195,13 @@ void DirectionalEmisOpacInterp::compute_subset_mip_n(
     // (as we need the original atmospheric params)
     const int vox_size = 1 << (level_m_1 + 1);
     auto bounds = block_map.loop_bounds(vox_size);
-    parallel_for(
+    dex_parallel_for(
         "Compute mip (dir interp)",
-        MDRange<4>(
-            {0, 0, 0, 0},
-            {
-                bounds.m_upper[0],
-                bounds.m_upper[1],
-                INTERPOLATE_DIRECTIONAL_BINS,
-                wave_batch
-            }
+        FlatLoop<4>(
+            bounds.dim(0),
+            bounds.dim(1),
+            INTERPOLATE_DIRECTIONAL_BINS,
+            wave_batch
         ),
         YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx, i32 vel_idx, i32 wave) {
             MRIdxGen idx_gen(mr_block_map);

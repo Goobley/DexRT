@@ -24,10 +24,10 @@ void compute_collisions_to_gamma(State* state) {
             state->atoms_with_gamma_mapping[ia]
         );
 
-        parallel_for(
+        dex_parallel_for(
             "collisions",
             mr_block_map.block_map.loop_bounds(),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
                 IdxGen idx_gen(mr_block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
 

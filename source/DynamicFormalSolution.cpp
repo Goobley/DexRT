@@ -42,19 +42,16 @@ void dynamic_compute_gamma_atomic(
         wave_batch = std::min(wave_batch, ray_subset.wave_batch);
 
         const auto& wavelength = adata.wavelength;
-        parallel_for(
+        dex_parallel_for(
             "compute Gamma",
-            MDRange<5>(
-                {0, 0, 0, 0, 0},
-                {
-                    spatial_bounds.m_upper[0],
-                    spatial_bounds.m_upper[1],
-                    ray_subset.num_flat_dirs,
-                    wave_batch,
-                    ray_subset.num_incl
-                }
+            FlatLoop<5>(
+                spatial_bounds.dim(0),
+                spatial_bounds.dim(1),
+                ray_subset.num_flat_dirs,
+                wave_batch,
+                ray_subset.num_incl
             ),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int phi_idx, int wave, int theta_idx) {
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx, int phi_idx, int wave, int theta_idx) {
                 IdxGen idx_gen(mr_block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 cell_coord = idx_gen.loop_coord(tile_idx, block_idx);
@@ -242,16 +239,13 @@ void dynamic_compute_gamma_nonatomic(
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
 
-        parallel_for(
+        dex_parallel_for(
             "compute Gamma",
-            MDRange<2>(
-                {0, 0},
-                {
-                    spatial_bounds.m_upper[0],
-                    spatial_bounds.m_upper[1]
-                }
+            FlatLoop<2>(
+                spatial_bounds.dim(0),
+                spatial_bounds.dim(1)
             ),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
                 IdxGen idx_gen(mr_block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 cell_coord = idx_gen.loop_coord(tile_idx, block_idx);

@@ -100,7 +100,8 @@ struct NgAccelerator {
         auto aa_d = aa.createDeviceCopy();
         auto bb_d = bb.createDeviceCopy();
 
-#ifdef DEXRT_USE_MAGMA
+// #ifdef DEXRT_USE_MAGMA
+#if 0
         yakl::Array<f64*, 1, yakl::memDevice> aa_ptrs("aa_ptrs", num_level);
         yakl::Array<f64*, 1, yakl::memDevice> bb_ptrs("bb_ptrs", num_level);
         yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", num_level, bb.extent(1));
@@ -109,7 +110,7 @@ struct NgAccelerator {
 
         parallel_for(
             SimpleBounds<1>(num_level),
-            YAKL_LAMBDA (int l) {
+            KOKKOS_LAMBDA (int l) {
                 aa_ptrs(l) = &aa_d(l, 0, 0);
                 bb_ptrs(l) = &bb_d(l, 0);
                 ipiv_ptrs(l) = &ipivs(l, 0);
@@ -134,7 +135,7 @@ struct NgAccelerator {
         parallel_for(
             "info check",
             SimpleBounds<1>(info.extent(0)),
-            YAKL_LAMBDA (int k) {
+            KOKKOS_LAMBDA (int k) {
                 if (info(k) != 0) {
                     printf("LINEAR SOLVER PROBLEM k: %d, info: %d (Ng accel)\n", k, info(k));
                 }
@@ -145,10 +146,10 @@ struct NgAccelerator {
 #endif
 
         auto pops_hist = create_device_copy(pops);
-        parallel_for(
+        dex_parallel_for(
             "Update pops",
-            MDRange<2>({0, 0}, {num_level, num_space}),
-            YAKL_LAMBDA (i32 l, i64 ks) {
+            FlatLoop<2>(num_level, num_space),
+            KOKKOS_LAMBDA (i32 l, i64 ks) {
                 f64 new_val = (FP(1.0) - bb_d(l, 0) - bb_d(l, 1) - bb_d(l, 2)) * pops_hist(l, 4, ks);
                 new_val += bb_d(l, 0) * pops_hist(l, 3, ks);
                 new_val += bb_d(l, 1) * pops_hist(l, 2, ks);

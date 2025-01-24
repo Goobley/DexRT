@@ -65,18 +65,15 @@ struct DirectionalEmisOpacInterp {
         yakl::fence();
 
         auto block_bounds = block_map.loop_bounds();
-        parallel_for(
+        dex_parallel_for(
             "Emis/Opac Samples",
-            MDRange<4>(
-                {0, 0, 0, 0},
-                {
-                    block_bounds.m_upper[0],
-                    block_bounds.m_upper[1],
-                    emis_opac_vel.extent(1),
-                    wave_batch
-                }
+            FlatLoop<4>(
+                block_bounds.dim(0),
+                block_bounds.dim(1),
+                emis_opac_vel.extent(1),
+                wave_batch
             ),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int vel_idx, int wave) {
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx, int vel_idx, int wave) {
                 IndexGen<BLOCK_SIZE> idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);

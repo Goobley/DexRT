@@ -1,6 +1,6 @@
 #include "ProfileNormalisation.hpp"
 
-void compute_profile_normalisation(const State& state, const CascadeState& casc_state) {
+void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi) {
     const auto flatmos = flatten(state.atmos);
     JasUnpack(state, adata, wphi, mr_block_map, incl_quad);
     const auto& profile = state.phi;
@@ -12,10 +12,10 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
     CascadeStorage dims = state.c0_size;
     CascadeRays ray_set = cascade_compute_size<RcMode>(dims, 0);
     // NOTE(cmo): This is pretty thrown-together
-    parallel_for(
+    dex_parallel_for(
         "Compute wphi",
-        MDRange<3>({0, 0, 0}, {wphi.extent_int(0), bounds.m_upper[0], bounds.m_upper[1]}),
-        YAKL_LAMBDA (int kr, i64 tile_idx, i32 block_idx) {
+        FlatLoop<3>(wphi.extent_int(0), bounds.dim(0), bounds.dim(1)),
+        KOKKOS_LAMBDA (int kr, i64 tile_idx, i32 block_idx) {
             using namespace ConstantsFP;
             fp_t entry = FP(0.0);
 
@@ -90,19 +90,58 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
         }
     );
     yakl::fence();
-    // const auto& wphi_flat = wphi.collapse();
-    // const i64 min_loc = yakl::intrinsics::minloc(wphi_flat);
-    // const i64 min_k = min_loc % wphi.extent(1);
-    // auto wphi_host = wphi.createHostCopy();
-    // yakl::fence();
-    // std::string output("  Lowest normalisation factors (wphi): ");
-    // for (int kr = 0; kr < wphi_host.extent(0); ++kr) {
-    //     output += fmt::format("{:e}", wphi_host(kr, min_k));
-    //     if (kr != wphi_host.extent(0) - 1) {
-    //         output += ", ";
-    //     }
-    // }
-    // output += "\n";
-    // state.println("{}", output);
-    fmt::println("Not outputting min wphi... Needs reduction");
+
+    if (print_worst_wphi) {
+        const auto loop = FlatLoop<2>(wphi.extent(0), wphi.extent(1));
+        typedef Kokkos::MaxLoc<fp_t, i32> Reducer;
+        typedef Reducer::value_type ReducerType;
+        typedef Kokkos::MaxLoc<fp_t, i32, Kokkos::DefaultExecutionSpace> ReducerDev;
+
+        const auto work_div = balance_parallel_work_division(BalanceLoopArgs{.loop=loop});
+        ReducerType max_err_loc;
+        Kokkos::parallel_reduce(
+            TeamPolicy(work_div.team_count, Kokkos::AUTO()),
+            KOKKOS_LAMBDA (const KTeam& team, ReducerType& team_val) {
+                const i64 i_base = team.league_rank() * work_div.inner_work_count;
+                const i64 i_max = std::min(i_base + work_div.inner_work_count, loop.num_iter);
+                const i32 inner_iter_count = i_max - i_base;
+                ReducerType thread_val;
+                ReducerDev thread_reducer(thread_val);
+
+                Kokkos::parallel_reduce(
+                    InnerRange(team, inner_iter_count),
+                    [&] (const int inner_i, ReducerType& inner_val) {
+                        auto idxs = loop.unpack(i_base + inner_i);
+                        const int kr = idxs[0];
+                        const int k = idxs[1];
+                        fp_t err = std::abs(FP(1.0) - wphi(kr, k));
+                        if (err > inner_val.val) {
+                            inner_val.val = err;
+                            inner_val.loc = k;
+                        }
+                    },
+                    thread_reducer
+                );
+
+                Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                    thread_reducer.join(team_val, thread_val);
+                });
+            },
+            Reducer(max_err_loc)
+        );
+
+        i32 max_err_k = max_err_loc.loc;
+        auto spatial_view = Kokkos::subview(wphi, Kokkos::ALL, max_err_k);
+        KView<fp_t*> spatial_view_contig("wphi_chunk", spatial_view.extent(0));
+        Kokkos::deep_copy(spatial_view_contig, spatial_view);
+        auto spatial_view_host = Kokkos::create_mirror_view_and_copy(HostSpace{}, spatial_view_contig);
+        std::string output = fmt::format("  Highest error normalisation factors (wphi) @ ks = {}: ", max_err_k);
+        for (int kr = 0; kr < spatial_view_host.extent(0); ++kr) {
+            output += fmt::format("{:e}", spatial_view_host(kr));
+            if (kr != spatial_view_host.extent(0) - 1) {
+                output += ", ";
+            }
+        }
+        state.println("{}", output);
+    }
 }

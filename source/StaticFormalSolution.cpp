@@ -25,10 +25,10 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     auto& eta_store = state.given_state.emis;
     auto& chi_store = state.given_state.opac;
     auto bounds = block_map.loop_bounds();
-    parallel_for(
+    dex_parallel_for(
         "Copy eta, chi",
-        MDRange<3>({0, 0, 0}, {bounds.m_upper[0], bounds.m_upper[1], wave_batch}),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+        FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);

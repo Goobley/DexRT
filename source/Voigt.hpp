@@ -244,7 +244,7 @@ struct VoigtProfile {
         //     parallel_for(
         //         "compute voigt",
         //         SimpleBounds<2>(a_range.n, v_range.n),
-        //         YAKL_LAMBDA (int ia, int iv) {
+        //         KOKKOS_LAMBDA (int ia, int iv) {
         //             const auto sample = voigt_sample(ia, iv);
         //             mut_samples(ia, iv) = result_t::value(sample);
         //         }

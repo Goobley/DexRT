@@ -47,10 +47,10 @@ void MultiResMipChain::fill_mip0_atomic(
     JasUnpack((*this), emis, opac);
     const auto& block_map = state.mr_block_map.block_map;
     auto bounds = block_map.loop_bounds();
-    parallel_for(
+    dex_parallel_for(
         "Compute eta, chi",
-        MDRange<3>({0, 0, 0}, {bounds.m_upper[0], bounds.m_upper[1], wave_batch}),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int wave) {
+        FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx, int wave) {
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
@@ -106,10 +106,10 @@ void MultiResMipChain::fill_mip0_atomic(
 
     if (vx.is_allocated()) {
         JasUnpack((*this), vx, vy, vz);
-        parallel_for(
+        dex_parallel_for(
             "Copy vels",
             bounds,
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
                 IndexGen<BLOCK_SIZE> idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
@@ -172,10 +172,10 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
     Kokkos::deep_copy(mippable_entries, 0);
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "Set active blocks in mr_block_map",
-        block_map.loop_bounds().m_upper[0],
-        YAKL_LAMBDA (i64 tile_idx) {
+        FlatLoop<1>(block_map.loop_bounds().dim(0)),
+        KOKKOS_LAMBDA (i64 tile_idx) {
             MRIdxGen idx_gen(mr_block_map);
             Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
             i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord.x, tile_coord.z);
@@ -190,10 +190,10 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
         auto bounds = block_map.loop_bounds(vox_size);
 
         if (state.config.mode != DexrtMode::GivenFs) {
-            parallel_for(
+            dex_parallel_for(
                 "Compute vel mip",
-                MDRange<3>({0, 0, 0}, {bounds.m_upper[0], bounds.m_upper[1], wave_batch}),
-                YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+                FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+                KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
                     MRIdxGen idx_gen(mr_block_map);
                     const i32 vox_size = (1 << (level_m_1 + 1));
                     const i32 level = level_m_1 + 1;
@@ -231,17 +231,14 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
             );
         }
 
-        parallel_for(
+        dex_parallel_for(
             "Compute mip n (wave batch)",
-            MDRange<3>(
-                {0, 0, 0},
-                {
-                    bounds.m_upper[0],
-                    bounds.m_upper[1],
-                    wave_batch
-                }
+            FlatLoop<3>(
+                bounds.dim(0),
+                bounds.dim(1),
+                wave_batch
             ),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
                 const i32 level = level_m_1 + 1;
                 const fp_t ds = vox_scale;
                 MRIdxGen idx_gen(mr_block_map);
@@ -350,10 +347,10 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
             }
         }
 
-        parallel_for(
+        dex_parallel_for(
             "Update mippable array",
-            block_map.loop_bounds().m_upper[0],
-            YAKL_LAMBDA (i64 tile_idx) {
+            FlatLoop<1>(block_map.loop_bounds().dim(0)),
+            KOKKOS_LAMBDA (i64 tile_idx) {
                 MRIdxGen idx_gen(mr_block_map);
                 Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
                 const int level = level_m_1 + 1;

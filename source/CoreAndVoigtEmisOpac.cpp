@@ -108,10 +108,10 @@ void CoreAndVoigtData::fill(const State& state, i32 la_start, i32 la_end) const 
     }
 
     const auto& active_set_mapping = this->active_set_mapping;
-    parallel_for(
+    dex_parallel_for(
         "fill core and voigt",
         block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
@@ -164,9 +164,9 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
     const i32 level_m_1 = level - 1;
     const i32 vox_size = (1 << level);
     auto bounds = block_map.loop_bounds(vox_size);
-    parallel_for(
+    dex_parallel_for(
         "Compute mip n (CoreAndVoigt)",
-        MDRange<3>({0, 0, 0}, {bounds.m_upper[0], bounds.m_upper[1], wave_batch}),
+        FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
         YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
             const fp_t ds = vox_scale;
             const fp_t lambda = adata.wavelength(la_start + wave);

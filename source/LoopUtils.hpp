@@ -2,7 +2,7 @@
 #define DEXRT_LOOP_UTILS_HPP
 
 #include "Config.hpp"
-#include "Types.hpp"
+#include "JasPP.hpp"
 
 /// All of this is C-style Iterate::Right loops.
 
@@ -12,7 +12,7 @@ struct FlatLoop {
     i64 num_iter;
 
     // FlatLoop(const Kokkos::Array<i32, N>& bounds_) : bounds(bounds_) {
-    FlatLoop(i32 b0, i32 b1=0, i32 b2=0, i32 b3=0, i32 b4=0, i32 b5=0) {
+    KOKKOS_INLINE_FUNCTION FlatLoop(i32 b0, i32 b1=0, i32 b2=0, i32 b3=0, i32 b4=0, i32 b5=0) {
         bounds[0] = b0;
         if constexpr (N >= 2) {
             bounds[1] = b1;
@@ -37,11 +37,10 @@ struct FlatLoop {
         }
     }
 
-    FlatLoop(const FlatLoop<N>&) = default;
-    FlatLoop(FlatLoop<N>&&) = default;
-    FlatLoop<N>& operator=(const FlatLoop<N>&) = default;
-
     KOKKOS_INLINE_FUNCTION Kokkos::Array<i32, N> unpack(i64 i) const;
+    KOKKOS_INLINE_FUNCTION i32 dim(i32 i) const {
+        return bounds[i];
+    }
 };
 
 struct TeamWorkDivision {
@@ -53,7 +52,7 @@ template <int N>
 struct BalanceLoopArgs {
     const FlatLoop<N>& loop;
     int min_blocks = 256; /// Minimum number of blocks to use, reshuffle from higher indices as needed.
-    int max_blocks = 65535; /// Maximum number of blocks, shuffle to lower indices as needed.
+    int max_blocks = 8192; /// Maximum number of blocks, shuffle to lower indices as needed.
 };
 
 template <int N>
@@ -62,11 +61,19 @@ inline TeamWorkDivision balance_parallel_work_division(const BalanceLoopArgs<N>&
 
     i32 leading_dim = loop.bounds[0];
     i64 trailing_dims = loop.num_iter / leading_dim;
-    while (leading_dim < min_blocks) {
+    constexpr i32 min_work_per_block = 128;
+    // NOTE(cmo): Launch a sensible number of blocks, but they need enough work
+    while (leading_dim < min_blocks && trailing_dims >= min_work_per_block) {
         leading_dim *= 2;
         trailing_dims = (trailing_dims + 1) / 2; // ceiling div
     }
+    // NOTE(cmo): Don't launch too many blocks
     while (leading_dim >= max_blocks) {
+        leading_dim = (leading_dim + 1) / 2; // ceiling div
+        trailing_dims *= 2;
+    }
+    // NOTE(cmo): however many blocks we launch, ensure there's enough work
+    while (trailing_dims < min_work_per_block) {
         leading_dim = (leading_dim + 1) / 2; // ceiling div
         trailing_dims *= 2;
     }
@@ -119,42 +126,46 @@ KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Ar
     closure(arr[0], arr[1], arr[2], arr[3], arr[4], arr[5]);
 }
 
-
 template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, int N, class Lambda>
 inline void dex_parallel_for(const std::string& name, const FlatLoop<N>& loop, const Lambda& closure) {
     static_assert(N < 7, "Flat loops only supported for 1 <= N <= 6");
-    if constexpr (N == 1) {
-        Kokkos::parallel_for(
-            name,
-            Kokkos::RangePolicy<ExecutionSpace>(0, loop.bounds[0]),
-            closure
-        );
-    } else {
-        auto work_div = balance_parallel_work_division(BalanceLoopArgs<N>{
-            .loop = loop
-        });
-        Kokkos::parallel_for(
-            name,
-            Kokkos::TeamPolicy<ExecutionSpace>(work_div.team_count, Kokkos::AUTO()),
-            KOKKOS_LAMBDA (const Kokkos::TeamPolicy<ExecutionSpace>::member_type& team) {
-                i64 i = team.league_rank() * work_div.inner_work_count;
-                Kokkos::parallel_for(
-                    Kokkos::TeamVectorRange(
-                        team,
-                        work_div.inner_work_count
-                    ),
-                    [&] (int j) {
-                        i64 idx = i + j;
-                        if (idx >= loop.num_iter) {
-                            return;
-                        }
-                        auto idxs = loop.unpack(idx);
-                        array_invoke(closure, idxs);
+    // if constexpr (N == 1) {
+    //     Kokkos::parallel_for(
+    //         name,
+    //         Kokkos::RangePolicy<ExecutionSpace>(0, loop.bounds[0]),
+    //         closure
+    //     );
+    // } else {
+    auto work_div = balance_parallel_work_division(BalanceLoopArgs<N>{
+        .loop = loop
+    });
+    Kokkos::parallel_for(
+        name,
+        Kokkos::TeamPolicy<ExecutionSpace>(work_div.team_count, Kokkos::AUTO()),
+        KOKKOS_LAMBDA (const Kokkos::TeamPolicy<ExecutionSpace>::member_type& team) {
+            i64 i = team.league_rank() * work_div.inner_work_count;
+            Kokkos::parallel_for(
+                Kokkos::TeamVectorRange(
+                    team,
+                    work_div.inner_work_count
+                ),
+                [&] (int j) {
+                    i64 idx = i + j;
+                    if (idx >= loop.num_iter) {
+                        return;
                     }
-                );
-            }
-        );
-    }
+                    auto idxs = loop.unpack(idx);
+                    array_invoke(closure, idxs);
+                }
+            );
+        }
+    );
+    // }
+}
+
+template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, int N, class Lambda>
+inline void dex_parallel_for(const FlatLoop<N>& loop, const Lambda& closure) {
+    dex_parallel_for<ExecutionSpace>("Unnamed Kernel", loop, closure);
 }
 
 template <>
@@ -251,6 +262,15 @@ Kokkos::Array<i32, 6> FlatLoop<6>::unpack(i64 i) const {
     offset += idx4 * dim_prod;
     i32 idx5 = i32(i - offset);
     return {idx0, idx1, idx2, idx3, idx4, idx5};
+}
+
+namespace Kokkos {
+    template<>
+    struct reduction_identity<Kokkos::pair<i32, i32>> {
+        KOKKOS_FORCEINLINE_FUNCTION static Kokkos::pair<i32, i32> min() {
+            return Kokkos::make_pair(0, 0);
+        }
+    };
 }
 
 #else

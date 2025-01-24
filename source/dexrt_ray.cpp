@@ -248,7 +248,7 @@ DexOutput load_dex_output(const DexrtConfig& config, const Atmosphere& atmos) {
         result.active = decltype(result.active)("active", active.extent(0), active.extent(1));
         parallel_for(
             SimpleBounds<2>(active.extent(0), active.extent(1)),
-            YAKL_LAMBDA (int i, int j) {
+            KOKKOS_LAMBDA (int i, int j) {
                 result.active(i, j) = active(i, j);
             }
         );
@@ -536,7 +536,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
         parallel_for(
             "Compute eta, chi",
             SimpleBounds<1>(flatmos.temperature.extent(0)),
-            YAKL_LAMBDA (i64 k) {
+            KOKKOS_LAMBDA (i64 k) {
                 if (!flat_active(k)) {
                     flat_eta(k) = FP(0.0);
                     flat_chi(k) = FP(0.0);
@@ -594,7 +594,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
             parallel_for(
                 "Compute max steps",
                 SimpleBounds<1>(num_rays),
-                YAKL_LAMBDA (int ray_idx) {
+                KOKKOS_LAMBDA (int ray_idx) {
                     vec2 start_pos;
                     start_pos(0) = ray_set.start_coord(ray_idx, 0);
                     start_pos(1) = ray_set.start_coord(ray_idx, 1);
@@ -712,7 +712,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
         parallel_for(
             "Trace Rays (front-to-back)",
             SimpleBounds<1>(ray_set.start_coord.extent(0)),
-            YAKL_LAMBDA (int ray_idx) {
+            KOKKOS_LAMBDA (int ray_idx) {
                 vec2 start_pos;
                 start_pos(0) = ray_set.start_coord(ray_idx, 0);
                 start_pos(1) = ray_set.start_coord(ray_idx, 1);
