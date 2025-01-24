@@ -120,13 +120,13 @@ KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Ar
 }
 
 
-template <int N, class Lambda>
+template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, int N, class Lambda>
 inline void dex_parallel_for(const std::string& name, const FlatLoop<N>& loop, const Lambda& closure) {
     static_assert(N < 7, "Flat loops only supported for 1 <= N <= 6");
     if constexpr (N == 1) {
         Kokkos::parallel_for(
             name,
-            loop.bounds[0],
+            Kokkos::RangePolicy<ExecutionSpace>(0, loop.bounds[0]),
             closure
         );
     } else {
@@ -135,8 +135,8 @@ inline void dex_parallel_for(const std::string& name, const FlatLoop<N>& loop, c
         });
         Kokkos::parallel_for(
             name,
-            TeamPolicy(work_div.team_count, Kokkos::AUTO()),
-            KOKKOS_LAMBDA (const KTeam& team) {
+            Kokkos::TeamPolicy<ExecutionSpace>(work_div.team_count, Kokkos::AUTO()),
+            KOKKOS_LAMBDA (const Kokkos::TeamPolicy<ExecutionSpace>::member_type& team) {
                 i64 i = team.league_rank() * work_div.inner_work_count;
                 Kokkos::parallel_for(
                     Kokkos::TeamVectorRange(
