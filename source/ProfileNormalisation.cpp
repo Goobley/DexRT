@@ -93,9 +93,9 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
 
     if (print_worst_wphi) {
         const auto loop = FlatLoop<2>(wphi.extent(0), wphi.extent(1));
-        typedef Kokkos::MaxLoc<fp_t, i32> Reducer;
+        typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<i32, i32>> Reducer;
         typedef Reducer::value_type ReducerType;
-        typedef Kokkos::MaxLoc<fp_t, i32, Kokkos::DefaultExecutionSpace> ReducerDev;
+        typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<i32, i32>, Kokkos::DefaultExecutionSpace> ReducerDev;
 
         const auto work_div = balance_parallel_work_division(BalanceLoopArgs{.loop=loop});
         ReducerType max_err_loc;
@@ -105,6 +105,9 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
                 const i64 i_base = team.league_rank() * work_div.inner_work_count;
                 const i64 i_max = std::min(i_base + work_div.inner_work_count, loop.num_iter);
                 const i32 inner_iter_count = i_max - i_base;
+                if (inner_iter_count <= 0) {
+                    return;
+                }
                 ReducerType thread_val;
                 ReducerDev thread_reducer(thread_val);
 
@@ -117,7 +120,7 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
                         fp_t err = std::abs(FP(1.0) - wphi(kr, k));
                         if (err > inner_val.val) {
                             inner_val.val = err;
-                            inner_val.loc = k;
+                            inner_val.loc = Kokkos::make_pair(kr, k);
                         }
                     },
                     thread_reducer
@@ -130,7 +133,7 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
             Reducer(max_err_loc)
         );
 
-        i32 max_err_k = max_err_loc.loc;
+        i32 max_err_k = max_err_loc.loc.second;
         auto spatial_view = Kokkos::subview(wphi, Kokkos::ALL, max_err_k);
         KView<fp_t*> spatial_view_contig("wphi_chunk", spatial_view.extent(0));
         Kokkos::deep_copy(spatial_view_contig, spatial_view);

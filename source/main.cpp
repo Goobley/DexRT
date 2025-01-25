@@ -973,8 +973,8 @@ int main(int argc, char** argv) {
                         yakl::fence();
                     }
 
-                    compute_profile_normalisation(state, casc_state, false);
-                    static_assert(false, "Go and fix the reduction inside profile normalisation");
+                    compute_profile_normalisation(state, casc_state, true);
+                    // static_assert(false, "Go and fix the reduction inside profile normalisation");
                     fmt::println("wphi done");
                     Kokkos::deep_copy(state.J, FP(0.0));
                     if (config.store_J_on_cpu) {
