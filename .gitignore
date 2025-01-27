@@ -12,6 +12,14 @@ magma/*
 !magma/docker_setup.sh
 !magma/magma.conf
 
+kokkos/*
+kokkos-kernels/*
+
+docker_deps/kokkos/*
+!docker_deps/kokkos/*.sh
+docker_deps/kokkos-kernels/*
+!docker_deps/kokkos-kernels/*.sh
+
 build/*
 !build/cmake_basic.sh
 !build/cmake_clean.sh

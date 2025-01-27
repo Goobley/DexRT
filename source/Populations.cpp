@@ -343,52 +343,24 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         );
 
         typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<int, int>> Reducer;
-        typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<int, int>, Kokkos::DefaultHostExecutionSpace> ReducerDev;
         typedef Reducer::value_type ReducerType;
 
         const FlatLoop<2> loop(max_rel_change.extent(0), max_rel_change.extent(1));
         const auto work_div = balance_parallel_work_division(BalanceLoopArgs{.loop = loop});
         ReducerType max_change_loc;
-        Kokkos::parallel_reduce(
-            TeamPolicy(work_div.team_count, Kokkos::AUTO()),
-            KOKKOS_LAMBDA (const KTeam& team, ReducerType& team_val) {
-                const i64 i_base = team.league_rank() * work_div.inner_work_count;
-                const i64 i_max = std::min(i_base + work_div.inner_work_count, loop.num_iter);
-                const i32 inner_iter_count = i_max - i_base;
-                ReducerType thread_val;
-                ReducerDev thread_reducer(thread_val);
-
-                Kokkos::parallel_reduce(
-                    InnerRange(team, inner_iter_count),
-                    [&] (const int inner_i, ReducerType& inner_val) {
-                        auto idxs = loop.unpack(i_base + inner_i);
-                        const int k = idxs[0];
-                        const int i = idxs[1];
-                        fp_t val = max_rel_change(k, i);
-                        if (val > inner_val.val) {
-                            inner_val.val = val;
-                            inner_val.loc = Kokkos::make_pair(k, i);
-                        }
-                    },
-                    thread_reducer
-                );
-
-                Kokkos::single(Kokkos::PerTeam(team), [&] () {
-                    if (thread_val.val > team_val.val) {
-                        team_val.val = thread_val.val;
-                        team_val.loc = thread_val.loc;
-                    }
-                });
+        dex_parallel_reduce(
+            "Find max rel change",
+            loop,
+            KOKKOS_LAMBDA (const int kr, const int k, ReducerType& rval) {
+                fp_t val = max_rel_change(kr, k);
+                if (val > rval.val) {
+                    rval.val = val;
+                    rval.loc = Kokkos::make_pair(kr, k);
+                }
             },
             Reducer(max_change_loc)
         );
 
-        // fp_t max_change = yakl::intrinsics::maxval(max_rel_change);
-        // int max_change_loc = yakl::intrinsics::maxloc(max_rel_change.collapse());
-        // auto temp_h = state->atmos.temperature.createHostCopy();
-        // yakl::fence();
-        // int max_change_level = max_change_loc % new_pops.extent(1);
-        // max_change_loc /= new_pops.extent(1);
 
         const fp_t max_change = max_change_loc.val;
         auto temp_val = Kokkos::subview(state->atmos.temperature, max_change_loc.loc.first);

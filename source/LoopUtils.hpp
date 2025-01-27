@@ -96,35 +96,14 @@ inline TeamWorkDivision balance_parallel_work_division(const BalanceLoopArgs<N>&
 template <int N, class Lambda>
 KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, N>& arr);
 
-template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 1>& arr) {
-    closure(arr[0]);
-}
 
-template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 2>& arr) {
-    closure(arr[0], arr[1]);
-}
+template <int N, class Lambda, typename T>
+KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+    const Lambda& closure,
+    const Kokkos::Array<i32, N>& arr,
+    T& ref
+);
 
-template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 3>& arr) {
-    closure(arr[0], arr[1], arr[2]);
-}
-
-template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 4>& arr) {
-    closure(arr[0], arr[1], arr[2], arr[3]);
-}
-
-template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 5>& arr) {
-    closure(arr[0], arr[1], arr[2], arr[3], arr[4]);
-}
-
-template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 6>& arr) {
-    closure(arr[0], arr[1], arr[2], arr[3], arr[4], arr[5]);
-}
 
 template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, int N, class Lambda>
 inline void dex_parallel_for(const std::string& name, const FlatLoop<N>& loop, const Lambda& closure) {
@@ -166,6 +145,95 @@ inline void dex_parallel_for(const std::string& name, const FlatLoop<N>& loop, c
 template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, int N, class Lambda>
 inline void dex_parallel_for(const FlatLoop<N>& loop, const Lambda& closure) {
     dex_parallel_for<ExecutionSpace>("Unnamed Kernel", loop, closure);
+}
+
+namespace DexImpl {
+    // NOTE(cmo): I just wanted to get a Kokkos::reducer acting on the same
+    // types in a different execution space. If they add ones with more than two
+    // args, we need a new override here.  Here be dragons.
+    template <int N, class ExecutionSpace, template <typename...> class Reducer, typename... RedArgs>
+    inline Reducer<RedArgs...> reducer_type_impl(const Reducer<RedArgs...>& r) {
+        return r;
+    }
+
+    template <class ExecutionSpace, template <typename, typename> class Reducer, typename RedArg0, typename RedSpace>
+    inline Reducer<RedArg0, ExecutionSpace> reducer_type_impl<2>(const Reducer<RedArg0, RedSpace>& r) {
+        return {};
+    }
+
+    template <class ExecutionSpace, template <typename, typename, typename> class Reducer, typename RedArg0, typename RedArg1, typename RedSpace>
+    inline Reducer<RedArg0, RedArg1, ExecutionSpace> reducer_type_impl<3>(const Reducer<RedArg0, RedArg1, RedSpace>& r) {
+        return {};
+    }
+
+    template <class ExecutionSpace, template <typename...> class Reducer, typename... RedArgs>
+    inline auto reducer_type_in_space(const Reducer<RedArgs...>& r) {
+        return reducer_type_impl<sizeof...(RedArgs), ExecutionSpace>(r);
+    }
+};
+
+template <
+    class ExecutionSpace=Kokkos::DefaultExecutionSpace,
+    int N,
+    class Lambda,
+    template<typename...> class Reducer,
+    typename... Args
+>
+inline void dex_parallel_reduce(
+    const std::string& name,
+    const FlatLoop<N>& loop,
+    const Lambda& closure,
+    const Reducer<Args...>& reducer
+) {
+    typedef Reducer<Args...> ReducerT;
+    typedef typename ReducerT::value_type ReductionVar;
+    typedef decltype(DexImpl::reducer_type_in_space<ExecutionSpace>(reducer)) ReducerTDev;
+
+    const auto work_div = balance_parallel_work_division(BalanceLoopArgs{.loop=loop});
+    ReductionVar rvar;
+    Kokkos::parallel_reduce(
+        Kokkos::TeamPolicy<ExecutionSpace>(work_div.team_count, Kokkos::AUTO()),
+        KOKKOS_LAMBDA (const Kokkos::TeamPolicy<ExecutionSpace>::member_type& team, ReductionVar& team_rvar) {
+            const i64 i_base = team.league_rank() * work_div.inner_work_count;
+            const i64 i_max = std::min(i_base + work_div.inner_work_count, loop.num_iter);
+            const i32 inner_iter_count = i_max - i_base;
+            if (inner_iter_count <= 0) {
+                return;
+            }
+
+            ReductionVar thread_rvar;
+            ReducerTDev thread_reducer(thread_rvar);
+
+            Kokkos::parallel_reduce(
+                Kokkos::TeamVectorRange(team, inner_iter_count),
+                [&] (const int inner_i, ReductionVar& inner_rvar) {
+                    const auto idxs = loop.unpack(i_base + inner_i);
+                    array_invoke_with_ref_arg(closure, idxs, inner_rvar);
+                },
+                thread_reducer
+            );
+
+            Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                thread_reducer.join(team_rvar, thread_rvar);
+            });
+        },
+        reducer
+    );
+}
+
+template <
+    class ExecutionSpace=Kokkos::DefaultExecutionSpace,
+    int N,
+    class Lambda,
+    template<typename...> class Reducer,
+    typename... Args
+>
+inline void dex_parallel_reduce(
+    const FlatLoop<N>& loop,
+    const Lambda& closure,
+    const Reducer<Args...>& reducer
+) {
+    dex_parallel_reduce("Unnamed reduction", loop, closure, reducer);
 }
 
 template <>
@@ -273,5 +341,88 @@ namespace Kokkos {
     };
 }
 
+template <class Lambda>
+KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 1>& arr) {
+    closure(arr[0]);
+}
+
+template <class Lambda>
+KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 2>& arr) {
+    closure(arr[0], arr[1]);
+}
+
+template <class Lambda>
+KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 3>& arr) {
+    closure(arr[0], arr[1], arr[2]);
+}
+
+template <class Lambda>
+KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 4>& arr) {
+    closure(arr[0], arr[1], arr[2], arr[3]);
+}
+
+template <class Lambda>
+KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 5>& arr) {
+    closure(arr[0], arr[1], arr[2], arr[3], arr[4]);
+}
+
+template <class Lambda>
+KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 6>& arr) {
+    closure(arr[0], arr[1], arr[2], arr[3], arr[4], arr[5]);
+}
+
+template <class Lambda, typename T>
+KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+    const Lambda& closure,
+    const Kokkos::Array<i32, 1>& arr,
+    T& ref
+) {
+    closure(arr[0], ref);
+}
+
+template <class Lambda, typename T>
+KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+    const Lambda& closure,
+    const Kokkos::Array<i32, 2>& arr,
+    T& ref
+) {
+    closure(arr[0], arr[1], ref);
+}
+
+template <class Lambda, typename T>
+KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+    const Lambda& closure,
+    const Kokkos::Array<i32, 3>& arr,
+    T& ref
+) {
+    closure(arr[0], arr[1], arr[2], ref);
+}
+
+template <class Lambda, typename T>
+KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+    const Lambda& closure,
+    const Kokkos::Array<i32, 4>& arr,
+    T& ref
+) {
+    closure(arr[0], arr[1], arr[2], arr[3]);
+}
+
+template <class Lambda, typename T>
+KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+    const Lambda& closure,
+    const Kokkos::Array<i32, 5>& arr,
+    T& ref
+) {
+    closure(arr[0], arr[1], arr[2], arr[3], arr[4], ref);
+}
+
+template <class Lambda, typename T>
+KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+    const Lambda& closure,
+    const Kokkos::Array<i32, 6>& arr,
+    T& ref
+) {
+    closure(arr[0], arr[1], arr[2], arr[3], arr[4], arr[5], ref);
+}
 #else
 #endif

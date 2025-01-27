@@ -112,10 +112,9 @@ inline Atmosphere load_atmos(const std::string& path) {
     Kokkos::deep_copy(result.nh0, FP(0.0));
 
     fp_t max_vel_2;
-    Kokkos::Max<fp_t> max_reducer(max_vel_2);
-    Kokkos::parallel_reduce(
+    dex_parallel_reduce(
         "Atmosphere Max Vel",
-        MDRange<2>({0, 0}, {vx.extent(0), vx.extent(1)}),
+        FlatLoop<2>(vx.extent(0), vx.extent(1)),
         KOKKOS_LAMBDA (int z, int x, fp_t& running_max) {
             fp_t vel2 = square(result.vz(z, x)) + square(result.vy(z, x)) + square(result.vx(z, x));
             if (vel2 > running_max) {

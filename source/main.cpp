@@ -756,8 +756,6 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
                 );
                 nc.write(J_full, "J", {"wavelength", "z", "x"});
             }
-            nc.write(state.J_cpu, "J_cpu", {"wavelength_a", "ks"});
-            nc.write(state.J, "J_gpu", {"wavelength_b", "ks"});
         } else {
             if (sparse_J) {
                 maybe_rehydrate_and_write(state.J, "J", {"wavelength"});
@@ -774,33 +772,42 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         }
         nc.write(state.max_block_mip, "max_mip_block", {"wavelength_batch", "tile_z", "tile_x"});
     }
+    fmt::println("J");
+
 
     if (out_cfg.wavelength && state.adata.wavelength.is_allocated()) {
         nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
     }
+    fmt::println("wavelength");
     if (out_cfg.pops && state.pops.is_allocated()) {
         maybe_rehydrate_and_write(state.pops, "pops", {"level"});
     }
+    fmt::println("pops");
     if (out_cfg.lte_pops) {
         auto lte_pops = Kokkos::create_mirror(DefaultMemSpace{}, state.pops);
         compute_lte_pops(&state, lte_pops);
         yakl::fence();
         maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});
     }
+    fmt::println("lte_pops");
     if (out_cfg.ne && state.atmos.ne.is_allocated()) {
         maybe_rehydrate_and_write(state.atmos.ne, "ne", {});
     }
+    fmt::println("ne");
     if (out_cfg.nh_tot && state.atmos.nh_tot.is_allocated()) {
         maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
     }
+    fmt::println("nh_tot");
     if (out_cfg.alo && casc_state.alo.is_allocated()) {
         nc.write(casc_state.alo, "alo", {"casc_shape"});
     }
+    fmt::println("alo");
     if (out_cfg.active) {
         // NOTE(cmo): Currently active is always written dense
         const auto& active_char = reify_active_c0(block_map);
         nc.write(active_char, "active", {"z", "x"});
     }
+    fmt::println("active");
     for (int casc : out_cfg.cascades) {
         // NOTE(cmo): The validity of these + necessary warning were checked/output in the config parsing step
         std::string name = fmt::format("I_C{}", casc);
@@ -811,9 +818,11 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
             nc.write(casc_state.tau_cascades[casc], name, {shape});
         }
     }
+    fmt::println("cascades");
     if (out_cfg.sparse) {
         nc.write(block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
     }
+    fmt::println("tiles");
     nc.close();
 }
 
@@ -974,7 +983,6 @@ int main(int argc, char** argv) {
                     }
 
                     compute_profile_normalisation(state, casc_state, true);
-                    // static_assert(false, "Go and fix the reduction inside profile normalisation");
                     fmt::println("wphi done");
                     Kokkos::deep_copy(state.J, FP(0.0));
                     if (config.store_J_on_cpu) {
@@ -995,8 +1003,6 @@ int main(int argc, char** argv) {
                             wave_batch.la_end
                         );
                         finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
-                        fmt::println("batch done");
-                        break;
                     }
                     yakl::fence();
                     wave_dist.wait_for_all(state.mpi_state);

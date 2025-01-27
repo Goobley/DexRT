@@ -99,36 +99,16 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
 
         const auto work_div = balance_parallel_work_division(BalanceLoopArgs{.loop=loop});
         ReducerType max_err_loc;
-        Kokkos::parallel_reduce(
-            TeamPolicy(work_div.team_count, Kokkos::AUTO()),
-            KOKKOS_LAMBDA (const KTeam& team, ReducerType& team_val) {
-                const i64 i_base = team.league_rank() * work_div.inner_work_count;
-                const i64 i_max = std::min(i_base + work_div.inner_work_count, loop.num_iter);
-                const i32 inner_iter_count = i_max - i_base;
-                if (inner_iter_count <= 0) {
-                    return;
+
+        dex_parallel_reduce(
+            "Compute wphi err",
+            loop,
+            KOKKOS_LAMBDA (const int kr, const int k, ReducerType& rvar) {
+                fp_t err = std::abs(FP(1.0) - wphi(kr, k));
+                if (err > rvar.val) {
+                    rvar.val = err;
+                    rvar.loc = Kokkos::make_pair(kr, k);
                 }
-                ReducerType thread_val;
-                ReducerDev thread_reducer(thread_val);
-
-                Kokkos::parallel_reduce(
-                    InnerRange(team, inner_iter_count),
-                    [&] (const int inner_i, ReducerType& inner_val) {
-                        auto idxs = loop.unpack(i_base + inner_i);
-                        const int kr = idxs[0];
-                        const int k = idxs[1];
-                        fp_t err = std::abs(FP(1.0) - wphi(kr, k));
-                        if (err > inner_val.val) {
-                            inner_val.val = err;
-                            inner_val.loc = Kokkos::make_pair(kr, k);
-                        }
-                    },
-                    thread_reducer
-                );
-
-                Kokkos::single(Kokkos::PerTeam(team), [&]() {
-                    thread_reducer.join(team_val, thread_val);
-                });
             },
             Reducer(max_err_loc)
         );
