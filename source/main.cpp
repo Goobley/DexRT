@@ -840,13 +840,13 @@ int main(int argc, char** argv) {
         .metavar("FILE");
     program.add_epilog("DexRT Radiance Cascade based non-LTE solver.");
 
-    program.parse_args(argc, argv);
+    program.parse_known_args(argc, argv);
 
     std::optional<std::string> restart_path = program.present("--restart-from");
 
     const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
 
-    Kokkos::initialize();
+    Kokkos::initialize(argc, argv);
     yakl::init(
         yakl::InitConfig()
             .set_pool_size_mb(config.mem_pool_initial_gb * 1024)
@@ -860,7 +860,7 @@ int main(int argc, char** argv) {
         CascadeState casc_state;
         casc_state.init(state, config.max_cascade);
         yakl::timer_start("DexRT");
-        state.max_block_mip = -1;
+        Kokkos::deep_copy(state.max_block_mip, -1);
         yakl::fence();
 
         // NOTE(cmo): Provided emissivity and opacity in file: static solution.

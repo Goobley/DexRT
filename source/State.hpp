@@ -24,7 +24,7 @@ struct State {
     GivenEmisOpac given_state;
     SparseAtmosphere atmos;
     MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE> mr_block_map;
-    yakl::Array<i32, 3, yakl::memDevice> max_block_mip;
+    KView<i32***> max_block_mip;
     InclQuadrature incl_quad;
     AtomicData<fp_t> adata;
     std::vector<CompAtom<fp_t>> atoms;

@@ -1,4 +1,8 @@
 #include "Populations.hpp"
+#include "KokkosBatched_Gesv.hpp"
+#include "KokkosBatched_LU_Decl.hpp"
+#include "KokkosBatched_SolveLU_Decl.hpp"
+#include "KokkosBlas.hpp"
 
 void compute_lte_pops_flat(
     const CompAtom<fp_t>& atom,
@@ -97,270 +101,235 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         // GammaT has shape [ks, Nlevel, Nlevel]
         const fp_t abundance = state->adata_host.abundance(ia);
         const auto nh_tot = state->atmos.nh_tot;
-        KView<T***> GammaT("GammaT", Gamma.extent(2), Gamma.extent(0), Gamma.extent(1));
-        KView<intptr_t*> GammaT_ptrs("GammaT_ptrs", GammaT.extent(0)); // T*
-        KView<T**> new_pops("new_pops", GammaT.extent(0), GammaT.extent(1));
-        KView<T*> n_total("n_total", GammaT.extent(0));
-        KView<intptr_t*> new_pops_ptrs("new_pops_ptrs", GammaT.extent(0)); // T*
-        KView<i32*> i_elim("i_elim", GammaT.extent(0));
-        KView<i32**> ipivs("ipivs", new_pops.extent(0), new_pops.extent(1));
-        KView<intptr_t*> ipiv_ptrs("ipiv_ptrs", new_pops.extent(0)); // i32*
-        KView<i32*> info("info", new_pops.extent(0));
 
         constexpr bool fractional_pops = true;
+        constexpr bool iterative_improvement = true;
+        constexpr int num_refinement_passes = 2;
 
+        const i64 Nspace = Gamma.extent(2);
         const int pops_start = state->adata_host.level_start(ia);
         const int num_level = state->adata_host.num_level(ia);
-        dex_parallel_for(
-            "Max Pops",
-            FlatLoop<1>(pops.extent(1)),
-            KOKKOS_LAMBDA (int64_t k) {
-                fp_t n_max = FP(0.0);
-                i_elim(k) = 0;
-                // n_total(k) = FP(0.0);
-                n_total(k) = nh_tot(k) * abundance;
-                for (int i = pops_start; i < pops_start + num_level; ++i) {
-                    fp_t n = pops(i, k);
-                    // n_total(k) += n;
-                    if (n > n_max) {
-                        i_elim(k) = i - pops_start;
-                        n_max = n;
-                    }
-                }
-            }
-        );
-        yakl::fence();
 
-        dex_parallel_for(
-            "Transpose Gamma",
-            FlatLoop<3>(Gamma.extent(2), Gamma.extent(1), Gamma.extent(0)),
-            KOKKOS_LAMBDA (int k, int i, int j) {
-                GammaT(k, j, i) = Gamma(i, j, k);
-            }
-        );
-        yakl::fence();
+        // NOTE(cmo): This allocation could be avoided, but we would need to fuse everything into one kernel.
+        KView<T**> new_pops("new_pops", Nspace, num_level);
 
-        dex_parallel_for(
-            "Gamma fixup",
-            FlatLoop<1>(GammaT.extent(0)),
-            KOKKOS_LAMBDA (i64 k) {
-                for (int i = 0; i < GammaT.extent(1); ++i) {
-                    T diag = FP(0.0);
-                    GammaT(k, i, i) = FP(0.0);
-                    for (int j = 0; j < GammaT.extent(2); ++j) {
-                        diag += GammaT(k, i, j);
-                    }
-                    GammaT(k, i, i) = -diag;
-                }
-            }
-        );
-        dex_parallel_for(
-            "Transpose Pops",
-            FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
-            KOKKOS_LAMBDA (i64 k, int i) {
-                if (i_elim(k) == i) {
-                    if (fractional_pops) {
-                        new_pops(k, i) = FP(1.0);
-                    } else {
-                        new_pops(k, i) = n_total(k);
-                    }
-                } else {
-                    new_pops(k, i) = FP(0.0);
-                }
-            }
-        );
-        dex_parallel_for(
-            "Setup pointers",
-            FlatLoop<1>(GammaT_ptrs.extent(0)),
-            KOKKOS_LAMBDA (i64 k) {
-                GammaT_ptrs(k) = (intptr_t)&GammaT(k, 0, 0);
-                new_pops_ptrs(k) = (intptr_t)&new_pops(k, 0);
-                ipiv_ptrs(k) = (intptr_t)&ipivs(k, 0);
-            }
-        );
-        yakl::fence();
-
-        dex_parallel_for(
-            "Conservation eqn",
-            FlatLoop<3>(GammaT.extent(0), GammaT.extent(1), GammaT.extent(2)),
-            KOKKOS_LAMBDA (i64 k, int i, int j) {
-                if (i_elim(k) == i) {
-                    GammaT(k, j, i) = FP(1.0);
-                }
-            }
-        );
-
-        yakl::fence();
-
-        static_assert(
-            std::is_same_v<T, f32> || std::is_same_v<T, f64>,
-            "What type are you asking the poor stat_eq function to use internally?"
-        );
-        if constexpr (std::is_same_v<T, f32>) {
-            magma_sgesv_batched(
-                GammaT.extent(1),
-                1,
-                (T**)GammaT_ptrs.data(),
-                GammaT.extent(1),
-                (i32**)ipiv_ptrs.data(),
-                (T**)new_pops_ptrs.data(),
-                new_pops.extent(1),
-                info.data(),
-                GammaT.extent(0),
-                state->magma_queue
-            );
-        } else if constexpr (std::is_same_v<T, f64>) {
-            constexpr bool iterative_improvement = true;
-            constexpr int num_refinement_passes = 2;
-            KView<T***> gamma_copy;
-            KView<T**> lhs_copy;
-            KView<T**> residuals;
-            KView<intptr_t*> residuals_ptrs; // T*
-            if constexpr (iterative_improvement) {
-                gamma_copy = create_device_copy(GammaT);
-                lhs_copy = create_device_copy(new_pops);
-                residuals = create_device_copy(new_pops);
-                residuals_ptrs = decltype(residuals_ptrs)("residuals_ptrs", residuals.extent(0));
-            }
-
-            magma_dgesv_batched(
-                GammaT.extent(1),
-                1,
-                (T**)GammaT_ptrs.data(),
-                GammaT.extent(1),
-                (i32**)ipiv_ptrs.data(),
-                (T**)new_pops_ptrs.data(),
-                new_pops.extent(1),
-                info.data(),
-                GammaT.extent(0),
-                state->magma_queue
-            );
-            magma_queue_sync(state->magma_queue);
-
-            if constexpr (iterative_improvement) {
-                for (int refinement = 0; refinement < num_refinement_passes; ++refinement) {
-                    // r_i = b_i
-                    dex_parallel_for(
-                        "Copy residual",
-                        FlatLoop<2>(residuals.extent(0), residuals.extent(1)),
-                        KOKKOS_LAMBDA (i64 ks, i32 i) {
-                            if (i == 0) {
-                                residuals_ptrs(ks) = (intptr_t)&residuals(ks, 0);
-                            }
-                            residuals(ks, i) = lhs_copy(ks, i);
-                        }
-                    );
-                    yakl::fence();
-                    // r -= A x
-                    magmablas_dgemv_batched_strided(
-                        MagmaNoTrans,
-                        residuals.extent(1),
-                        residuals.extent(1),
-                        -1,
-                        gamma_copy.data(),
-                        gamma_copy.extent(1),
-                        square(gamma_copy.extent(1)),
-                        new_pops.data(),
-                        1,
-                        new_pops.extent(1),
-                        1,
-                        residuals.data(),
-                        1,
-                        residuals.extent(1),
-                        residuals.extent(0),
-                        state->magma_queue
-                    );
-                    magma_queue_sync(state->magma_queue);
-
-                    // Solve A x' = r
-                    magma_dgetrs_batched(
-                        MagmaNoTrans,
-                        GammaT.extent(1),
-                        1,
-                        (T**)GammaT_ptrs.data(),
-                        GammaT.extent(1),
-                        (i32**)ipiv_ptrs.data(),
-                        (T**)residuals_ptrs.data(),
-                        residuals.extent(1),
-                        GammaT.extent(0),
-                        state->magma_queue
-                    );
-                    magma_queue_sync(state->magma_queue);
-
-                    // x += x'
-                    dex_parallel_for(
-                        "Apply residual",
-                        FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
-                        KOKKOS_LAMBDA (i64 ks, i32 i) {
-                            new_pops(ks, i) += residuals(ks, i);
-                        }
-                    );
-                    yakl::fence();
-                }
-            }
+        size_t scratch_size = KView<T**>::shmem_size(num_level, num_level);
+        if (iterative_improvement) {
+            scratch_size *= 2;
+            scratch_size += 2 * KView<T*>::shmem_size(num_level);
         }
 
-        magma_queue_sync(state->magma_queue);
-        dex_parallel_for(
-            "info check",
-            FlatLoop<1>(info.extent(0)),
-            KOKKOS_LAMBDA (int k) {
-                if (info(k) != 0) {
-                    printf("LINEAR SOLVER PROBLEM k: %d, info: %d\n", k, info(k));
-                }
-            }
-        );
+        FlatLoop<2> nxn_loop(num_level, num_level);
 
-        Fp2d max_rel_change("max rel change", new_pops.extent(0), new_pops.extent(1));
-        dex_parallel_for(
-            "Compute max change",
-            FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
-            KOKKOS_LAMBDA (int64_t k, int i) {
-                fp_t change = FP(0.0);
-                if (pops(pops_start + i, k) < ignore_change_below_ntot_frac * n_total(k)) {
-                    change = FP(0.0);
-                } else {
-                    if (fractional_pops) {
-                        change = std::abs(FP(1.0) - pops(pops_start + i, k) / (new_pops(k, i) * n_total(k)));
-                    } else {
-                        change = std::abs(FP(1.0) - pops(pops_start + i, k) / new_pops(k, i));
+        Kokkos::parallel_for(
+            "Stat Eq",
+            TeamPolicy(Nspace, Kokkos::AUTO()).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+            KOKKOS_LAMBDA (const KTeam& team) {
+                const i64 ks = team.league_rank();
+
+                const fp_t n_total_k = nh_tot(ks) * abundance;
+
+                typedef Kokkos::MaxLoc<fp_t, int, DefaultExecutionSpace> ReducerDev;
+                typedef ReducerDev::value_type ReductionVal;
+                // Compute i_elim
+                ReductionVal max_pop_loc;
+                Kokkos::parallel_reduce(
+                    Kokkos::TeamVectorRange(team, num_level),
+                    [&] (const int i, ReductionVal& rval) {
+                        const fp_t n = pops(i + pops_start, ks);
+                        if (n > rval.val) {
+                            rval.val = n;
+                            rval.loc = i;
+                        }
+                    },
+                    ReducerDev(max_pop_loc)
+                );
+                const int i_elim = max_pop_loc.loc;
+
+                ScratchView<T**> Gammak(team.team_scratch(0), num_level, num_level);
+                auto new_popsk = Kokkos::subview(new_pops, ks, Kokkos::ALL);
+
+                // Copy over Gamma chunk
+                Kokkos::parallel_for(
+                    Kokkos::TeamVectorRange(team, nxn_loop.num_iter),
+                    [&] (const int x) {
+                        const auto args = nxn_loop.unpack(x);
+                        const int i = args[0];
+                        const int j = args[1];
+
+                        Gammak(i, j) = Gamma(i, j, ks);
+                    }
+                );
+                team.team_barrier();
+
+                // Fixup gamma
+                Kokkos::parallel_for(
+                    Kokkos::TeamVectorRange(team, num_level),
+                    [&] (const int i) {
+                        T diag = T(FP(0.0));
+                        Gammak(i, i) = diag;
+                        for (int j = 0; j < num_level; ++j) {
+                            diag += Gammak(j, i);
+                        }
+                        Gammak(i, i) = -diag;
+                    }
+                );
+
+                // Setup rhs
+                Kokkos::parallel_for(
+                    Kokkos::TeamVectorRange(team, num_level),
+                    [&] (const int i) {
+                        if (i_elim == i) {
+                            if (fractional_pops) {
+                                new_popsk(i) = T(FP(1.0));
+                            } else {
+                                new_popsk(i) = n_total_k;
+                            }
+                        } else {
+                            new_popsk(i) = T(FP(0.0));
+                        }
+                    }
+                );
+                team.team_barrier();
+
+                // Population conservation equation
+                Kokkos::parallel_for(
+                    Kokkos::TeamVectorRange(team, nxn_loop.num_iter),
+                    [&] (const int x) {
+                        const auto args = nxn_loop.unpack(x);
+                        const int i = args[0];
+                        const int j = args[1];
+
+                        if (i == i_elim) {
+                            Gammak(i, j) = T(FP(1.0));
+                        }
+                    }
+                );
+                team.team_barrier();
+
+                ScratchView<T**> Gamma_copy;
+                ScratchView<T*> lhs;
+                ScratchView<T*> residuals;
+                if (iterative_improvement) {
+                    Gamma_copy = ScratchView<T**>(team.team_scratch(0), num_level, num_level);
+                    lhs = ScratchView<T*>(team.team_scratch(0), num_level);
+                    residuals = ScratchView<T*>(team.team_scratch(0), num_level);
+
+                    Kokkos::parallel_for(
+                        Kokkos::TeamVectorRange(team, nxn_loop.num_iter),
+                        [&] (const int x) {
+                            const auto args = nxn_loop.unpack(x);
+                            const int i = args[0];
+                            const int j = args[1];
+
+                            if (i == 0) {
+                                lhs(j) = new_popsk(j);
+                                residuals(j) = new_popsk(j);
+                            }
+                            Gamma_copy(i, j) = Gammak(i, j);
+                        }
+                    );
+                }
+
+                team.team_barrier();
+                // LU factorise
+                KokkosBatched::LU<KTeam, KokkosBatched::Mode::Team, KokkosBatched::Algo::LU::Unblocked>::invoke(
+                    team, Gammak
+                );
+                team.team_barrier();
+                // LU Solve
+                KokkosBatched::TeamSolveLU<
+                    KTeam,
+                    KokkosBatched::Trans::NoTranspose,
+                    KokkosBatched::Algo::Trsm::Unblocked
+                >::invoke(
+                    team,
+                    Gammak,
+                    new_popsk
+                );
+                team.team_barrier();
+
+                if (iterative_improvement) {
+                    for (int refinement = 0; refinement < num_refinement_passes; ++refinement) {
+                        // r_i = b_i
+                        Kokkos::parallel_for(
+                            Kokkos::TeamVectorRange(team, residuals.extent(0)),
+                            [&] (int i) {
+                                residuals(i) = lhs(i);
+                            }
+                        );
+                        team.team_barrier();
+                        // r -= Gamma x
+                        KokkosBlas::Experimental::Gemv<KokkosBlas::Mode::TeamVector, KokkosBlas::Algo::Gemv::Default>::invoke(
+                            team,
+                            'n',
+                            T(-1),
+                            Gamma_copy,
+                            new_popsk,
+                            T(1),
+                            residuals
+                        );
+                        team.team_barrier();
+                        // Solve Gamma x' = r (already factorised)
+                        KokkosBatched::TeamSolveLU<
+                            KTeam,
+                            KokkosBatched::Trans::NoTranspose,
+                            KokkosBatched::Algo::Trsm::Unblocked
+                        >::invoke(
+                            team,
+                            Gammak,
+                            residuals
+                        );
+                        team.team_barrier();
+                        // x += x'
+                        Kokkos::parallel_for(
+                            Kokkos::TeamVectorRange(
+                                team,
+                                new_popsk.extent(0)
+                            ),
+                            [&] (int i) {
+                                new_popsk(i) += residuals(i);
+                            }
+                        );
+                        team.team_barrier();
                     }
                 }
-                max_rel_change(k, i) = change;
             }
         );
-        yakl::fence();
-        dex_parallel_for(
-            "Copy & transpose pops",
-            FlatLoop<2>(new_pops.extent(1), new_pops.extent(0)),
-            KOKKOS_LAMBDA (int i, int64_t k) {
-                if (fractional_pops) {
-                    pops(pops_start + i, k) = new_pops(k, i) * n_total(k);
-                } else {
-                    pops(pops_start + i, k) = new_pops(k, i);
-                }
-            }
-        );
+        Kokkos::fence();
 
         typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<int, int>> Reducer;
-        typedef Reducer::value_type ReducerType;
-
-        const FlatLoop<2> loop(max_rel_change.extent(0), max_rel_change.extent(1));
-        const auto work_div = balance_parallel_work_division(BalanceLoopArgs{.loop = loop});
-        ReducerType max_change_loc;
+        typedef Reducer::value_type ReductionVal;
+        ReductionVal max_change_loc;
         dex_parallel_reduce(
-            "Find max rel change",
-            loop,
-            KOKKOS_LAMBDA (const int kr, const int k, ReducerType& rval) {
-                fp_t val = max_rel_change(kr, k);
-                if (val > rval.val) {
-                    rval.val = val;
-                    rval.loc = Kokkos::make_pair(kr, k);
+            "Update pops and compute max change",
+            FlatLoop<2>(Nspace, num_level),
+            KOKKOS_LAMBDA (int ks, int i, ReductionVal& rval) {
+                fp_t change = FP(0.0);
+                const fp_t n_total_k = nh_tot(ks) * abundance;
+                fp_t new_pop_scaled = new_pops(ks, i);
+                if (fractional_pops) {
+                    new_pop_scaled *= n_total_k;
+                }
+
+                // compute change
+                if (pops(pops_start + i, ks) < ignore_change_below_ntot_frac * n_total_k) {
+                    change = FP(0.0);
+                } else {
+                    change = std::abs(FP(1.0) - pops(pops_start + i, ks) / new_pop_scaled);
+                }
+
+                // update
+                pops(pops_start + i, ks) = new_pop_scaled;
+
+                // reduce update
+                if (change > rval.val) {
+                    rval.val = change;
+                    rval.loc = Kokkos::make_pair(ks, i);
                 }
             },
             Reducer(max_change_loc)
         );
-
 
         const fp_t max_change = max_change_loc.val;
         auto temp_val = Kokkos::subview(state->atmos.temperature, max_change_loc.loc.first);

@@ -39,6 +39,11 @@ using MDRange = Kokkos::MDRangePolicy<Kokkos::Rank<R, Kokkos::Iterate::Right, Ko
 
 typedef Kokkos::TeamPolicy<Kokkos::DefaultExecutionSpace> TeamPolicy;
 typedef TeamPolicy::member_type KTeam;
+using Kokkos::DefaultExecutionSpace;
+typedef DefaultExecutionSpace::scratch_memory_space ScratchSpace;
+
+template <class T>
+using ScratchView = KView<T, ScratchSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
 template <typename Team, typename iType>
 KOKKOS_INLINE_FUNCTION
