@@ -875,6 +875,9 @@ void cascade_i_25d(
                 .wave=wave
             };
             i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
+            if (cascade_idx == 0 && probe_coord(0) == 255 && probe_coord(1) == 324 && theta_idx == 0 && wave == 0) {
+                printf("[%e, %e]\n", average_ri.I, average_ri.tau);
+            }
             dev_casc_state.cascade_I(lin_idx) = average_ri.I;
             if constexpr (STORE_TAU_CASCADES) {
                 dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;

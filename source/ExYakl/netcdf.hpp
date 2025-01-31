@@ -661,6 +661,7 @@ namespace ExYakl {
 
       auto arrHost = create_mirror_view(arr);
       var.getVar(arrHost.data());
+      Kokkos::deep_copy(arr, arrHost);
       Kokkos::fence();
     }
 

@@ -104,7 +104,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
 
         constexpr bool fractional_pops = true;
         constexpr bool iterative_improvement = true;
-        constexpr int num_refinement_passes = 2;
+        constexpr int num_refinement_passes = 6;
 
         const i64 Nspace = Gamma.extent(2);
         const int pops_start = state->adata_host.level_start(ia);
@@ -231,6 +231,17 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                     );
                 }
 
+                if (ks == 165576) {
+                    Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                        for (int i = 0; i < 6; ++i) {
+                            for (int j = 0; j < 6; ++j) {
+                                printf("%.4e ", Gammak(i, j));
+                            }
+                            printf(" . %.4e\n", new_popsk(i));
+                        }
+                    });
+                }
+
                 team.team_barrier();
                 // LU factorise
                 KokkosBatched::LU<KTeam, KokkosBatched::Mode::Team, KokkosBatched::Algo::LU::Unblocked>::invoke(
@@ -293,6 +304,15 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                         );
                         team.team_barrier();
                     }
+                }
+                if (ks == 165576) {
+                    Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                        printf("-> ");
+                        for (int i = 0; i < 6; ++i) {
+                            printf("%.4e  ", new_popsk(i));
+                        }
+                        printf("\n");
+                    });
                 }
             }
         );
