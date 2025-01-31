@@ -413,9 +413,9 @@ struct CompLine {
 
 template <typename T=fp_t>
 struct CompCont {
-    /// Short wavelength index
-    int red_idx;
     /// Long wavelength index
+    int red_idx;
+    /// Short wavelength index
     int blue_idx;
 
     /// atom index

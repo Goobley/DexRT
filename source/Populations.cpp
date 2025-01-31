@@ -88,7 +88,7 @@ void compute_nh0(const State& state) {
     yakl::fence();
 }
 
-#ifdef DEXRT_USE_MAGMA
+#if 1
 
 template <typename T=fp_t>
 fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {

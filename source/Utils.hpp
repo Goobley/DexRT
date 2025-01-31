@@ -126,7 +126,7 @@ YAKL_INLINE
 KView<const u16*> slice_active_cont_set(const AtomicData<T>& atom, int la) {
     const int start = atom.active_cont_start(la);
     const int end = atom.active_cont_end(la);
-    auto result = Kokkos::subview(atom.active_lines, std::make_pair(start, end));
+    auto result = Kokkos::subview(atom.active_cont, std::make_pair(start, end));
     return result;
 }
 

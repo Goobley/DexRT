@@ -4,7 +4,7 @@
 #include "KokkosBatched_SolveLU_Decl.hpp"
 #include "KokkosBlas.hpp"
 
-#ifdef DEXRT_USE_MAGMA
+#if 1
 // #if 0
 template <typename T=fp_t>
 fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions()) {
@@ -356,7 +356,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                 fp_t nh_tot_ratio = pops_sum / nh_tot(k);
                 nh_tot(k) = pops_sum;
 
-                for (int i = 0; i < full_pops.extent(1); ++i) {
+                for (int i = 0; i < full_pops.extent(0); ++i) {
                     full_pops(i, k) *= nh_tot_ratio;
                 }
             }

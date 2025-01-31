@@ -127,10 +127,11 @@ yakl::SArray<fp_t, 1, NumIncl> get_incl_weights() {
 }
 
 // #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
+#if 0
 #define DEXRT_USE_MAGMA
 #include <magma_v2.h>
 #include <magmablas.h>
-// #endif
+#endif
 
 #else
 #endif

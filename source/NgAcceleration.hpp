@@ -2,6 +2,8 @@
 #define DEXRT_NG_ACCELERATION_HPP
 
 #include "Config.hpp"
+#include "KokkosBatched_LU_Decl.hpp"
+#include "KokkosBatched_SolveLU_Decl.hpp"
 
 struct NgAccelArgs {
     i64 num_level;
@@ -64,88 +66,59 @@ struct NgAccelerator {
         i64 num_space = pops.extent(2);
         i64 num_level = pops.extent(0);
         static_assert(num_steps == 5, "Need to update Ng algorithm");
-        yakl::Array<f64, 3, yakl::memHost> aa("Ng A", num_level, 3, 3);
-        yakl::Array<f64, 2, yakl::memHost> bb("Ng b", num_level, 3);
+        KView<f64***, HostSpace> aa("Ng A", num_level, 3, 3);
+        KView<f64**, HostSpace> bb("Ng b", num_level, 3);
 
-        for (int l = 0; l < pops.extent(0); ++l) {
-            for (int i = 0; i < 3; ++i) {
-                bb(l, i) = FP(0.0);
-                for (int j = 0; j < 3; ++j) {
-                    aa(l, i, j) = FP(0.0);
+        Kokkos::parallel_for(
+            "Construct Ng Matrices",
+            Kokkos::RangePolicy<Kokkos::DefaultHostExecutionSpace>(Kokkos::DefaultHostExecutionSpace(), 0, num_level),
+            KOKKOS_CLASS_LAMBDA (const int l) {
+                for (int i = 0; i < 3; ++i) {
+                    bb(l, i) = FP(0.0);
+                    for (int j = 0; j < 3; ++j) {
+                        aa(l, i, j) = FP(0.0);
+                    }
                 }
+
+                for (i64 ks = 0; ks < pops.extent(2); ++ks) {
+                    const fp_t weight = FP(1.0) / square(pops(l, 4, ks));
+                    const fp_t d0 = pops(l, 4, ks) - pops(l, 3, ks);
+                    const fp_t d1 = d0 - (pops(l, 3, ks) - pops(l, 2, ks));
+                    const fp_t d2 = d0 - (pops(l, 2, ks) - pops(l, 1, ks));
+                    const fp_t d3 = d0 - (pops(l, 1, ks) - pops(l, 0, ks));
+
+                    aa(l, 0, 0) += weight * d1 * d1;
+                    aa(l, 0, 1) += weight * d1 * d2;
+                    aa(l, 0, 2) += weight * d1 * d3;
+                    aa(l, 1, 1) += weight * d2 * d2;
+                    aa(l, 1, 2) += weight * d2 * d3;
+                    aa(l, 2, 2) += weight * d3 * d3;
+                    bb(l, 0) += weight * d0 * d1;
+                    bb(l, 1) += weight * d0 * d2;
+                    bb(l, 2) += weight * d0 * d3;
+                }
+                aa(l, 1, 0) = aa(l, 0, 1);
+                aa(l, 2, 0) = aa(l, 0, 2);
+                aa(l, 2, 1) = aa(l, 1, 2);
             }
+        );
+        Kokkos::fence();
 
-            for (i64 ks = 0; ks < pops.extent(2); ++ks) {
-                const fp_t weight = FP(1.0) / square(pops(l, 4, ks));
-                const fp_t d0 = pops(l, 4, ks) - pops(l, 3, ks);
-                const fp_t d1 = d0 - (pops(l, 3, ks) - pops(l, 2, ks));
-                const fp_t d2 = d0 - (pops(l, 2, ks) - pops(l, 1, ks));
-                const fp_t d3 = d0 - (pops(l, 1, ks) - pops(l, 0, ks));
-
-                aa(l, 0, 0) += weight * d1 * d1;
-                aa(l, 1, 0) += weight * d1 * d2;
-                aa(l, 2, 0) += weight * d1 * d3;
-                aa(l, 1, 1) += weight * d2 * d2;
-                aa(l, 2, 1) += weight * d2 * d3;
-                aa(l, 2, 2) += weight * d3 * d3;
-                bb(l, 0) += weight * d0 * d1;
-                bb(l, 1) += weight * d0 * d2;
-                bb(l, 2) += weight * d0 * d3;
-            }
-            aa(l, 0, 1) = aa(l, 1, 0);
-            aa(l, 0, 2) = aa(l, 2, 0);
-            aa(l, 1, 2) = aa(l, 2, 1);
-        }
-
-        auto aa_d = aa.createDeviceCopy();
-        auto bb_d = bb.createDeviceCopy();
-
-// #ifdef DEXRT_USE_MAGMA
-#if 0
-        yakl::Array<f64*, 1, yakl::memDevice> aa_ptrs("aa_ptrs", num_level);
-        yakl::Array<f64*, 1, yakl::memDevice> bb_ptrs("bb_ptrs", num_level);
-        yakl::Array<i32, 2, yakl::memDevice> ipivs("ipivs", num_level, bb.extent(1));
-        yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", num_level);
-        yakl::Array<i32, 1, yakl::memDevice> info("info", num_level);
-
-        parallel_for(
-            SimpleBounds<1>(num_level),
+        Kokkos::parallel_for(
+            "Solve Ng matrices",
+            Kokkos::RangePolicy<Kokkos::DefaultHostExecutionSpace>(Kokkos::DefaultHostExecutionSpace(), 0, num_level),
             KOKKOS_LAMBDA (int l) {
-                aa_ptrs(l) = &aa_d(l, 0, 0);
-                bb_ptrs(l) = &bb_d(l, 0);
-                ipiv_ptrs(l) = &ipivs(l, 0);
+                auto inner_a = Kokkos::subview(aa, l, Kokkos::ALL(), Kokkos::ALL());
+                auto inner_b = Kokkos::subview(bb, l, Kokkos::ALL());
+
+                KokkosBatched::SerialLU<KokkosBatched::Algo::LU::Default>::invoke(inner_a);
+                KokkosBatched::SerialSolveLU<KokkosBatched::Trans::NoTranspose, KokkosBatched::Algo::Trsm::Default>::invoke(inner_a, inner_b);
             }
         );
-        yakl::fence();
-
-        magma_dgesv_batched_small(
-            aa_d.extent(1),
-            1,
-            aa_ptrs.data(),
-            aa_d.extent(1),
-            ipiv_ptrs.data(),
-            bb_ptrs.data(),
-            bb_d.extent(1),
-            info.data(),
-            num_level,
-            state.magma_queue
-        );
-        magma_queue_sync(state.magma_queue);
-
-        parallel_for(
-            "info check",
-            SimpleBounds<1>(info.extent(0)),
-            KOKKOS_LAMBDA (int k) {
-                if (info(k) != 0) {
-                    printf("LINEAR SOLVER PROBLEM k: %d, info: %d (Ng accel)\n", k, info(k));
-                }
-            }
-        );
-#else
-        state.println("Need magma for Ng acceleration (or bring your own matrix solver)");
-#endif
+        Kokkos::fence();
 
         auto pops_hist = create_device_copy(pops);
+        auto bb_d = create_device_copy(bb);
         dex_parallel_for(
             "Update pops",
             FlatLoop<2>(num_level, num_space),

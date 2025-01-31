@@ -772,42 +772,34 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         }
         nc.write(state.max_block_mip, "max_mip_block", {"wavelength_batch", "tile_z", "tile_x"});
     }
-    fmt::println("J");
 
 
     if (out_cfg.wavelength && state.adata.wavelength.is_allocated()) {
         nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
     }
-    fmt::println("wavelength");
     if (out_cfg.pops && state.pops.is_allocated()) {
         maybe_rehydrate_and_write(state.pops, "pops", {"level"});
     }
-    fmt::println("pops");
     if (out_cfg.lte_pops) {
         auto lte_pops = Kokkos::create_mirror(DefaultMemSpace{}, state.pops);
         compute_lte_pops(&state, lte_pops);
         yakl::fence();
         maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});
     }
-    fmt::println("lte_pops");
     if (out_cfg.ne && state.atmos.ne.is_allocated()) {
         maybe_rehydrate_and_write(state.atmos.ne, "ne", {});
     }
-    fmt::println("ne");
     if (out_cfg.nh_tot && state.atmos.nh_tot.is_allocated()) {
         maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
     }
-    fmt::println("nh_tot");
     if (out_cfg.alo && casc_state.alo.is_allocated()) {
         nc.write(casc_state.alo, "alo", {"casc_shape"});
     }
-    fmt::println("alo");
     if (out_cfg.active) {
         // NOTE(cmo): Currently active is always written dense
         const auto& active_char = reify_active_c0(block_map);
         nc.write(active_char, "active", {"z", "x"});
     }
-    fmt::println("active");
     for (int casc : out_cfg.cascades) {
         // NOTE(cmo): The validity of these + necessary warning were checked/output in the config parsing step
         std::string name = fmt::format("I_C{}", casc);
@@ -818,11 +810,9 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
             nc.write(casc_state.tau_cascades[casc], name, {shape});
         }
     }
-    fmt::println("cascades");
     if (out_cfg.sparse) {
         nc.write(block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
     }
-    fmt::println("tiles");
     nc.close();
 }
 
@@ -887,7 +877,6 @@ int main(int argc, char** argv) {
             save_results(state, casc_state, 1);
         } else {
             compute_lte_pops(&state);
-            fmt::println("LTE done");
             if (state.config.initial_pops_path.size() > 0) {
                 load_initial_pops(&state, state.config.initial_pops_path);
             }
@@ -970,11 +959,9 @@ int main(int argc, char** argv) {
                 while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
                     state.println("==== FS {} ====", i);
                     compute_nh0(state);
-                    fmt::println("nh0 done");
 
                     if (state.mpi_state.rank == 0) {
                         compute_collisions_to_gamma(&state);
-                        fmt::println("collisions done");
                     } else {
                         for (int ia = 0; ia < state.Gamma.size(); ++ia) {
                             Kokkos::deep_copy(state.Gamma[ia], FP(0.0));
@@ -983,7 +970,6 @@ int main(int argc, char** argv) {
                     }
 
                     compute_profile_normalisation(state, casc_state, true);
-                    fmt::println("wphi done");
                     Kokkos::deep_copy(state.J, FP(0.0));
                     if (config.store_J_on_cpu) {
                         Kokkos::deep_copy(state.J_cpu, FP(0.0));

@@ -151,25 +151,23 @@ namespace DexImpl {
     // NOTE(cmo): I just wanted to get a Kokkos::reducer acting on the same
     // types in a different execution space. If they add ones with more than two
     // args, we need a new override here.  Here be dragons.
-    template <int N, class ExecutionSpace, template <typename...> class Reducer, typename... RedArgs>
-    inline Reducer<RedArgs...> reducer_type_impl(const Reducer<RedArgs...>& r) {
-        return r;
-    }
+    template <int N, class ExecutionSpace, template <typename...> typename Reducer, typename... RedArgs>
+    struct reducer_type_impl;
 
-    template <class ExecutionSpace, template <typename, typename> class Reducer, typename RedArg0, typename RedSpace>
-    inline Reducer<RedArg0, ExecutionSpace> reducer_type_impl<2>(const Reducer<RedArg0, RedSpace>& r) {
-        return {};
-    }
+    template <class ExecutionSpace, template <typename, typename> typename Reducer, typename RedArg0, typename RedSpace>
+    struct reducer_type_impl<2, ExecutionSpace, Reducer, RedArg0, RedSpace> {
+        typedef Reducer<RedArg0, ExecutionSpace> type;
+    };
 
-    template <class ExecutionSpace, template <typename, typename, typename> class Reducer, typename RedArg0, typename RedArg1, typename RedSpace>
-    inline Reducer<RedArg0, RedArg1, ExecutionSpace> reducer_type_impl<3>(const Reducer<RedArg0, RedArg1, RedSpace>& r) {
-        return {};
-    }
+    template <class ExecutionSpace, template <typename, typename, typename> typename Reducer, typename RedArg0, typename RedArg1, typename RedSpace>
+    struct reducer_type_impl<3, ExecutionSpace, Reducer, RedArg0, RedArg1, RedSpace> {
+        typedef Reducer<RedArg0, RedArg1, ExecutionSpace> type;
+    };
 
     template <class ExecutionSpace, template <typename...> class Reducer, typename... RedArgs>
-    inline auto reducer_type_in_space(const Reducer<RedArgs...>& r) {
-        return reducer_type_impl<sizeof...(RedArgs), ExecutionSpace>(r);
-    }
+    struct reducer_type_in_space {
+        typedef reducer_type_impl<sizeof...(RedArgs), ExecutionSpace, Reducer, RedArgs...>::type type;
+    };
 };
 
 template <
@@ -187,7 +185,7 @@ inline void dex_parallel_reduce(
 ) {
     typedef Reducer<Args...> ReducerT;
     typedef typename ReducerT::value_type ReductionVar;
-    typedef decltype(DexImpl::reducer_type_in_space<ExecutionSpace>(reducer)) ReducerTDev;
+    typedef typename DexImpl::reducer_type_in_space<ExecutionSpace, Reducer, Args...>::type ReducerTDev;
 
     const auto work_div = balance_parallel_work_division(BalanceLoopArgs{.loop=loop});
     ReductionVar rvar;

@@ -55,11 +55,12 @@ add_executable(dexrt
 # )
 # NOTE(cmo): Override language type for cuda, may need to do this for HIP too.
 set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
-set_target_properties(dexrt PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
+set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
+if ("${Kokkos_COMPILE_LANGUAGE}" STREQUAL "CUDA")
     # set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES LANGUAGE CUDA)
     # set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES LANGUAGE CUDA)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CXX_FLAGS}")
+    set_target_properties(dexrt PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
 # NOTE(cmo): Storing all the files in a list seems to prevent the LANGUAGE attribute for being set
 # else()
 #     set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES LANGUAGE CXX)
@@ -83,12 +84,12 @@ target_include_directories(dexrt SYSTEM PUBLIC
     "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
 )
-target_link_libraries(dexrt "${LDLIBS}")
+target_link_libraries(dexrt Kokkos::kokkoskernels)
 target_link_libraries(dexrt fmt::fmt)
 target_link_libraries(dexrt yaml-cpp::yaml-cpp)
 target_link_libraries(dexrt argparse)
 target_link_libraries(dexrt git_version)
-target_link_libraries(dexrt Kokkos::kokkos Kokkos::kokkoskernels)
+target_link_libraries(dexrt "${LDLIBS}")
 if (${DEXRT_USE_MPI})
     message(${MPI_CXX_COMPILER})
     target_include_directories(dexrt PRIVATE ${MPI_CXX_INCLUDE_PATH})
