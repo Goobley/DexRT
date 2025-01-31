@@ -57,7 +57,7 @@ inline fp_t simple_conserve_pressure(State* state) {
             rel_change.extent(0),
             KOKKOS_LAMBDA (const int i, MaxLoc::value_type& max_loc) {
                 const fp_t val = rel_change(i);
-                if (val < max_loc.val) {
+                if (val > max_loc.val) {
                     max_loc.val = val;
                     max_loc.loc = i;
                 }

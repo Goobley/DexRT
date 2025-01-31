@@ -113,10 +113,10 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         // NOTE(cmo): This allocation could be avoided, but we would need to fuse everything into one kernel.
         KView<T**> new_pops("new_pops", Nspace, num_level);
 
-        size_t scratch_size = KView<T**>::shmem_size(num_level, num_level);
+        size_t scratch_size = ScratchView<T**>::shmem_size(num_level, num_level);
         if (iterative_improvement) {
             scratch_size *= 2;
-            scratch_size += 2 * KView<T*>::shmem_size(num_level);
+            scratch_size += 2 * ScratchView<T*>::shmem_size(num_level);
         }
 
         FlatLoop<2> nxn_loop(num_level, num_level);
