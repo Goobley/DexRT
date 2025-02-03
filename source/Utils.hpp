@@ -75,7 +75,7 @@ YAKL_INLINE int upper_bound(const ViewType& x, const T& value) {
  * Clamps on ends.
 */
 template <typename ViewType, typename T=ViewType::non_const_value_type>
-KOKKOS_INLINE_FUNCTION T interp(
+KOKKOS_FORCEINLINE_FUNCTION T interp(
     const T& alpha,
     const ViewType& x,
     const ViewType& y

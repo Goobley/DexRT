@@ -6,6 +6,7 @@
 #include "Utils.hpp"
 #include <fmt/core.h>
 
+#define FPT(X) T(FP(X))
 // NOTE(cmo): cuda-std is forcing some double precision - thrust is not.
 // #if defined(YAKL_ARCH_CUDA)
 // #include <cuda/std/complex>
@@ -27,8 +28,105 @@
 // template <typename T>
 // using DexComplex = std::complex<T>;
 // #endif
+#if 0
 template <typename T>
 using DexComplex = Kokkos::complex<T>;
+#else
+template <typename T>
+struct alignas(2 * sizeof(T)) DexComplex {
+  static_assert(std::is_floating_point_v<T> &&
+                    std::is_same_v<T, std::remove_cv_t<T>>,
+                "DexComplex can only be instantiated for a cv-unqualified "
+                "floating point type");
+
+    DexComplex() noexcept = default;
+    DexComplex(const DexComplex&) noexcept = default;
+    DexComplex& operator=(const DexComplex&) noexcept = default;
+    KOKKOS_FORCEINLINE_FUNCTION constexpr DexComplex(const T& re, const T& im) noexcept : re_(re), im_(im) {}
+    KOKKOS_FORCEINLINE_FUNCTION constexpr T& imag() noexcept {return im_; }
+    KOKKOS_FORCEINLINE_FUNCTION constexpr T& real() noexcept {return re_; }
+    KOKKOS_FORCEINLINE_FUNCTION constexpr T imag() const noexcept {return im_; }
+    KOKKOS_FORCEINLINE_FUNCTION constexpr T real() const noexcept {return re_; }
+
+    private:
+        T re_;
+        T im_;
+};
+
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator*(const DexComplex<T>& x, const DexComplex<T>& y) {
+    return DexComplex(
+        x.real() * y.real() - x.imag() * y.imag(),
+        x.real() * y.imag() + x.imag() * y.real()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator*(const DexComplex<T>& x, const T& y) {
+    return DexComplex(
+        y * x.real(),
+        y * x.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator*(const T& y, const DexComplex<T>& x) {
+    return DexComplex<T>(
+        y * x.real(),
+        y * x.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator/(const DexComplex<T>& x, const T& y) {
+    return DexComplex<T>(x.real() / y, x.imag() / y);
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator/(const DexComplex<T>& x, const DexComplex<T>& y) {
+    using std::abs;
+    T s = abs(x.real()) + abs(y.imag());
+
+    T oos = FPT(1.0) / s;
+
+    const T ars = x.real() * oos;
+    const T ais = x.imag() * oos;
+    const T brs = y.real() * oos;
+    const T bis = y.imag() * oos;
+
+    s = (brs * brs) + (bis * bis);
+    oos = FPT(1.0) / s;
+    DexComplex<T> result(
+        ((ars * brs) + (ais * bis)) * oos,
+        ((ais * brs) - (ars * bis)) * oos
+    );
+    return result;
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator/(const T& x, const DexComplex<T>& y) {
+    return DexComplex<T>(x, FPT(0.0)) / y;
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator+(const DexComplex<T>& x, const DexComplex<T>& y) {
+    return DexComplex<T>(
+        x.real() + y.real(),
+        x.imag() + y.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator+(const T& x, const DexComplex<T>& y) {
+    return DexComplex<T>(
+        x + y.real(),
+        y.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator+(const DexComplex<T>& x, const T& y) {
+    return DexComplex<T>(
+        x.real() + y,
+        x.imag()
+    );
+}
+
+
+
+#endif
 
 namespace DexVoigtDetail {
 template <typename T>
@@ -48,7 +146,6 @@ YAKL_INLINE T cexp(const T& x) {
 }
 }
 
-#define FPT(X) T(FP(X))
 template <typename T=fp_t>
 YAKL_INLINE DexComplex<T> humlicek_voigt(T a, T v) {
     using DexVoigtDetail::cexp;
@@ -156,6 +253,8 @@ YAKL_INLINE DexComplex<T> humlicek_wei24_voigt(T a, T v) {
         return (z * FPT(0.5641896)) / (FPT(0.5) + z * z);
     } else {
         DexComplex<T> recLmZ = FPT(1.0) / DexComplex<T>(l + a, -v);
+        // T sqrs = square(l+a) + square(v);
+        // DexComplex<T> recLmZ(l+a / sqrs, v / sqrs); // manual substitution for 1 / ...
         DexComplex<T> t = DexComplex<T>(l - a, v) * recLmZ;
         DexComplex<T> result = recLmZ * (FPT(0.5641896) + FPT(2.0) * recLmZ * (
             ac[23]+(ac[22]+(ac[21]+(ac[20]+(ac[19]+(ac[18]+(ac[17]+(ac[16]+(ac[15]+(ac[14]+(ac[13]+(ac[12]+(ac[11]+(ac[10]+(ac[9]+(ac[8]+

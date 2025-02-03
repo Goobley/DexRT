@@ -208,7 +208,7 @@ YAKL_INLINE void compute_collisions(
 /// Both C and C_ne_pert should be the same size as Gamma for one spatial point
 /// Result will still require gamma_fixup
 template <typename View2d>
-KOKKOS_INLINE_FUNCTION void compute_C_ne_pert(
+KOKKOS_FORCEINLINE_FUNCTION void compute_C_ne_pert(
     const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const FpConst2d& n_star,

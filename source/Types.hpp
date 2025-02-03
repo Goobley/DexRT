@@ -46,7 +46,7 @@ template <class T>
 using ScratchView = KView<T, ScratchSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
 template <typename Team, typename iType>
-KOKKOS_INLINE_FUNCTION
+KOKKOS_FORCEINLINE_FUNCTION
 auto InnerRange(const Team& team, iType range) -> decltype(Kokkos::TeamVectorRange(team, range)) {
     return Kokkos::TeamVectorRange(team, range);
 }

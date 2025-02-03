@@ -205,6 +205,8 @@ void dynamic_compute_gamma_nonatomic(
     const int num_cascades = casc_state.num_cascades;
     const auto spatial_bounds = mr_block_map.block_map.loop_bounds();
 
+    fmt::println("{}, {}", sizeof(EmisOpacState<fp_t, DefaultMemSpace>), sizeof(KView<fp_t**, DefaultMemSpace>));
+
     int wave_batch = la_end - la_start;
     wave_batch = std::min(wave_batch, ray_subset.wave_batch);
     KView<fp_t*, HostSpace> wl_ray_weights_h("wl_ray_weights", wave_batch);

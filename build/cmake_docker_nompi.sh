@@ -15,7 +15,7 @@ MAGMA_LIB="-lmagma"
 cmake  \
       -DYAKL_ARCH="CUDA"              \
       -DYAKL_AUTO_PROFILE="On"         \
-      -DYAKL_CUDA_FLAGS="-O3 -ftz=true" \
+      -DYAKL_CUDA_FLAGS="-O3 -ftz=true -lineinfo" \
       -DYAKL_INT64_RESHAPE="On"       \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DMAGMA_INCLUDE_PATH="${MAGMA_INCLUDE_PATH}" \

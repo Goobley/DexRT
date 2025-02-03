@@ -12,7 +12,7 @@ struct FlatLoop {
     i64 num_iter;
 
     // FlatLoop(const Kokkos::Array<i32, N>& bounds_) : bounds(bounds_) {
-    KOKKOS_INLINE_FUNCTION FlatLoop(i32 b0, i32 b1=0, i32 b2=0, i32 b3=0, i32 b4=0, i32 b5=0) {
+    KOKKOS_FORCEINLINE_FUNCTION FlatLoop(i32 b0, i32 b1=0, i32 b2=0, i32 b3=0, i32 b4=0, i32 b5=0) {
         bounds[0] = b0;
         if constexpr (N >= 2) {
             bounds[1] = b1;
@@ -37,8 +37,8 @@ struct FlatLoop {
         }
     }
 
-    KOKKOS_INLINE_FUNCTION Kokkos::Array<i32, N> unpack(i64 i) const;
-    KOKKOS_INLINE_FUNCTION i32 dim(i32 i) const {
+    KOKKOS_FORCEINLINE_FUNCTION Kokkos::Array<i32, N> unpack(i64 i) const;
+    KOKKOS_FORCEINLINE_FUNCTION i32 dim(i32 i) const {
         return bounds[i];
     }
 };
@@ -84,7 +84,7 @@ inline TeamWorkDivision balance_parallel_work_division(const BalanceLoopArgs<N>&
 }
 
 // template <int CurrentLevel=0, class Lambda, int N, typename... Args>
-// KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, N>& arr, Args... args) {
+// KOKKOS_FORCEINLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, N>& arr, Args... args) {
 //     i32 i = arr[CurrentLevel];
 //     if constexpr (CurrentLevel == N - 1) {
 //         closure(args..., i);
@@ -94,11 +94,11 @@ inline TeamWorkDivision balance_parallel_work_division(const BalanceLoopArgs<N>&
 // }
 
 template <int N, class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, N>& arr);
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, N>& arr);
 
 
 template <int N, class Lambda, typename T>
-KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke_with_ref_arg(
     const Lambda& closure,
     const Kokkos::Array<i32, N>& arr,
     T& ref
@@ -115,6 +115,7 @@ inline void dex_parallel_for(const std::string& name, const FlatLoop<N>& loop, c
     //         closure
     //     );
     // } else {
+#if 0
     auto work_div = balance_parallel_work_division(BalanceLoopArgs<N>{
         .loop = loop
     });
@@ -139,6 +140,16 @@ inline void dex_parallel_for(const std::string& name, const FlatLoop<N>& loop, c
             );
         }
     );
+#else
+    Kokkos::parallel_for(
+        name,
+        Kokkos::RangePolicy<ExecutionSpace>(0, loop.num_iter),
+        KOKKOS_LAMBDA (const i64 idx) {
+            const auto idxs = loop.unpack(idx);
+            array_invoke(closure, idxs);
+        }
+    );
+#endif
     // }
 }
 
@@ -235,13 +246,13 @@ inline void dex_parallel_reduce(
 }
 
 template <>
-KOKKOS_INLINE_FUNCTION
+KOKKOS_FORCEINLINE_FUNCTION
 Kokkos::Array<i32, 1> FlatLoop<1>::unpack(i64 i) const {
     return {i32(i)};
 }
 
 template <>
-KOKKOS_INLINE_FUNCTION
+KOKKOS_FORCEINLINE_FUNCTION
 Kokkos::Array<i32, 2> FlatLoop<2>::unpack(i64 i) const {
     i32 idx0 = i32(i / bounds[1]);
     i32 idx1 = i32(i - bounds[1] * idx0);
@@ -249,7 +260,7 @@ Kokkos::Array<i32, 2> FlatLoop<2>::unpack(i64 i) const {
 }
 
 template <>
-KOKKOS_INLINE_FUNCTION
+KOKKOS_FORCEINLINE_FUNCTION
 Kokkos::Array<i32, 3> FlatLoop<3>::unpack(i64 i) const {
     i64 dim_prod = bounds[1] * bounds[2];
     i32 idx0 = i32(i / dim_prod);
@@ -262,7 +273,7 @@ Kokkos::Array<i32, 3> FlatLoop<3>::unpack(i64 i) const {
 }
 
 template <>
-KOKKOS_INLINE_FUNCTION
+KOKKOS_FORCEINLINE_FUNCTION
 Kokkos::Array<i32, 4> FlatLoop<4>::unpack(i64 i) const {
     i64 dim_prod = bounds[1] * bounds[2] * bounds[3];
     i32 idx0 = i32(i / dim_prod);
@@ -281,7 +292,7 @@ Kokkos::Array<i32, 4> FlatLoop<4>::unpack(i64 i) const {
 }
 
 template <>
-KOKKOS_INLINE_FUNCTION
+KOKKOS_FORCEINLINE_FUNCTION
 Kokkos::Array<i32, 5> FlatLoop<5>::unpack(i64 i) const {
     i64 dim_prod = bounds[1] * bounds[2] * bounds[3] * bounds[4];
     i32 idx0 = i32(i / dim_prod);
@@ -304,7 +315,7 @@ Kokkos::Array<i32, 5> FlatLoop<5>::unpack(i64 i) const {
 }
 
 template <>
-KOKKOS_INLINE_FUNCTION
+KOKKOS_FORCEINLINE_FUNCTION
 Kokkos::Array<i32, 6> FlatLoop<6>::unpack(i64 i) const {
     i64 dim_prod = bounds[1] * bounds[2] * bounds[3] * bounds[4] * bounds[5];
     i32 idx0 = i32(i / dim_prod);
@@ -340,37 +351,37 @@ namespace Kokkos {
 }
 
 template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 1>& arr) {
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 1>& arr) {
     closure(arr[0]);
 }
 
 template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 2>& arr) {
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 2>& arr) {
     closure(arr[0], arr[1]);
 }
 
 template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 3>& arr) {
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 3>& arr) {
     closure(arr[0], arr[1], arr[2]);
 }
 
 template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 4>& arr) {
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 4>& arr) {
     closure(arr[0], arr[1], arr[2], arr[3]);
 }
 
 template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 5>& arr) {
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 5>& arr) {
     closure(arr[0], arr[1], arr[2], arr[3], arr[4]);
 }
 
 template <class Lambda>
-KOKKOS_INLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 6>& arr) {
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke(const Lambda& closure, const Kokkos::Array<i32, 6>& arr) {
     closure(arr[0], arr[1], arr[2], arr[3], arr[4], arr[5]);
 }
 
 template <class Lambda, typename T>
-KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke_with_ref_arg(
     const Lambda& closure,
     const Kokkos::Array<i32, 1>& arr,
     T& ref
@@ -379,7 +390,7 @@ KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
 }
 
 template <class Lambda, typename T>
-KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke_with_ref_arg(
     const Lambda& closure,
     const Kokkos::Array<i32, 2>& arr,
     T& ref
@@ -388,7 +399,7 @@ KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
 }
 
 template <class Lambda, typename T>
-KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke_with_ref_arg(
     const Lambda& closure,
     const Kokkos::Array<i32, 3>& arr,
     T& ref
@@ -397,7 +408,7 @@ KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
 }
 
 template <class Lambda, typename T>
-KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke_with_ref_arg(
     const Lambda& closure,
     const Kokkos::Array<i32, 4>& arr,
     T& ref
@@ -406,7 +417,7 @@ KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
 }
 
 template <class Lambda, typename T>
-KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke_with_ref_arg(
     const Lambda& closure,
     const Kokkos::Array<i32, 5>& arr,
     T& ref
@@ -415,7 +426,7 @@ KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
 }
 
 template <class Lambda, typename T>
-KOKKOS_INLINE_FUNCTION void array_invoke_with_ref_arg(
+KOKKOS_FORCEINLINE_FUNCTION void array_invoke_with_ref_arg(
     const Lambda& closure,
     const Kokkos::Array<i32, 6>& arr,
     T& ref
