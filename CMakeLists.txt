@@ -124,6 +124,7 @@ set_target_properties(dexrt PROPERTIES
     LINK_FLAGS "${LDFLAGS}"
 )
 
+message("Compiling with: ${CMAKE_CXX_FLAGS} ${YAKL_DEFS} ${DEX_CXX_FLAGS}")
 ############# dexrt_ray ##############
 target_include_directories(dexrt_ray SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"

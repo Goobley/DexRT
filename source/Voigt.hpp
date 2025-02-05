@@ -6,32 +6,13 @@
 #include "Utils.hpp"
 #include <fmt/core.h>
 
-// NOTE(cmo): cuda-std is forcing some double precision - thrust is not.
-// #if defined(YAKL_ARCH_CUDA)
-// #include <cuda/std/complex>
-// template <typename T>
-// using DexComplex = cuda::std::complex<T>;
-// #elif defined(YAKL_ARCH_HIP)
-
-// #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
-// #include <thrust/complex.h>
-// template <typename T>
-// using DexComplex = thrust::complex<T>;
-// #elif defined(YAKL_ARCH_SYCL)
-// #define SYCL_EXT_ONEAPI_COMPLEX
-// #include <sycl/ext/oneapi/experimental/complex/complex.hpp>
-// template <typename T>
-// using DexComplex = sycl::_V1::ext::oneapi::experimental::complex<T>;
-// #else
-// #include <complex>
-// template <typename T>
-// using DexComplex = std::complex<T>;
-// #endif
 #define FPT(X) T(FP(X))
+// NOTE(cmo): The complex in Kokkos is much slower because of the branch in operator/.
 #if 0
 template <typename T>
 using DexComplex = Kokkos::complex<T>;
 #else
+// NOTE(cmo): This version based on thrust.
 template <typename T>
 struct alignas(2 * sizeof(T)) DexComplex {
   static_assert(std::is_floating_point_v<T> &&
@@ -123,25 +104,36 @@ KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator+(const DexComplex<T>& x, cons
         x.imag()
     );
 }
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator-(const DexComplex<T>& x, const DexComplex<T>& y) {
+    return DexComplex<T>(
+        x.real() - y.real(),
+        x.imag() - y.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator-(const T& x, const DexComplex<T>& y) {
+    return DexComplex<T>(
+        x - y.real(),
+        -y.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator-(const DexComplex<T>& x, const T& y) {
+    return DexComplex<T>(
+        x.real() - y,
+        x.imag()
+    );
+}
 #endif
 
 
 namespace DexVoigtDetail {
-template <typename T>
-YAKL_INLINE T cexp(const T& x) {
-// #if defined(YAKL_ARCH_CUDA)
-    // return cuda::std::exp(x);
-// #elif defined(YAKL_ARCH_HIP)
-
-// #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP)
-//     return thrust::exp(x);
-// #elif defined(YAKL_ARCH_SYCL)
-//     return sycl::_V1::ext::oneapi::experimental::exp(x);
-// #else
-//     return std::exp(x);
-// #endif
-    return Kokkos::exp(x);
-}
+    template <template<typename> class Complex, typename T>
+    YAKL_INLINE Complex<T> cexp(const Complex<T>& x) {
+        using std::exp, std::cos, std::sin;
+        return exp(x.real()) * Complex<T>(cos(x.imag()), sin(x.imag()));
+    }
 }
 
 template <typename T=fp_t>
@@ -319,53 +311,44 @@ struct VoigtProfile {
 
 
     void compute_samples() {
-        // if constexpr (!USE_LUT) {
-        //     throw std::runtime_error("No samples to compute: not using LUT for Voigt");
-        // }
-        // // NOTE(cmo): Allocate storage
-        // yakl::Array<Voigt_t, 2, mem_space> mut_samples("Voigt Samples", a_range.n, v_range.n);
+        if constexpr (!USE_LUT) {
+            throw std::runtime_error("No samples to compute: not using LUT for Voigt");
+        }
+        // NOTE(cmo): Allocate storage
+        yakl::Array<Voigt_t, 2, mem_space> mut_samples("Voigt Samples", a_range.n, v_range.n);
 
-        // auto voigt_sample = YAKL_CLASS_LAMBDA (int ia, int iv) {
-        //     T a = a_range.min + ia * a_step;
-        //     T v = v_range.min + iv * v_step;
-        //     auto sample = humlicek_voigt(a, v);
-        //     return sample;
-        // };
+        auto voigt_sample = YAKL_CLASS_LAMBDA (int ia, int iv) {
+            T a = a_range.min + ia * a_step;
+            T v = v_range.min + iv * v_step;
+            auto sample = humlicek_voigt(a, v);
+            return sample;
+        };
 
-        // // NOTE(cmo): Compute storage
-        // // Man, C++ makes this a pain sometimes... unless I'm just being an idiot.
-        // using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
-        // if constexpr (mem_space == yakl::memDevice) {
-        //     parallel_for(
-        //         "compute voigt",
-        //         SimpleBounds<2>(a_range.n, v_range.n),
-        //         YAKL_LAMBDA (int ia, int iv) {
-        //             const auto sample = voigt_sample(ia, iv);
-        //             mut_samples(ia, iv) = result_t::value(sample);
-        //         }
-        //     );
-        // } else {
-        //     for (int ia = 0; ia < a_range.n; ++ia) {
-        //         for (int iv = 0; iv < v_range.n; ++iv) {
-        //             mut_samples(ia, iv) = result_t::value(voigt_sample(ia, iv));
-        //         }
-        //     }
-        // }
-        // samples = mut_samples;
+        // NOTE(cmo): Compute storage
+        // Man, C++ makes this a pain sometimes... unless I'm just being an idiot.
+        using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
+        if constexpr (mem_space == yakl::memDevice) {
+            parallel_for(
+                "compute voigt",
+                SimpleBounds<2>(a_range.n, v_range.n),
+                YAKL_LAMBDA (int ia, int iv) {
+                    const auto sample = voigt_sample(ia, iv);
+                    mut_samples(ia, iv) = result_t::value(sample);
+                }
+            );
+        } else {
+            for (int ia = 0; ia < a_range.n; ++ia) {
+                for (int iv = 0; iv < v_range.n; ++iv) {
+                    mut_samples(ia, iv) = result_t::value(voigt_sample(ia, iv));
+                }
+            }
+        }
+        samples = mut_samples;
     }
 
     /// Simple clamped bilinear lookup
     template <bool InnerUseLut = USE_LUT, std::enable_if_t<InnerUseLut, bool> = true>
     YAKL_INLINE Voigt_t operator()(T a, T v) const {
-#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
-#ifdef DEXRT_DEBUG
-        YAKL_EXECUTE_ON_HOST_ONLY(
-            if constexpr (mem_space == memDevice) {
-                yakl::yakl_throw("Cannot access a VoigtProfile in device memory from CPU...");
-            }
-        );
-#endif
-#endif
         if constexpr (!Complex) {
             v = std::abs(v);
         }

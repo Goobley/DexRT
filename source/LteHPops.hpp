@@ -64,13 +64,6 @@ struct HPartFn {
     }
 
     YAKL_INLINE fp_t operator()(fp_t temperature, fp_t ne, fp_t nh_tot, fp_t* nhii=nullptr) const {
-#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
-        YAKL_EXECUTE_ON_HOST_ONLY(
-            if constexpr (mem_space == yakl::memDevice) {
-                throw std::runtime_error(fmt::format("Cannot access a partition function in device memory from CPU..."));
-            }
-        );
-#endif
         using namespace ConstantsFP;
         constexpr fp_t saha_const = (FP(2.0) * pi * k_B) / h * (h / m_e);
         constexpr fp_t ion_energy_k_B = FP(157887.51240204);

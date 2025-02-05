@@ -823,11 +823,8 @@ void cascade_i_25d(
 
                 RadianceInterval<AloType> ri;
                 auto& casc_rays = ray_set;
-#if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
-                const auto boundaries = boundaries_h;
-#else
                 const auto& boundaries = boundaries_h;
-#endif
+
                 auto dispatch_outer = [&]<typename BcType>(BcType bc_type){
                     auto casc_and_bc = get_bc<BcType>(dev_casc_state, boundaries);
                     ri = march_and_merge_dispatch<RcMode>(
