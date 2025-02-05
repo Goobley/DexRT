@@ -110,15 +110,19 @@ inline Atmosphere load_atmos(const std::string& path) {
     result.nh0 = Fp2d("nh0", z_dim, x_dim);
     result.nh0 = FP(0.0);
 
-    Fp2d vel2 = result.vz.createDeviceObject();
-    dex_parallel_for(
-        FlatLoop<2>(z_dim, x_dim),
-        YAKL_LAMBDA (int z, int x) {
-            vel2(z, x) = square(result.vz(z, x)) + square(result.vy(z, x)) + square(result.vx(z, x));
-        }
+    fp_t max_vel_2;
+    dex_parallel_reduce(
+        "Atmosphere Max Vel",
+        FlatLoop<2>(vx.extent(0), vx.extent(1)),
+        KOKKOS_LAMBDA (int z, int x, fp_t& running_max) {
+            fp_t vel2 = square(result.vz(z, x)) + square(result.vy(z, x)) + square(result.vx(z, x));
+            if (vel2 > running_max) {
+                running_max = vel2;
+            }
+        },
+        Kokkos::Max<fp_t>(max_vel_2)
     );
-    yakl::fence();
-    result.moving = yakl::intrinsics::maxval(vel2) > FP(10.0);
+    result.moving = max_vel_2 > FP(10.0);
 
     return result;
 }

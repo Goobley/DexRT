@@ -49,9 +49,24 @@ inline fp_t simple_conserve_pressure(State* state) {
             }
         );
         yakl::fence();
-        max_change = yakl::intrinsics::maxval(rel_change);
-        i64 max_change_loc = yakl::intrinsics::maxloc(rel_change);
-        yakl::fence();
+
+        typedef Kokkos::MaxLoc<fp_t, i64> MaxLoc;
+        MaxLoc::value_type maxloc;
+
+        dex_parallel_reduce(
+            "PressureConsMaxLoc",
+            FlatLoop<1>(rel_change.extent(0)),
+            KOKKOS_LAMBDA (const int i, MaxLoc::value_type& max_loc) {
+                const fp_t val = rel_change(i);
+                if (val > max_loc.val) {
+                    max_loc.val = val;
+                    max_loc.loc = i;
+                }
+            },
+            MaxLoc(maxloc)
+        );
+        max_change = maxloc.val;
+        i64 max_change_loc = maxloc.loc;
 
         dex_parallel_for(
             "Apply updates",

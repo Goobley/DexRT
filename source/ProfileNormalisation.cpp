@@ -1,6 +1,6 @@
 #include "ProfileNormalisation.hpp"
 
-void compute_profile_normalisation(const State& state, const CascadeState& casc_state) {
+void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi) {
     const auto flatmos = flatten(state.atmos);
     JasUnpack(state, adata, wphi, mr_block_map, incl_quad);
     const auto& profile = state.phi;
@@ -90,18 +90,44 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
         }
     );
     yakl::fence();
-    const auto& wphi_flat = wphi.collapse();
-    const i64 min_loc = yakl::intrinsics::minloc(wphi_flat);
-    const i64 min_k = min_loc % wphi.extent(1);
-    auto wphi_host = wphi.createHostCopy();
-    yakl::fence();
-    std::string output("  Lowest normalisation factors (wphi): ");
-    for (int kr = 0; kr < wphi_host.extent(0); ++kr) {
-        output += fmt::format("{:e}", wphi_host(kr, min_k));
-        if (kr != wphi_host.extent(0) - 1) {
-            output += ", ";
+
+    if (print_worst_wphi) {
+        const auto loop = FlatLoop<2>(wphi.extent(0), wphi.extent(1));
+        typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<i32, i32>> Reducer;
+        typedef Reducer::value_type ReducerType;
+        Fp1d wphi_plane("wphi max err plane", wphi.extent(0));
+
+        ReducerType max_err_loc;
+
+        dex_parallel_reduce(
+            "Compute wphi err",
+            loop,
+            KOKKOS_LAMBDA (const int kr, const int k, ReducerType& rvar) {
+                fp_t err = std::abs(FP(1.0) - wphi(kr, k));
+                if (err > rvar.val) {
+                    rvar.val = err;
+                    rvar.loc = Kokkos::make_pair(kr, k);
+                }
+            },
+            Reducer(max_err_loc)
+        );
+        i32 max_err_k = max_err_loc.loc.second;
+        dex_parallel_for(
+            "Copy wphi plane",
+            FlatLoop<1>(wphi.extent(0)),
+            KOKKOS_LAMBDA (const int kr) {
+                wphi_plane(kr) = wphi(kr, max_err_k);
+            }
+        );
+        yakl::fence();
+        auto wphi_plane_host = wphi_plane.createHostCopy();
+        std::string output = fmt::format("  Highest error normalisation factors (wphi) @ ks = {}: ", max_err_k);
+        for (int kr = 0; kr < wphi_plane_host.extent(0); ++kr) {
+            output += fmt::format("{:e}", wphi_plane_host(kr));
+            if (kr != wphi_plane_host.extent(0) - 1) {
+                output += ", ";
+            }
         }
+        state.println("{}", output);
     }
-    output += "\n";
-    state.println("{}", output);
 }

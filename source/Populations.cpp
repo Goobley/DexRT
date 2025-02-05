@@ -344,11 +344,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
 
         fp_t max_change = yakl::intrinsics::maxval(max_rel_change);
         int max_change_loc = yakl::intrinsics::maxloc(max_rel_change.collapse());
-        auto temp_h = state->atmos.temperature.createHostCopy();
 
         yakl::fence();
         int max_change_level = max_change_loc % new_pops.extent(1);
         max_change_loc /= new_pops.extent(1);
+        auto temp_h = Fp1d("temp_host_readback", &state->atmos.temperature(max_change_loc), 1).createHostCopy();
         state->println(
             "     Max Change (ele: {}, Z={}): {} (@ l={}, ks={}) [T={}]",
             ia,
@@ -356,7 +356,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             max_change,
             max_change_level,
             max_change_loc,
-            temp_h(max_change_loc)
+            temp_h(0)
         );
         global_max_change = std::max(max_change, global_max_change);
 
