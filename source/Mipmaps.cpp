@@ -47,9 +47,9 @@ void MultiResMipChain::fill_mip0_atomic(
     JasUnpack((*this), emis, opac);
     const auto& block_map = state.mr_block_map.block_map;
     auto bounds = block_map.loop_bounds();
-    parallel_for(
+    dex_parallel_for(
         "Compute eta, chi",
-        SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+        FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int wave) {
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
@@ -106,9 +106,9 @@ void MultiResMipChain::fill_mip0_atomic(
 
     if (vx.initialized()) {
         JasUnpack((*this), vx, vy, vz);
-        parallel_for(
+        dex_parallel_for(
             "Copy vels",
-            SimpleBounds<2>(bounds),
+            FlatLoop<2>(bounds),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
                 IndexGen<BLOCK_SIZE> idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
@@ -172,9 +172,9 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
     mippable_entries = 0;
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "Set active blocks in mr_block_map",
-        SimpleBounds<1>(block_map.loop_bounds().dim(0)),
+        FlatLoop<1>(block_map.loop_bounds().dim(0)),
         YAKL_LAMBDA (i64 tile_idx) {
             MRIdxGen idx_gen(mr_block_map);
             Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
@@ -190,9 +190,9 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
         auto bounds = block_map.loop_bounds(vox_size);
 
         if (state.config.mode != DexrtMode::GivenFs) {
-            parallel_for(
+            dex_parallel_for(
                 "Compute vel mip",
-                SimpleBounds<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+                FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
                 YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
                     MRIdxGen idx_gen(mr_block_map);
                     const i32 vox_size = (1 << (level_m_1 + 1));
@@ -231,9 +231,9 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
             );
         }
 
-        parallel_for(
+        dex_parallel_for(
             "Compute mip n (wave batch)",
-            SimpleBounds<3>(
+            FlatLoop<3>(
                 bounds.dim(0),
                 bounds.dim(1),
                 wave_batch
@@ -347,9 +347,9 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
             }
         }
 
-        parallel_for(
+        dex_parallel_for(
             "Update mippable array",
-            SimpleBounds<1>(block_map.loop_bounds().dim(0)),
+            FlatLoop<1>(block_map.loop_bounds().dim(0)),
             YAKL_LAMBDA (i64 tile_idx) {
                 MRIdxGen idx_gen(mr_block_map);
                 Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);

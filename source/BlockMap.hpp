@@ -90,9 +90,9 @@ struct BlockMap {
             num_active_tiles = num_x_tiles * num_z_tiles;
         } else {
             auto& temperature = atmos.temperature;
-            parallel_for(
+            dex_parallel_for(
                 "Compute active cells",
-                SimpleBounds<2>(num_z_tiles, num_x_tiles),
+                FlatLoop<2>(num_z_tiles, num_x_tiles),
                 YAKL_LAMBDA (int zt, int xt) {
                     active(zt, xt) = false;
                     for (int z = zt * BLOCK_SIZE; z < (zt + 1) * BLOCK_SIZE; ++z) {
@@ -181,8 +181,8 @@ struct BlockMap {
         return i64(num_active_tiles) * i64(square(BLOCK_SIZE) / square(mip_px_size));
     }
 
-    SimpleBounds<2> loop_bounds(i32 mip_px_size=1) const {
-        return SimpleBounds<2>(
+    FlatLoop<2> loop_bounds(i32 mip_px_size=1) const {
+        return FlatLoop<2>(
             num_active_tiles,
             square(BLOCK_SIZE) / square(mip_px_size)
         );
@@ -258,9 +258,9 @@ struct MultiLevelLookup {
     template <typename T>
     void pack_entries(const yakl::Array<T, 1, memDevice>& single_entries) const {
         JasUnpack((*this), entries);
-        parallel_for(
+        dex_parallel_for(
             "Pack T entries into u64",
-            SimpleBounds<1>(entries.extent(0)),
+            FlatLoop<1>(entries.extent(0)),
             YAKL_LAMBDA (int block_idx) {
                 u64 block = 0;
                 const int max_entry = std::min(

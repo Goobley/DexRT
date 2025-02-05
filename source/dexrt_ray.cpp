@@ -246,8 +246,8 @@ DexOutput load_dex_output(const DexrtConfig& config, const Atmosphere& atmos) {
         // currently active is always written dense -- but we reconstruct it from the block_map here anyway
         auto active = reify_active_c0(block_map);
         result.active = decltype(result.active)("active", active.extent(0), active.extent(1));
-        parallel_for(
-            SimpleBounds<2>(active.extent(0), active.extent(1)),
+        dex_parallel_for(
+            FlatLoop<2>(active.extent(0), active.extent(1)),
             YAKL_LAMBDA (int i, int j) {
                 result.active(i, j) = active(i, j);
             }
@@ -533,9 +533,9 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
     auto flat_active = active.collapse();
 
     for (int wave = 0; wave < ray_set.wavelength.extent(0); ++wave) {
-        parallel_for(
+        dex_parallel_for(
             "Compute eta, chi",
-            SimpleBounds<1>(flatmos.temperature.extent(0)),
+            FlatLoop<1>(flatmos.temperature.extent(0)),
             YAKL_LAMBDA (i64 k) {
                 if (!flat_active(k)) {
                     flat_eta(k) = FP(0.0);
@@ -591,9 +591,9 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                 ray_set.start_coord.extent(0)
             );
             i64 num_rays = ray_set.start_coord.extent(0);
-            parallel_for(
+            dex_parallel_for(
                 "Compute max steps",
-                SimpleBounds<1>(num_rays),
+                FlatLoop<1>(num_rays),
                 YAKL_LAMBDA (int ray_idx) {
                     vec2 start_pos;
                     start_pos(0) = ray_set.start_coord(ray_idx, 0);
@@ -709,9 +709,9 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
         const bool output_cfn = config.output_cfn;
         const bool output_eta_chi = config.output_eta_chi;
 
-        parallel_for(
+        dex_parallel_for(
             "Trace Rays (front-to-back)",
-            SimpleBounds<1>(ray_set.start_coord.extent(0)),
+            FlatLoop<1>(ray_set.start_coord.extent(0)),
             YAKL_LAMBDA (int ray_idx) {
                 vec2 start_pos;
                 start_pos(0) = ray_set.start_coord(ray_idx, 0);

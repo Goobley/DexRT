@@ -328,9 +328,9 @@ struct VoigtProfile {
         // Man, C++ makes this a pain sometimes... unless I'm just being an idiot.
         using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
         if constexpr (mem_space == yakl::memDevice) {
-            parallel_for(
+            dex_parallel_for(
                 "compute voigt",
-                SimpleBounds<2>(a_range.n, v_range.n),
+                FlatLoop<2>(a_range.n, v_range.n),
                 YAKL_LAMBDA (int ia, int iv) {
                     const auto sample = voigt_sample(ia, iv);
                     mut_samples(ia, iv) = result_t::value(sample);

@@ -470,9 +470,9 @@ inline void parallax_fix_inner_merge(
     // TODO(cmo): Pre-allocate these somewhere.
     Fp1d I_temp = dev_casc_state.cascade_I.createDeviceObject();
     Fp1d tau_temp = dev_casc_state.cascade_tau.createDeviceObject();
-    parallel_for(
+    dex_parallel_for(
         "RC Separate Merge Loop",
-        SimpleBounds<4>(
+        FlatLoop<4>(
             spatial_bounds,
             ray_subset.num_flat_dirs / num_rays_per_texel,
             wave_batch,
@@ -577,9 +577,9 @@ inline void parallax_fix_inner_merge(
     );
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "RC Post-Merge Copy",
-        SimpleBounds<4>(
+        FlatLoop<4>(
             spatial_bounds,
             ray_subset.num_flat_dirs / num_rays_per_texel,
             wave_batch,
@@ -771,9 +771,9 @@ void cascade_i_25d(
     );
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());
-    parallel_for(
+    dex_parallel_for(
         "RC Loop",
-        SimpleBounds<4>(
+        FlatLoop<4>(
             spatial_bounds,
             ray_subset.num_flat_dirs / num_rays_per_texel,
             wave_batch,

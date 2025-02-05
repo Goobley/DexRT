@@ -46,43 +46,6 @@ struct Coord2 {
     }
 };
 
-template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, bool DexFlatLoop=true, int N, class Lambda>
-inline void parallel_for(
-    const std::string& name,
-    const FlatLoop<N>& loop,
-    const Lambda& closure
-) {
-    dex_parallel_for<ExecutionSpace, DexFlatLoop>(
-        name,
-        loop,
-        closure
-    );
-}
-template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, bool DexFlatLoop=true, class Lambda>
-inline void parallel_for(
-    const std::string& name,
-    int loop,
-    const Lambda& closure
-) {
-    dex_parallel_for<ExecutionSpace, DexFlatLoop>(
-        name,
-        FlatLoop<1>(loop),
-        closure
-    );
-}
-template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, bool DexFlatLoop=true, int N, class Lambda>
-inline void parallel_for(
-    const FlatLoop<N>& loop,
-    const Lambda& closure
-) {
-    dex_parallel_for<ExecutionSpace, DexFlatLoop>(
-        loop,
-        closure
-    );
-}
-template <int N>
-using SimpleBounds = FlatLoop<N>;
-
 using yakl::Dims;
 struct State;
 

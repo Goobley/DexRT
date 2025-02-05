@@ -28,9 +28,9 @@ inline fp_t simple_conserve_pressure(State* state) {
         Fp1d nh_tot_correction("nhtot_corr", flatmos.nh_tot.extent(0));
         Fp1d nh_tot_ratio("nhtot_ratio", flatmos.nh_tot.extent(0));
         Fp1d rel_change("nhtot_rel_change", flatmos.nh_tot.extent(0));
-        parallel_for(
+        dex_parallel_for(
             "Compute correction",
-            SimpleBounds<1>(flatmos.nh_tot.extent(0)),
+            FlatLoop<1>(flatmos.nh_tot.extent(0)),
             YAKL_LAMBDA (i64 k) {
                 const fp_t N = total_abund * flatmos.nh_tot(k) + flatmos.ne(k);
                 const fp_t N_error = flatmos.pressure(k) / (k_B * flatmos.temperature(k)) - N;
@@ -53,9 +53,9 @@ inline fp_t simple_conserve_pressure(State* state) {
         i64 max_change_loc = yakl::intrinsics::maxloc(rel_change);
         yakl::fence();
 
-        parallel_for(
+        dex_parallel_for(
             "Apply updates",
-            SimpleBounds<1>(flatmos.nh_tot.extent(0)),
+            FlatLoop<1>(flatmos.nh_tot.extent(0)),
             YAKL_LAMBDA (i64 k) {
                 flatmos.ne(k) += nh_tot_correction(k) * h_pops(h_pops.extent(0)-1, k) / flatmos.nh_tot(k);
                 flatmos.nh_tot(k) *= nh_tot_ratio(k);
@@ -63,9 +63,9 @@ inline fp_t simple_conserve_pressure(State* state) {
         );
         yakl::fence();
         const auto& pops = state->pops;
-        parallel_for(
+        dex_parallel_for(
             "Rescale pops",
-            SimpleBounds<2>(pops.extent(0), pops.extent(1)),
+            FlatLoop<2>(pops.extent(0), pops.extent(1)),
             YAKL_LAMBDA (int i, i64 k) {
                 pops(i, k) *= nh_tot_ratio(k);
             }

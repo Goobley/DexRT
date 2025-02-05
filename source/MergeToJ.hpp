@@ -30,9 +30,9 @@ inline FpConst2d merge_c0_to_J(
     DeviceProbesToCompute probes_to_compute = casc_state.probes_to_compute.bind(0);
 
     // For a dense J, this is effectively filling in the flattened array
-    parallel_for(
+    dex_parallel_for(
         "final_cascade_to_J",
-        SimpleBounds<4>(
+        FlatLoop<4>(
             probes_to_compute.num_active_probes(),
             c0_dims.num_flat_dirs,
             wave_batch,

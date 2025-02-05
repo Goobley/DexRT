@@ -43,9 +43,9 @@ YAKL_INLINE void add_to_gamma(const GammaAccumState& args) {
 
 template <typename T>
 inline void fixup_gamma(const yakl::Array<T, 3, yakl::memDevice>& Gamma) {
-    parallel_for(
+    dex_parallel_for(
         "Gamma fixup",
-        SimpleBounds<1>(Gamma.extent(2)),
+        FlatLoop<1>(Gamma.extent(2)),
         YAKL_LAMBDA (i64 k) {
             for (int i = 0; i < Gamma.extent(1); ++i) {
                 T diag = FP(0.0);

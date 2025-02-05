@@ -27,9 +27,9 @@ PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryTyp
     Fp2d I("pw_bc", wavelength.extent(0), mu_dim);
     result.I = I;
 
-    parallel_for(
+    dex_parallel_for(
         "Promweaver BC Interp",
-        SimpleBounds<2>(wavelength.extent(0), mu_dim),
+        FlatLoop<2>(wavelength.extent(0), mu_dim),
         YAKL_LAMBDA (int la, int mu) {
             fp_t wavelength_sought = wavelength(la);
             // NOTE(cmo): Corresponding fractional index in loaded data

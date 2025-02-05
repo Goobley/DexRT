@@ -65,9 +65,9 @@ struct DirectionalEmisOpacInterp {
         yakl::fence();
 
         auto block_bounds = block_map.loop_bounds();
-        parallel_for(
+        dex_parallel_for(
             "Emis/Opac Samples",
-            SimpleBounds<4>(
+            FlatLoop<4>(
                 block_bounds.dim(0),
                 block_bounds.dim(1),
                 emis_opac_vel.extent(1),

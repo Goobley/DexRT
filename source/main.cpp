@@ -178,16 +178,16 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     Fp3d emis("eta", z_dim, x_dim, wave_dim);
     Fp3d opac("chi", z_dim, x_dim, wave_dim);
     yakl::fence();
-    parallel_for(
+    dex_parallel_for(
         "Convert f32->f64",
-        SimpleBounds<3>(z_dim, x_dim, wave_dim),
+        FlatLoop<3>(z_dim, x_dim, wave_dim),
         YAKL_LAMBDA (int z, int x, int la) {
             emis(z, x, la) = etad(z, x, la);
         }
     );
-    parallel_for(
+    dex_parallel_for(
         "Convert f32->f64",
-        SimpleBounds<3>(z_dim, x_dim, wave_dim),
+        FlatLoop<3>(z_dim, x_dim, wave_dim),
         YAKL_LAMBDA (int z, int x, int la) {
             opac(z, x, la) = chid(z, x, la);
         }
@@ -372,9 +372,9 @@ void load_initial_pops(State* st, const std::string& initial_pops_path) {
 
         JasUnpack(state, mr_block_map, pops);
         auto bounds = mr_block_map.block_map.loop_bounds();
-        parallel_for(
+        dex_parallel_for(
             "Sparsify new pops",
-            SimpleBounds<3>(
+            FlatLoop<3>(
                 num_level,
                 bounds.dim(0),
                 bounds.dim(1)
@@ -417,9 +417,9 @@ void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
 
     const i32 wave_batch_idx = la_start / state.c0_size.wave_batch;
     JasUnpack(state, max_block_mip, mr_block_map);
-    parallel_for(
+    dex_parallel_for(
         "Copy max mip",
-        state.mr_block_map.block_map.loop_bounds().dim(0),
+        FlatLoop<1>(state.mr_block_map.block_map.loop_bounds().dim(0)),
         YAKL_LAMBDA (i64 tile_idx) {
             MRIdxGen idx_gen(mr_block_map);
             Coord2 coord = idx_gen.loop_coord(0, tile_idx, 0);

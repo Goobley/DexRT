@@ -107,8 +107,8 @@ struct NgAccelerator {
         yakl::Array<i32*, 1, yakl::memDevice> ipiv_ptrs("ipiv_ptrs", num_level);
         yakl::Array<i32, 1, yakl::memDevice> info("info", num_level);
 
-        parallel_for(
-            SimpleBounds<1>(num_level),
+        dex_parallel_for(
+            FlatLoop<1>(num_level),
             YAKL_LAMBDA (int l) {
                 aa_ptrs(l) = &aa_d(l, 0, 0);
                 bb_ptrs(l) = &bb_d(l, 0);
@@ -131,9 +131,9 @@ struct NgAccelerator {
         );
         magma_queue_sync(state.magma_queue);
 
-        parallel_for(
+        dex_parallel_for(
             "info check",
-            SimpleBounds<1>(info.extent(0)),
+            FlatLoop<1>(info.extent(0)),
             YAKL_LAMBDA (int k) {
                 if (info(k) != 0) {
                     printf("LINEAR SOLVER PROBLEM k: %d, info: %d (Ng accel)\n", k, info(k));
@@ -145,9 +145,9 @@ struct NgAccelerator {
 #endif
 
         auto pops_hist = pops.createDeviceCopy();
-        parallel_for(
+        dex_parallel_for(
             "Update pops",
-            SimpleBounds<2>(num_level, num_space),
+            FlatLoop<2>(num_level, num_space),
             YAKL_LAMBDA (i32 l, i64 ks) {
                 f64 new_val = (FP(1.0) - bb_d(l, 0) - bb_d(l, 1) - bb_d(l, 2)) * pops_hist(l, 4, ks);
                 new_val += bb_d(l, 0) * pops_hist(l, 3, ks);

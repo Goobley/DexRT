@@ -8,9 +8,9 @@ void compute_lte_pops_flat(
     const auto& temperature = atmos.temperature;
     const auto& ne = atmos.ne;
     const auto& nhtot = atmos.nh_tot;
-    parallel_for(
+    dex_parallel_for(
         "LTE Pops",
-        SimpleBounds<1>(pops.extent(1)),
+        FlatLoop<1>(pops.extent(1)),
         YAKL_LAMBDA (int64_t ks) {
             lte_pops(
                 atom.energy,
@@ -60,18 +60,18 @@ void compute_nh0(const State& state) {
     if (state.have_h) {
         // NOTE(cmo): This could just be a pointer shuffle...
         const auto& pops = state.pops;
-        parallel_for(
+        dex_parallel_for(
             "Copy nh0",
-            SimpleBounds<1>(nh0.extent(0)),
+            FlatLoop<1>(nh0.extent(0)),
             YAKL_LAMBDA (i64 ks) {
                 nh0(ks) = pops(0, ks);
             }
         );
     } else {
         const auto& atmos = state.atmos;
-        parallel_for(
+        dex_parallel_for(
             "Compute nh0 in LTE",
-            SimpleBounds<1>(nh0.extent(0)),
+            FlatLoop<1>(nh0.extent(0)),
             YAKL_LAMBDA (i64 ks) {
                 const fp_t temperature = atmos.temperature(ks);
                 const fp_t ne = atmos.ne(ks);
@@ -111,9 +111,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
 
         const int pops_start = state->adata_host.level_start(ia);
         const int num_level = state->adata_host.num_level(ia);
-        parallel_for(
+        dex_parallel_for(
             "Max Pops",
-            SimpleBounds<1>(pops.extent(1)),
+            FlatLoop<1>(pops.extent(1)),
             YAKL_LAMBDA (int64_t k) {
                 fp_t n_max = FP(0.0);
                 i_elim(k) = 0;
@@ -131,18 +131,18 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         );
         yakl::fence();
 
-        parallel_for(
+        dex_parallel_for(
             "Transpose Gamma",
-            SimpleBounds<3>(Gamma.extent(2), Gamma.extent(1), Gamma.extent(0)),
+            FlatLoop<3>(Gamma.extent(2), Gamma.extent(1), Gamma.extent(0)),
             YAKL_LAMBDA (int k, int i, int j) {
                 GammaT(k, j, i) = Gamma(i, j, k);
             }
         );
         yakl::fence();
 
-        parallel_for(
+        dex_parallel_for(
             "Gamma fixup",
-            SimpleBounds<1>(GammaT.extent(0)),
+            FlatLoop<1>(GammaT.extent(0)),
             YAKL_LAMBDA (i64 k) {
                 for (int i = 0; i < GammaT.extent(1); ++i) {
                     T diag = FP(0.0);
@@ -154,9 +154,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 }
             }
         );
-        parallel_for(
+        dex_parallel_for(
             "Transpose Pops",
-            SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
+            FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
             YAKL_LAMBDA (i64 k, int i) {
                 if (i_elim(k) == i) {
                     if (fractional_pops) {
@@ -169,9 +169,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 }
             }
         );
-        parallel_for(
+        dex_parallel_for(
             "Setup pointers",
-            SimpleBounds<1>(GammaT_ptrs.extent(0)),
+            FlatLoop<1>(GammaT_ptrs.extent(0)),
             YAKL_LAMBDA (i64 k) {
                 GammaT_ptrs(k) = &GammaT(k, 0, 0);
                 new_pops_ptrs(k) = &new_pops(k, 0);
@@ -180,9 +180,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         );
         yakl::fence();
 
-        parallel_for(
+        dex_parallel_for(
             "Conservation eqn",
-            SimpleBounds<3>(GammaT.extent(0), GammaT.extent(1), GammaT.extent(2)),
+            FlatLoop<3>(GammaT.extent(0), GammaT.extent(1), GammaT.extent(2)),
             YAKL_LAMBDA (i64 k, int i, int j) {
                 if (i_elim(k) == i) {
                     GammaT(k, j, i) = FP(1.0);
@@ -240,9 +240,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             if constexpr (iterative_improvement) {
                 for (int refinement = 0; refinement < num_refinement_passes; ++refinement) {
                     // r_i = b_i
-                    parallel_for(
+                    dex_parallel_for(
                         "Copy residual",
-                        SimpleBounds<2>(residuals.extent(0), residuals.extent(1)),
+                        FlatLoop<2>(residuals.extent(0), residuals.extent(1)),
                         YAKL_LAMBDA (i64 ks, i32 i) {
                             if (i == 0) {
                                 residuals_ptrs(ks) = &residuals(ks, 0);
@@ -288,9 +288,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                     magma_queue_sync(state->magma_queue);
 
                     // x += x'
-                    parallel_for(
+                    dex_parallel_for(
                         "Apply residual",
-                        SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
+                        FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
                         YAKL_LAMBDA (i64 ks, i32 i) {
                             new_pops(ks, i) += residuals(ks, i);
                         }
@@ -301,9 +301,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         }
 
         magma_queue_sync(state->magma_queue);
-        parallel_for(
+        dex_parallel_for(
             "info check",
-            SimpleBounds<1>(info.extent(0)),
+            FlatLoop<1>(info.extent(0)),
             YAKL_LAMBDA (int k) {
                 if (info(k) != 0) {
                     printf("LINEAR SOLVER PROBLEM k: %d, info: %d\n", k, info(k));
@@ -312,9 +312,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         );
 
         Fp2d max_rel_change("max rel change", new_pops.extent(0), new_pops.extent(1));
-        parallel_for(
+        dex_parallel_for(
             "Compute max change",
-            SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
+            FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
             YAKL_LAMBDA (int64_t k, int i) {
                 fp_t change = FP(0.0);
                 if (pops(pops_start + i, k) < ignore_change_below_ntot_frac * n_total(k)) {
@@ -330,9 +330,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             }
         );
         yakl::fence();
-        parallel_for(
+        dex_parallel_for(
             "Copy & transpose pops",
-            SimpleBounds<2>(new_pops.extent(1), new_pops.extent(0)),
+            FlatLoop<2>(new_pops.extent(1), new_pops.extent(0)),
             YAKL_LAMBDA (int i, int64_t k) {
                 if (fractional_pops) {
                     pops(pops_start + i, k) = new_pops(k, i) * n_total(k);

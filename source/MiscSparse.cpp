@@ -22,7 +22,7 @@ SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLO
     result.vy = Fp1d("sparse vy", num_active_cells);
     result.vz = Fp1d("sparse vz", num_active_cells);
 
-    parallel_for(
+    dex_parallel_for(
         "Sparsify atmosphere",
         block_map.loop_bounds(),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
@@ -54,7 +54,7 @@ yakl::Array<u8, 2, yakl::memDevice> reify_active_c0(const BlockMap<BLOCK_SIZE>& 
     result = 0;
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "Eval active",
         block_map.loop_bounds(),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
@@ -127,7 +127,7 @@ void rehydrate_page(
     qty_page = FP(0.0);
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "Rehydrate page",
         block_map.loop_bounds(),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
@@ -213,7 +213,7 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
     yakl::Array<u64, 2, yakl::memDevice> prev_active("active c0", state.atmos.num_z, state.atmos.num_x);
     prev_active = 0;
     yakl::fence();
-    parallel_for(
+    dex_parallel_for(
         mr_block_map.block_map.loop_bounds(),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(mr_block_map);
@@ -227,7 +227,7 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
     auto prev_active_h = prev_active.createHostCopy();
     yakl::fence();
     yakl::Array<i32, 2, yakl::memDevice> probes_to_compute_c0("c0 to compute", num_active, 2);
-    parallel_for(
+    dex_parallel_for(
         mr_block_map.block_map.loop_bounds(),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(mr_block_map);
@@ -261,8 +261,8 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
                 val
             );
         };
-        parallel_for(
-            SimpleBounds<2>(prev_active.extent(0), prev_active.extent(1)),
+        dex_parallel_for(
+            FlatLoop<2>(prev_active.extent(0), prev_active.extent(1)),
             YAKL_LAMBDA (int z, int x) {
                 int z_bc = std::max(int((z - 1) / 2), 0);
                 int x_bc = std::max(int((x - 1) / 2), 0);

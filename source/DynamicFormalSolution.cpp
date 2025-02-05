@@ -42,9 +42,9 @@ void dynamic_compute_gamma_atomic(
         wave_batch = std::min(wave_batch, ray_subset.wave_batch);
 
         const auto& wavelength = adata.wavelength;
-        parallel_for(
+        dex_parallel_for(
             "compute Gamma",
-            SimpleBounds<5>(
+            FlatLoop<5>(
                 spatial_bounds.dim(0),
                 spatial_bounds.dim(1),
                 ray_subset.num_flat_dirs,
@@ -239,9 +239,9 @@ void dynamic_compute_gamma_nonatomic(
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
 
-        parallel_for(
+        dex_parallel_for(
             "compute Gamma",
-            SimpleBounds<2>(
+            FlatLoop<2>(
                 spatial_bounds.dim(0),
                 spatial_bounds.dim(1)
             ),

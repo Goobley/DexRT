@@ -75,9 +75,9 @@ inline Atmosphere load_atmos(const std::string& path) {
     result.vz = Fp2d("vz", z_dim, x_dim);
 
     #define DEX_DEV_COPY(X) auto JasConcat(X, dev) = X.createDeviceCopy()
-    #define DEX_FLOAT_CONVERT(X) parallel_for( \
+    #define DEX_FLOAT_CONVERT(X) dex_parallel_for( \
         "convert", \
-        SimpleBounds<2>(z_dim, x_dim), \
+        FlatLoop<2>(z_dim, x_dim), \
         YAKL_LAMBDA (int z, int x) { \
             result.X(z, x) = JasConcat(X, dev)(z, x); \
         } \
@@ -111,8 +111,8 @@ inline Atmosphere load_atmos(const std::string& path) {
     result.nh0 = FP(0.0);
 
     Fp2d vel2 = result.vz.createDeviceObject();
-    parallel_for(
-        SimpleBounds<2>(z_dim, x_dim),
+    dex_parallel_for(
+        FlatLoop<2>(z_dim, x_dim),
         YAKL_LAMBDA (int z, int x) {
             vel2(z, x) = square(result.vz(z, x)) + square(result.vy(z, x)) + square(result.vx(z, x));
         }

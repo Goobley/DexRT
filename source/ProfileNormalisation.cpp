@@ -12,9 +12,9 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
     CascadeStorage dims = state.c0_size;
     CascadeRays ray_set = cascade_compute_size<RcMode>(dims, 0);
     // NOTE(cmo): This is pretty thrown-together
-    parallel_for(
+    dex_parallel_for(
         "Compute wphi",
-        SimpleBounds<3>(wphi.extent(0), bounds.dim(0), bounds.dim(1)),
+        FlatLoop<3>(wphi.extent(0), bounds.dim(0), bounds.dim(1)),
         YAKL_LAMBDA (int kr, i64 tile_idx, i32 block_idx) {
             using namespace ConstantsFP;
             fp_t entry = FP(0.0);

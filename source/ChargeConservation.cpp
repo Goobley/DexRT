@@ -41,18 +41,18 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     yakl::Array<T, 2, yakl::memDevice> new_pops("new_pops", GammaT.extent(0), num_level);
     yakl::fence();
 
-    parallel_for(
+    dex_parallel_for(
         "Transpose Gamma",
-        SimpleBounds<3>(GammaH_flat.extent(2), GammaH_flat.extent(1), GammaH_flat.extent(0)),
+        FlatLoop<3>(GammaH_flat.extent(2), GammaH_flat.extent(1), GammaH_flat.extent(0)),
         YAKL_LAMBDA (i64 k, int i, int j) {
             GammaT(k, j, i) = GammaH_flat(i, j, k);
         }
     );
     yakl::fence();
     // NOTE(cmo): Ensure the fixup is done in double precision for the full rate matrix
-    parallel_for(
+    dex_parallel_for(
         "Gamma fixup",
-        SimpleBounds<1>(GammaT.extent(0)),
+        FlatLoop<1>(GammaT.extent(0)),
         YAKL_LAMBDA (i64 k) {
             for (int i = 0; i < GammaT.extent(1); ++i) {
                 T diag = FP(0.0);
@@ -64,9 +64,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
             }
         }
     );
-    parallel_for(
+    dex_parallel_for(
         "Tranpose Pops",
-        SimpleBounds<2>(new_pops.extent(0), new_pops.extent(1)),
+        FlatLoop<2>(new_pops.extent(0), new_pops.extent(1)),
         YAKL_LAMBDA (i64 k, int i) {
             new_pops(k, i) = pops(i, k);
         }
@@ -86,9 +86,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 
     // NOTE(cmo): Perturb ne, compute C, compute dC/dne, restore ne
     constexpr fp_t pert_size = FP(1e-2);
-    parallel_for(
+    dex_parallel_for(
         "Perturb ne",
-        SimpleBounds<1>(ne.extent(0)),
+        FlatLoop<1>(ne.extent(0)),
         YAKL_LAMBDA (i64 ks) {
             ne_pert(ks) = ne(ks) * pert_size;
             ne(ks) += ne_pert(ks);
@@ -98,18 +98,18 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     compute_collisions_to_gamma(state);
     fixup_gamma(GammaH_flat);
     yakl::fence();
-    parallel_for(
+    dex_parallel_for(
         "Compute dC",
-        SimpleBounds<3>(C.extent(0), C.extent(1), C.extent(2)),
+        FlatLoop<3>(C.extent(0), C.extent(1), C.extent(2)),
         YAKL_LAMBDA (int i, int j, i64 ks) {
             C(i, j, ks) = (GammaH(i, j, ks) - C(i, j, ks)) / ne_pert(ks);
         }
     );
     // NOTE(cmo): Rename for clarity
     const auto& dC = C;
-    parallel_for(
+    dex_parallel_for(
         "Restore n_e",
-        SimpleBounds<1>(ne.extent(0)),
+        FlatLoop<1>(ne.extent(0)),
         YAKL_LAMBDA (i64 ks) {
             ne(ks) = ne_copy(ks);
         }
@@ -117,9 +117,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     yakl::fence();
 
     // NOTE(cmo): Compute LHS, based on Lightspinner impl
-    parallel_for(
+    dex_parallel_for(
         "Compute F",
-        SimpleBounds<2>(F.extent(0), F.extent(1)),
+        FlatLoop<2>(F.extent(0), F.extent(1)),
         YAKL_LAMBDA (i64 k, int i) {
             if (i < (num_level - 1)) {
                 T Fi = FP(0.0);
@@ -154,9 +154,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
         }
     );
     // NOTE(cmo): Compute matrix system -- very messy.
-    parallel_for(
+    dex_parallel_for(
         "Compute dF",
-        SimpleBounds<3>(dF.extent(0), dF.extent(1), dF.extent(2)),
+        FlatLoop<3>(dF.extent(0), dF.extent(1), dF.extent(2)),
         YAKL_LAMBDA (i64 k, int i, int j) {
             if (i < num_level && j < num_level) {
                 dF(k, i, j) = -GammaT(k, i, j);
@@ -219,9 +219,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     ipivs = FP(0.0);
     info = 0;
 
-    parallel_for(
+    dex_parallel_for(
         "Setup pointers",
-        SimpleBounds<1>(dF_ptrs.extent(0)),
+        FlatLoop<1>(dF_ptrs.extent(0)),
         YAKL_LAMBDA (i64 k) {
             F_ptrs(k) = &F(k, 0);
             dF_ptrs(k) = &dF(k, 0, 0);
@@ -278,9 +278,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
         if constexpr (iterative_improvement) {
             for (int refinement = 0; refinement < num_refinement_passes; ++refinement) {
                 // r_i = b_i
-                parallel_for(
+                dex_parallel_for(
                     "Copy residual",
-                    SimpleBounds<2>(residuals.extent(0), residuals.extent(1)),
+                    FlatLoop<2>(residuals.extent(0), residuals.extent(1)),
                     YAKL_LAMBDA (i64 ks, i32 i) {
                         if (i == 0) {
                             residuals_ptrs(ks) = &residuals(ks, 0);
@@ -326,9 +326,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                 magma_queue_sync(state->magma_queue);
 
                 // x += x'
-                parallel_for(
+                dex_parallel_for(
                     "Apply residual",
-                    SimpleBounds<2>(F.extent(0), F.extent(1)),
+                    FlatLoop<2>(F.extent(0), F.extent(1)),
                     YAKL_LAMBDA (i64 ks, i32 i) {
                         F(ks, i) += residuals(ks, i);
                     }
@@ -340,9 +340,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 
     magma_queue_sync(state->magma_queue);
     // NOTE(cmo): F is now the absolute update to apply to Hpops and ne
-    parallel_for(
+    dex_parallel_for(
         "info check",
-        SimpleBounds<1>(info.extent(0)),
+        FlatLoop<1>(info.extent(0)),
         YAKL_LAMBDA (int k) {
             if (info(k) != 0) {
                 printf("LINEAR SOLVER PROBLEM (charge conservation) ks: %d, info: %d\n", k, info(k));
@@ -355,9 +355,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     max_rel_change = FP(0.0);
     nr_step_size = FP(0.0);
     yakl::fence();
-    parallel_for(
+    dex_parallel_for(
         "Update & transpose pops",
-        SimpleBounds<1>(F.extent(0)),
+        FlatLoop<1>(F.extent(0)),
         YAKL_LAMBDA (int64_t k) {
             fp_t step_size = FP(1.0);
             constexpr bool clamp_step_size = true;
@@ -394,9 +394,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 
     if (conserve_pressure) {
         Fp1d nh_tot_ratio("nh_tot_ratio", nh_tot.extent(0));
-        parallel_for(
+        dex_parallel_for(
             "Update nh_tot (pressure)",
-            SimpleBounds<1>(nh_tot_ratio.extent(0)),
+            FlatLoop<1>(nh_tot_ratio.extent(0)),
             YAKL_LAMBDA (i64 k) {
                 fp_t pops_sum = FP(0.0);
                 for (int i = 0; i < num_level; ++i) {
@@ -409,9 +409,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
         yakl::fence();
 
         const auto& full_pops = state->pops;
-        parallel_for(
+        dex_parallel_for(
             "Rescale pops (presure)",
-            SimpleBounds<2>(full_pops.extent(0), full_pops.extent(1)),
+            FlatLoop<2>(full_pops.extent(0), full_pops.extent(1)),
             YAKL_LAMBDA (int i, i64 k) {
                 full_pops(i, k) *= nh_tot_ratio(k);
             }
