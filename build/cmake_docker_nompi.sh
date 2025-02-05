@@ -12,13 +12,13 @@ MAGMA_LIB="-lmagma"
       # -DYAKL_B4B="On"                  \
       # -DYAKL_VERBOSE="On" \
 cmake  \
-      -DYAKL_ARCH="CUDA"              \
+      -DDEX_ARCH="CUDA"              \
       -DYAKL_AUTO_PROFILE="On"         \
-      -DYAKL_CUDA_FLAGS="-O3 --generate-line-info -ftz=true" \
-      -DYAKL_INT64_RESHAPE="On"       \
-      -DDEXRT_CUDA_ARCHITECTURES="86" \
+      -DDEX_CXX_FLAGS="-O3 --generate-line-info -ftz=true" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DMAGMA_INCLUDE_PATH="${MAGMA_INCLUDE_PATH}" \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \
       -DLDLIBS="$(nc-config --libs) -L${MAGMA_LIB_PATH} ${MAGMA_LIB}" \
+      -DKokkos_ROOT="$(pwd)/../kokkos/" \
+      -DCMAKE_PREFIX_PATH="$(pwd)/../kokkos/lib/cmake;$(pwd)/../kokkos-kernels/lib/cmake/" \
       ..

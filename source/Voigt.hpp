@@ -27,8 +27,104 @@
 // template <typename T>
 // using DexComplex = std::complex<T>;
 // #endif
+#define FPT(X) T(FP(X))
+#if 0
 template <typename T>
 using DexComplex = Kokkos::complex<T>;
+#else
+template <typename T>
+struct alignas(2 * sizeof(T)) DexComplex {
+  static_assert(std::is_floating_point_v<T> &&
+                    std::is_same_v<T, std::remove_cv_t<T>>,
+                "DexComplex can only be instantiated for a cv-unqualified "
+                "floating point type");
+
+    DexComplex() noexcept = default;
+    DexComplex(const DexComplex&) noexcept = default;
+    DexComplex& operator=(const DexComplex&) noexcept = default;
+    KOKKOS_FORCEINLINE_FUNCTION constexpr DexComplex(const T& re, const T& im) noexcept : re_(re), im_(im) {}
+    KOKKOS_FORCEINLINE_FUNCTION constexpr T& imag() noexcept {return im_; }
+    KOKKOS_FORCEINLINE_FUNCTION constexpr T& real() noexcept {return re_; }
+    KOKKOS_FORCEINLINE_FUNCTION constexpr T imag() const noexcept {return im_; }
+    KOKKOS_FORCEINLINE_FUNCTION constexpr T real() const noexcept {return re_; }
+
+    private:
+        T re_;
+        T im_;
+};
+
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator*(const DexComplex<T>& x, const DexComplex<T>& y) {
+    return DexComplex(
+        x.real() * y.real() - x.imag() * y.imag(),
+        x.real() * y.imag() + x.imag() * y.real()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator*(const DexComplex<T>& x, const T& y) {
+    return DexComplex(
+        y * x.real(),
+        y * x.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator*(const T& y, const DexComplex<T>& x) {
+    return DexComplex<T>(
+        y * x.real(),
+        y * x.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator/(const DexComplex<T>& x, const T& y) {
+    return DexComplex<T>(x.real() / y, x.imag() / y);
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator/(const DexComplex<T>& x, const DexComplex<T>& y) {
+    using std::abs;
+    T s = abs(x.real()) + abs(y.imag());
+
+    T oos = FPT(1.0) / s;
+
+    const T ars = x.real() * oos;
+    const T ais = x.imag() * oos;
+    const T brs = y.real() * oos;
+    const T bis = y.imag() * oos;
+
+    s = (brs * brs) + (bis * bis);
+    oos = FPT(1.0) / s;
+    DexComplex<T> result(
+        ((ars * brs) + (ais * bis)) * oos,
+        ((ais * brs) - (ars * bis)) * oos
+    );
+    return result;
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator/(const T& x, const DexComplex<T>& y) {
+    return DexComplex<T>(x, FPT(0.0)) / y;
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator+(const DexComplex<T>& x, const DexComplex<T>& y) {
+    return DexComplex<T>(
+        x.real() + y.real(),
+        x.imag() + y.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator+(const T& x, const DexComplex<T>& y) {
+    return DexComplex<T>(
+        x + y.real(),
+        y.imag()
+    );
+}
+template <typename T>
+KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator+(const DexComplex<T>& x, const T& y) {
+    return DexComplex<T>(
+        x.real() + y,
+        x.imag()
+    );
+}
+#endif
+
 
 namespace DexVoigtDetail {
 template <typename T>
@@ -48,7 +144,6 @@ YAKL_INLINE T cexp(const T& x) {
 }
 }
 
-#define FPT(X) T(FP(X))
 template <typename T=fp_t>
 YAKL_INLINE DexComplex<T> humlicek_voigt(T a, T v) {
     using DexVoigtDetail::cexp;

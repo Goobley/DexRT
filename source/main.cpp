@@ -964,6 +964,8 @@ int main(int argc, char** argv) {
                     wave_dist.wait_for_all(state.mpi_state);
                     wave_dist.reset();
                     while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
+                        wave_batch.la_start = 52;
+                        wave_batch.la_end = 56;
                         setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                         bool lambda_iterate = i < initial_lambda_iterations;
                         dynamic_formal_sol_rc(
@@ -974,6 +976,7 @@ int main(int argc, char** argv) {
                             wave_batch.la_end
                         );
                         finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+                        break;
                     }
                     yakl::fence();
                     wave_dist.wait_for_all(state.mpi_state);
@@ -1018,6 +1021,7 @@ int main(int argc, char** argv) {
                     ) {
                         save_snapshot(state, i);
                     }
+                    break;
                 }
                 if (state.config.sparse_calculation && state.config.final_dense_fs) {
                     state.config.sparse_calculation = false;

@@ -900,7 +900,7 @@ void write_output_plane(
 }
 
 
-int main(int argc, const char* argv[]) {
+int main(int argc, char** argv) {
     argparse::ArgumentParser program("DexRT Ray");
     program.add_argument("--config")
         .default_value(std::string("dexrt_ray.yaml"))
@@ -908,13 +908,13 @@ int main(int argc, const char* argv[]) {
         .metavar("FILE");
     program.add_epilog("Single-pass formal solver for post-processing Dex models.");
 
-    program.parse_args(argc, argv);
+    program.parse_known_args(argc, argv);
 
     RayConfig config = parse_ray_config(program.get<std::string>("--config"));
+    Kokkos::initialize(argc, argv);
     yakl::init(
         yakl::InitConfig()
-            .set_pool_initial_mb(config.mem_pool_initial_gb * 1024)
-            .set_pool_grow_mb(config.mem_pool_grow_gb * 1024)
+            .set_pool_size_mb(config.mem_pool_initial_gb * 1024)
     );
     {
         load_wavelength_if_missing(&config);
@@ -996,6 +996,7 @@ int main(int argc, const char* argv[]) {
         }
     }
     yakl::finalize();
+    Kokkos::finalize();
 
     return 0;
 }
