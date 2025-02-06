@@ -22,6 +22,7 @@ SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Kokkos REQUIRED GLOBAL)
+find_package(KokkosKernels)
 if (${DEXRT_USE_MPI})
     find_package(MPI REQUIRED)
 endif()
@@ -57,6 +58,7 @@ list(APPEND DEX_SOURCE_FILES
     "source/Mipmaps.cpp"
     "source/DirectionalEmisOpacInterp.cpp"
     "source/CoreAndVoigtEmisOpac.cpp"
+    "source/NgAcceleration.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"
@@ -112,8 +114,10 @@ target_link_libraries(dexrt argparse)
 target_link_libraries(dexrt git_version)
 target_link_libraries(dexrt Kokkos::kokkos)
 target_link_libraries(dexrt yakl)
+if (KokkosKernels_FOUND)
+    target_link_libraries(dexrt Kokkos::kokkoskernels)
+endif()
 if (${DEXRT_USE_MPI})
-    message(${MPI_CXX_COMPILER})
     target_include_directories(dexrt PRIVATE ${MPI_CXX_INCLUDE_PATH})
     target_link_libraries(dexrt MPI::MPI_CXX)
     target_compile_definitions(dexrt PUBLIC HAVE_MPI)
@@ -140,6 +144,9 @@ target_link_libraries(dexrt_ray argparse)
 target_link_libraries(dexrt_ray git_version)
 target_link_libraries(dexrt_ray Kokkos::kokkos)
 target_link_libraries(dexrt_ray yakl)
+if (KokkosKernels_FOUND)
+    target_link_libraries(dexrt_ray Kokkos::kokkoskernels)
+endif()
 set_target_properties(dexrt_ray PROPERTIES
     COMPILE_FLAGS "${YAKL_DEFS} ${DEX_CXX_FLAGS}"
     LINK_FLAGS "${LDFLAGS}"

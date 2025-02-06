@@ -37,6 +37,22 @@ typedef yakl::SArray<fp_t, 2, 2, 2> mat2x2;
 typedef yakl::SArray<int, 2, 2, 2> imat2x2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
 
+typedef Kokkos::LayoutRight Layout;
+template <class T, typename... Args>
+using KView = Kokkos::View<T, Layout, Args...>;
+
+typedef Kokkos::DefaultExecutionSpace::memory_space DefaultMemSpace;
+typedef Kokkos::HostSpace HostSpace;
+constexpr bool HostDevSameSpace = std::is_same_v<DefaultMemSpace, HostSpace>;
+
+typedef Kokkos::TeamPolicy<Kokkos::DefaultExecutionSpace> TeamPolicy;
+typedef TeamPolicy::member_type KTeam;
+using Kokkos::DefaultExecutionSpace;
+typedef DefaultExecutionSpace::scratch_memory_space ScratchSpace;
+
+template <class T>
+using ScratchView = KView<T, ScratchSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+
 struct Coord2 {
     i32 x;
     i32 z;

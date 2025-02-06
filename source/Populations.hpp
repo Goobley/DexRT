@@ -866,7 +866,7 @@ void lte_pops(
     fp_t ne,
     fp_t ntot,
     const yakl::Array<T, 2, mem_space>& pops,
-    int64_t x
+    int64_t ks
 ) {
     using namespace ConstantsF64;
     // NOTE(cmo): Rearranged for fp_t stability
@@ -889,15 +889,15 @@ void lte_pops(
             pop_i /= saha_term;
         }
         sum += pop_i;
-        pops(i, x) = pop_i;
+        pops(i, ks) = pop_i;
     }
     const FPT pop_0 = ntot / sum;
-    pops(0, x) = pop_0;
+    pops(0, ks) = pop_0;
 
     for (int i = 1; i < n_level; ++i) {
-        FPT pop_i = pops(i, x) * pop_0;
+        FPT pop_i = pops(i, ks) * pop_0;
         pop_i = std::max(pop_i, std::numeric_limits<FPT>::min());
-        pops(i, x) = pop_i;
+        pops(i, ks) = pop_i;
     }
 }
 

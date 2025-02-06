@@ -297,7 +297,7 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
             // ballot across threads, do a popcount, and increment from one
             // thread.
             if (do_increment) {
-                yakl::atomicAdd(mippable_entries(tile_idx), 1);
+                Kokkos::atomic_add(&mippable_entries(tile_idx), 1);
             }
 
             if (wave == 0) {

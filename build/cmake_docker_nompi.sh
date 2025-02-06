@@ -21,4 +21,5 @@ cmake  \
       -DLDLIBS="$(nc-config --libs) -L${MAGMA_LIB_PATH} ${MAGMA_LIB}" \
       -DKokkos_ROOT="$(pwd)/../kokkos/" \
       -DCMAKE_PREFIX_PATH="$(pwd)/../kokkos/lib/cmake;$(pwd)/../kokkos-kernels/lib/cmake/" \
+      -DCMAKE_BUILD_TYPE="Release" \
       ..

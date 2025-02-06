@@ -128,10 +128,11 @@ yakl::SArray<fp_t, 1, NumIncl> get_incl_weights() {
     return incl_weights;
 }
 
-#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
-#define DEXRT_USE_MAGMA
-#include <magma_v2.h>
-#include <magmablas.h>
+// NOTE(cmo): The kokkos-kernels approach is faster than magma. If you _really_ want MAGMA, you should define it in your build script
+// #if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
+#ifdef DEXRT_USE_MAGMA
+    #include <magma_v2.h>
+    #include <magmablas.h>
 #endif
 
 #else

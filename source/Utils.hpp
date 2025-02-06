@@ -43,6 +43,48 @@ YAKL_INLINE constexpr auto cube(T t) -> decltype(t * t * t) {
     return t * t * t;
 }
 
+template <typename View>
+struct ViewRank {
+    constexpr static int rank = 0;
+};
+
+template <typename T, typename... P>
+struct ViewRank<Kokkos::View<T, P...>>{
+    constexpr static int rank = Kokkos::View<T, P...>::rank;
+};
+
+template <typename T, int Rank, int... P>
+struct ViewRank<yakl::Array<T, Rank, P...>>{
+    constexpr static int rank = Rank;
+};
+
+template <class ViewType>
+void create_device_copy(const ViewType& arr) {
+}
+
+template <typename T, typename... P>
+auto create_device_copy(const KView<T, P...>& arr) -> KView<T, DefaultMemSpace> {
+    typedef KView<T, P...> ViewType;
+    KView<typename ViewType::non_const_data_type, DefaultMemSpace> result(arr.label(), arr.layout());
+    // NOTE(cmo): Directly accessible or layout is the same... no intermediate needed
+    if constexpr (
+        Kokkos::SpaceAccessibility<typename ViewType::memory_space, DefaultMemSpace>::accessible || std::is_same_v<typename ViewType::array_layout, typename decltype(result)::array_layout>
+    ) {
+        Kokkos::deep_copy(result, arr);
+    // NOTE(cmo): Need intermediate
+    } else {
+        auto host_temp = Kokkos::create_mirror_view(result);
+        Kokkos::deep_copy(host_temp, arr);
+        Kokkos::deep_copy(result, host_temp);
+    }
+    return result;
+}
+
+template <typename T, int Rank, int MemSpace, int Style>
+auto create_device_copy(const yakl::Array<T, Rank, MemSpace, Style>& arr) -> yakl::Array<T, Rank, yakl::memDevice, Style> {
+    return arr.createDeviceCopy();
+}
+
 /** Upper bound on YAKL arrays, returns index rather than iterator.
  *
 */
