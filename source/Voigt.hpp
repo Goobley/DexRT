@@ -61,9 +61,11 @@ KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator/(const DexComplex<T>& x, cons
 }
 template <typename T>
 KOKKOS_FORCEINLINE_FUNCTION DexComplex<T> operator/(const DexComplex<T>& x, const DexComplex<T>& y) {
+    // Kokkos::complex<T> result = Kokkos::complex<T>(x.real(), x.imag()) / Kokkos::complex<T>(y.real(), y.imag());
+    // return DexComplex<T>(result.real(), result.imag());
     // Based on thrust implementation (Apache-2)
     using std::abs;
-    T s = abs(x.real()) + abs(y.imag());
+    T s = abs(y.real()) + abs(y.imag());
 
     T oos = FPT(1.0) / s;
 

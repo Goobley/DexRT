@@ -8,16 +8,14 @@ MAGMA_LIB="-lmagma"
 
 ./cmake_clean.sh
 
-cmake -DCMAKE_CXX_COMPILER=g++     \
-      -DCMAKE_CUDA_COMPILER=nvcc   \
-      -DCMAKE_C_COMPILER=gcc        \
-      -DCMAKE_Fortran_COMPILER=gfortran \
-      -DYAKL_DEBUG="On"               \
-      -DYAKL_ARCH="CUDA"              \
-      -DYAKL_CUDA_FLAGS="-O0 -g -G" \
+cmake -DDEX_ARCH="CUDA"              \
+      -DDEX_CXX_FLAGS="-O0 -g -G" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DMPI_INCLUDE_PATH="${MPI_INCLUDE_PATH}" \
       -DMAGMA_INCLUDE_PATH="${MAGMA_INCLUDE_PATH}" \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \
       -DLDFLAGS="$(nc-config --libs) -L${MAGMA_LIB_PATH} ${MAGMA_LIB}" \
+      -DKokkos_ROOT="$(pwd)/../kokkos-debug/" \
+      -DCMAKE_PREFIX_PATH="$(pwd)/../../kokkos-debug/lib/cmake/;$(pwd)/../../kokkos-kernels/lib/cmake" \
+      -DCMAKE_BUILD_TYPE="Debug" \
       ..

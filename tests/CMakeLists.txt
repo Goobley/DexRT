@@ -1,26 +1,44 @@
 cmake_minimum_required(VERSION 3.18)
-project(DexRTTests CXX)
+if ("${DEX_ARCH}" STREQUAL "CUDA")
+    project(DexRTTests LANGUAGES CXX CUDA)
+else ()
+    project(DexRTTests LANGUAGES CXX)
+endif()
 enable_testing()
 
 add_subdirectory(../fmt ./fmt)
 add_subdirectory(../yaml-cpp ./yaml-cpp)
 
+find_package(Kokkos REQUIRED GLOBAL)
+find_package(KokkosKernels REQUIRED)
+add_library(yakl INTERFACE)
 get_filename_component(YAKL_PATH "../YAKL" ABSOLUTE)
-add_subdirectory(${YAKL_PATH} ./YAKL)
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
-    enable_language(CUDA)
-    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES 84)
-    endif()
+target_include_directories(yakl INTERFACE ${YAKL_PATH}/src ${YAKL_PATH}/external ${YAKL_PATH}/src/extensions)
+set(YAKL_DEFS "")
+if (${YAKL_HAVE_MPI} OR ${DEXRT_USE_MPI})
+    set(YAKL_DEFS "${YAKL_DEFS} -DHAVE_MPI")
 endif()
-include_directories(${YAKL_PATH})
+if (${YAKL_AUTO_PROFILE})
+    set(YAKL_DEFS "${YAKL_DEFS} -DYAKL_AUTO_PROFILE")
+endif()
+if (${YAKL_PROFILE})
+    set(YAKL_DEFS "${YAKL_DEFS} -DYAKL_PROFILE")
+endif()
+if (${YAKL_AUTO_FENCE})
+    set(YAKL_DEFS "${YAKL_DEFS} -DYAKL_AUTO_FENCE")
+endif()
 
 list(APPEND DEX_SOURCE_FILES
     "../source/StaticFormalSolution.cpp"
     "../source/DynamicFormalSolution.cpp"
+    "../source/MiscSparse.cpp"
+    "../source/Mipmaps.cpp"
+    "../source/CoreAndVoigtEmisOpac.cpp"
+    "../source/DirectionalEmisOpacInterp.cpp"
 )
 
 list(APPEND UNIT_TEST_SOURCE_FILES
+    catch_amalgamated.cpp
     test_raymarch.cpp
     test_crtaf.cpp
     test_lte.cpp
@@ -28,18 +46,38 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_utils.cpp
     test_emis_opac.cpp
     test_gesv.cpp
-    "../source/MiscSparse.cpp"
 )
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if ("${DEX_ARCH}" STREQUAL "CUDA")
+    set(CMAKE_CXX_STANDARD 20)
+endif()
+
 add_executable(dexrt_test
-    catch_amalgamated.cpp
     ${UNIT_TEST_SOURCE_FILES}
     ${DEX_SOURCE_FILES}
 )
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
-    set_source_files_properties(${UNIT_TEST_SOURCE_FILES} PROPERTIES LANGUAGE CUDA)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CXX_FLAGS}")
+set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
+set_source_files_properties(${UNIT_TEST_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
+set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
+set_source_files_properties(${UNIT_TEST_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
+if ("${DEX_ARCH}" STREQUAL "CUDA")
+    set(DEX_EXTRA_CUDA_STD_FLAG "")
+    if(NOT DEFINED CMAKE_CUDA20_STANDARD_COMPILE_OPTION)
+        set(CMAKE_CUDA20_STANDARD_COMPILE_OPTION "")
+        set(CMAKE_CUDA20_EXTENSION_COMPILE_OPTION "")
+        set(DEX_EXTRA_CUDA_STD_FLAG "-std=c++20")
+    endif()
+    set_target_properties(dexrt_test PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
+
+    set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
+    set_source_files_properties(${UNIT_TEST_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CXX_FLAGS} ${DEX_EXTRA_CUDA_STD_FLAG}")
 endif()
+set_target_properties(
+    dexrt_test PROPERTIES COMPILE_FLAGS ${DEX_CXX_FLAGS}
+)
 target_include_directories(dexrt_test SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
@@ -52,16 +90,9 @@ target_include_directories(dexrt_test PUBLIC ../fmt/include)
 target_link_libraries(dexrt_test "${LDFLAGS}")
 target_link_libraries(dexrt_test fmt::fmt)
 target_link_libraries(dexrt_test yaml-cpp::yaml-cpp)
-set_target_properties(dexrt_test PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS YES
-)
-include(../dex_yakl_utils.cmake)
-yakl_process_target(dexrt_test)
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
-    set_target_properties(dexrt_test PROPERTIES LINKER_LANGUAGE CXX)
-endif()
+target_link_libraries(dexrt_test yakl)
+target_link_libraries(dexrt_test Kokkos::kokkos)
+target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 
 #############################
 

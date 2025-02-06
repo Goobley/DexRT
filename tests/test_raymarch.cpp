@@ -147,7 +147,8 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     end(1) = FP(10.23);
 
     // NOTE(cmo): Test cases from python impl verified by hand
-    auto marcher = RayMarch2d_new(start, end, domain_size).value();
+    auto marcher = RayMarchState2d();
+    marcher.init(start, end, domain_size);
     REQUIRE_THAT( marcher.dt, WithinAbs(FP(0.504451), FP(1e-4)) );
     REQUIRE( marcher.curr_coord(0) == 2 );
     REQUIRE( marcher.curr_coord(1) == 3 );
@@ -189,7 +190,7 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     start(1) = FP(3.085815);
     end(0) = FP(0.5);
     end(1) = FP(4.5);
-    marcher = RayMarch2d_new(start, end, domain_size).value();
+    marcher.init(start, end, domain_size);
     REQUIRE_THAT( marcher.dt, WithinAbs(FP(1.2928661), FP(1e-4)) );
     REQUIRE( marcher.curr_coord(0) == 1 );
     REQUIRE( marcher.curr_coord(1) == 3 );
@@ -207,7 +208,7 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     start(1) = FP(3.1);
     end(0) = FP(4.8);
     end(1) = FP(5.8);
-    marcher = RayMarch2d_new(start, end, domain_size).value();
+    marcher.init(start, end, domain_size);
     REQUIRE_THAT( marcher.dt, WithinAbs(FP(1.27279236), FP(1e-4)) );
     REQUIRE( marcher.curr_coord(0) == 2 );
     REQUIRE( marcher.curr_coord(1) == 3 );
@@ -233,14 +234,14 @@ TEST_CASE( "2D Grid Raymarch", "[raymarch]") {
     start(1) = FP(18.4);
     end(0) = FP(21.0);
     end(1) = FP(2342.0);
-    auto maybe = RayMarch2d_new(start, end, domain_size);
+    auto maybe = RayMarchState2d().init(start, end, domain_size);
     REQUIRE( !maybe );
 
     start(0) = FP(17.0);
     start(1) = FP(8.5);
     end(0) = FP(14.0);
     end(1) = FP(5.5);
-    marcher = RayMarch2d_new(start, end, domain_size).value();
+    marcher.init(start, end, domain_size);
     REQUIRE(marcher.curr_coord(0) == 15);
     REQUIRE(marcher.curr_coord(1) == 7);
     REQUIRE(marcher.p0(0) == FP(16.0));

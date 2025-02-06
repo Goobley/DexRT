@@ -23,10 +23,10 @@ std::complex<f64> expected_voigt[n_a][n_v] = {{0.0 + -0.0009403172785794419i, 0.
 {2.3493313800919454e-05 + -0.000939729943288194i, 3.669549582697624e-05 + -0.0011742507748058557i, 6.518730066597498e-05 + -0.001564483165043988i, 0.0001463564574604445 + -0.0023416628219449375i, 0.0005787141245660081 + -0.0046293964038128495i, 0.03752960638850577 + 0.0i, 0.0005787141245660081 + 0.0046293964038128495i, 0.0001463564574604445 + 0.0023416628219449375i, 6.518730066597498e-05 + 0.001564483165043988i, 3.669549582697624e-05 + 0.0011742507748058557i, 2.3493313800919454e-05 + 0.000939729943288194i}
 };
 
-TEST_CASE("Test Humlicek Impl", "[test_humlicek]") {
+TEST_CASE("Test Voigt Impl", "[test_voigt]") {
     for (int ia = 0; ia < n_a; ++ia) {
         for (int iv = 0; iv < n_v; ++iv) {
-            std::complex<fp_t> computed = humlicek_voigt(fp_t(a[ia]), fp_t(v[iv]));
+            DexComplex<fp_t> computed = humlicek_wei24_voigt(fp_t(a[ia]), fp_t(v[iv]));
 
             REQUIRE_THAT(computed.real(), WithinRel(fp_t(expected_voigt[ia][iv].real()), FP(1e-3)));
             REQUIRE_THAT(computed.imag(), WithinRel(fp_t(expected_voigt[ia][iv].imag()), FP(1e-3)));
@@ -35,7 +35,6 @@ TEST_CASE("Test Humlicek Impl", "[test_humlicek]") {
 }
 
 TEST_CASE("Voigt Interp", "[voigt_interp]") {
-    yakl::init();
     {
         VoigtProfile<fp_t, false, yakl::memDevice, true> prof(
             VoigtProfile<fp_t>::Linspace{FP(0.0), FP(10.0), 11},
@@ -43,8 +42,8 @@ TEST_CASE("Voigt Interp", "[voigt_interp]") {
         );
 
         Fp2d samples("samples", 10, 10);
-        parallel_for(
-            SimpleBounds<1>(1),
+        dex_parallel_for(
+            FlatLoop<1>(1),
             YAKL_LAMBDA (int _) {
                 constexpr f32 as[] = {FP(0.0), FP(1.0), FP(1.5), FP(2.0), FP(3.8)};
                 constexpr f32 vs[] = {FP(0.0), FP(2.0), FP(3.0), FP(4.0), FP(-11.4)};
@@ -85,8 +84,8 @@ TEST_CASE("Voigt Interp", "[voigt_interp]") {
         }
         auto as_local = as.createDeviceCopy();
         auto vs_local = vs.createDeviceCopy();
-        parallel_for(
-            SimpleBounds<2>(n_a, n_v),
+        dex_parallel_for(
+            FlatLoop<2>(n_a, n_v),
             YAKL_LAMBDA (int ia, int iv) {
                 complex_dev(ia, iv) = complex_prof(as_local(ia), vs_local(iv));
             }
@@ -99,18 +98,10 @@ TEST_CASE("Voigt Interp", "[voigt_interp]") {
             }
         }
 
-        // Check the object throws if we try to access from the CPU (in a cuda-like world)
-    #if defined(YAKL_ARCH_CUDA) || defined(YAKL_ARCH_HIP) || defined(YAKL_ARCH_SYCL)
-    #ifdef YAKL_DEBUG
-        REQUIRE_THROWS(prof(FP(1.0), FP(2.0)));
-    #endif
-    #endif
-        // But works if constructed on the CPU
-        VoigtProfile<fp_t, false, yakl::memHost, true> prof_cpu(
+        VoigtProfile<fp_t, false, yakl::memHost, false> prof_cpu(
             VoigtProfile<fp_t>::Linspace{FP(0.0), FP(10.0), 101},
             VoigtProfile<fp_t>::Linspace{FP(-20.0), FP(20.0), 101}
         );
-        REQUIRE_THAT(prof_cpu(FP(1.0), FP(2.0)), WithinRel(humlicek_voigt(FP(1.0), FP(2.0)).real(), FP(1e-2)));
+        REQUIRE_THAT(prof_cpu(FP(1.0), FP(2.0)), WithinRel(humlicek_wei24_voigt(FP(1.0), FP(2.0)).real(), FP(1e-2)));
     }
-    yakl::finalize();
 }

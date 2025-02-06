@@ -8,7 +8,6 @@ TEST_CASE("Interp", "[interp]") {
     constexpr int n = 10;
     namespace Const = ConstantsFP;
     constexpr fp_t two_pi = FP(2.0) * Const::pi;
-    yakl::init();
     {
         yakl::Array<fp_t, 1, yakl::memHost> x("x", n);
         yakl::Array<fp_t, 1, yakl::memHost> y("y", n);
@@ -32,8 +31,8 @@ TEST_CASE("Interp", "[interp]") {
         auto xd = x.createDeviceCopy();
         auto yd = y.createDeviceCopy();
         Fp1d test_samples("test samples", n);
-        parallel_for(
-            SimpleBounds<1>(1),
+        dex_parallel_for(
+            FlatLoop<1>(1),
             YAKL_LAMBDA (int x) {
                 for (int i = 0; i < n; ++i) {
                     test_samples(i) = interp(samples[i], xd, yd);
@@ -52,5 +51,4 @@ TEST_CASE("Interp", "[interp]") {
             REQUIRE_THAT(test_samples_host(i), WithinRel(expected[i], FP(1e-6)));
         }
     }
-    yakl::finalize();
 }

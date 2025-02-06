@@ -8,7 +8,6 @@ using Catch::Matchers::WithinRel;
 using Catch::Matchers::WithinAbs;
 
 TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
-    yakl::init();
     {
         // Points [29, 30, 31] of FAL C from Lightweaver
         AtmosPointParams atmos[3] = {
@@ -84,9 +83,9 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
 
         const auto& adata = atomic_data.device;
         REQUIRE(atomic_data.host.num_level.extent(0) == 1);
-        parallel_for(
+        dex_parallel_for(
             "Compute Emis Opac",
-            SimpleBounds<1>(1),
+            FlatLoop<1>(1),
             YAKL_LAMBDA (int _) {
                 for (int i = 0; i < sizeof(atmos) / sizeof(atmos[0]); ++i) {
                     const auto& a = atmos[i];
@@ -134,5 +133,4 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
         }
 
     }
-    yakl::finalize();
 }

@@ -7,6 +7,22 @@
 using Catch::Matchers::WithinRel;
 using Catch::Matchers::WithinAbs;
 
+class KokkosManager : public Catch::EventListenerBase {
+    public:
+    using Catch::EventListenerBase::EventListenerBase;
+
+    void testRunStarting(const Catch::TestRunInfo&) override {
+        Kokkos::initialize();
+        yakl::init();
+    }
+
+    void testRunEnded(const Catch::TestRunStats&) override {
+        yakl::finalize();
+        Kokkos::finalize();
+    }
+};
+CATCH_REGISTER_LISTENER(KokkosManager);
+
 TEST_CASE( "Test Comp Atom", "[comp_atom]" ) {
     ModelAtom<double> model = parse_crtaf_model<double>("../test_atom.yaml");
     const f64 expected_wavelengths[] = {
@@ -246,7 +262,6 @@ TEST_CASE( "Test Comp Atom", "[comp_atom]" ) {
     };
 
 
-    yakl::init();
     {
         CompAtom<f32, yakl::memHost> comp = to_comp_atom<f32, f64, yakl::memHost>(model);
 
@@ -259,7 +274,7 @@ TEST_CASE( "Test Comp Atom", "[comp_atom]" ) {
         for (int la = 0; la < comp.wavelength.extent(0); ++la) {
             fp_t diff = std::abs(
                 (comp.wavelength(la) - expected_wavelengths[la]) / expected_wavelengths[la]
-            ); 
+            );
             if (diff > max_err) {
                 max_err = diff;
             }
@@ -267,17 +282,13 @@ TEST_CASE( "Test Comp Atom", "[comp_atom]" ) {
 
         REQUIRE(max_err < rel_thresh);
 
-#ifdef YAKL_ARCH_CUDA
         CompAtom<f32, yakl::memDevice> comp_dev = to_comp_atom<f32, f64, yakl::memDevice>(model);
-#endif
     }
-    yakl::finalize();
 }
 
 TEST_CASE( "LTE Pops", "[lte_pops]" ) {
     Catch::StringMaker<float>::precision = 15;
     ModelAtom<double> model = parse_crtaf_model<double>("../test_atom.yaml");
-    yakl::init();
     {
         CompAtom<fp_t> atom = to_comp_atom(model);
         yakl::Array<fp_t, 2, yakl::memDevice> n_star("n_star", model.levels.size(), 1);
@@ -289,9 +300,9 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
         fp_t nh_tot = pressure / (k_B * temperature * (FP(1.0) + X));
         fp_t ne = X * nh_tot;
 
-        parallel_for(
-            SimpleBounds<1>(1),
-            YAKL_LAMBDA (int x) {
+        dex_parallel_for(
+            FlatLoop<1>(1),
+            KOKKOS_LAMBDA (int x) {
                 lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star, 0);
             }
         );
@@ -313,9 +324,9 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
         X = FP(0.1);
         nh_tot = pressure / (k_B * temperature * (FP(1.0) + X));
         ne = X * nh_tot;
-        parallel_for(
-            SimpleBounds<1>(1),
-            YAKL_LAMBDA (int x) {
+        dex_parallel_for(
+            FlatLoop<1>(1),
+            KOKKOS_LAMBDA (int x) {
                 lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star, 0);
             }
         );
@@ -337,9 +348,9 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
         X = FP(0.1);
         nh_tot = pressure / (k_B * temperature * (FP(1.0) + X));
         ne = X * nh_tot * FP(10.0);
-        parallel_for(
-            SimpleBounds<1>(1),
-            YAKL_LAMBDA (int x) {
+        dex_parallel_for(
+            FlatLoop<1>(1),
+            KOKKOS_LAMBDA (int x) {
                 lte_pops(atom.energy, atom.g, atom.stage, temperature, ne, nh_tot, n_star, 0);
             }
         );
@@ -358,5 +369,4 @@ TEST_CASE( "LTE Pops", "[lte_pops]" ) {
 
 
     }
-    yakl::finalize();
 }
