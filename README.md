@@ -41,6 +41,9 @@ Please ask if things are unclear.
 Docker container specifications are available in `.devcontainer`. The most tested option is nvhpc, but the code, via [YAKL](https://github.com/mrnorman/YAKL) should be adaptable to all major GPU vendors.
 Feel free to get in touch if trying to run this on different hardware.
 
+The code now requires [kokkos](https://github.com/kokkos/kokkos) and [kokkos-kernels](https://github.com/kokkos/kokkos-kernels). There are scripts to set up local installations of these in `docker_deps/kokkos*`. This is not currently done automatically during devcontainer construction.
+These libraries can then be provided to the compile setup through the use of `CMAKE_PREFIX_PATH` and `Kokkos_ROOT`. See `build/cmake_docker_nompi.sh` as an example.
+
 🤝 Contributing
 ---------------
 

@@ -18,8 +18,7 @@
 #include "GitVersion.hpp"
 
 struct RayConfig {
-    fp_t mem_pool_initial_gb = FP(2.0);
-    fp_t mem_pool_grow_gb = FP(1.4);
+    fp_t mem_pool_gb = FP(2.0);
     std::string own_path;
     std::string dexrt_config_path;
     std::string ray_output_path;
@@ -113,11 +112,11 @@ RayConfig parse_ray_config(const std::string& path) {
 
     if (file["system"]) {
         auto system = file["system"];
-        if (system["mem_pool_initial_gb"]) {
-            config.mem_pool_initial_gb = system["mem_pool_initial_gb"].as<fp_t>();
-        }
-        if (system["mem_pool_grow_gb"]) {
-            config.mem_pool_grow_gb = system["mem_pool_grow_gb"].as<fp_t>();
+        if (system["mem_pool_gb"]) {
+            config.mem_pool_gb = system["mem_pool_gb"].as<fp_t>();
+        } else if (system["mem_pool_initial_gb"]) {
+            fmt::println("Found deprecated \"mem_pool_initial_gb\", using that value. The pool no longer grows and should be set with key \"mem_pool_gb\".");
+            config.mem_pool_gb = system["mem_pool_initial_gb"].as<fp_t>();
         }
     }
 
@@ -914,7 +913,7 @@ int main(int argc, char** argv) {
     Kokkos::initialize(argc, argv);
     yakl::init(
         yakl::InitConfig()
-            .set_pool_size_mb(config.mem_pool_initial_gb * 1024)
+            .set_pool_size_mb(config.mem_pool_gb * 1024)
     );
     {
         load_wavelength_if_missing(&config);

@@ -22,7 +22,7 @@ SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Kokkos REQUIRED GLOBAL)
-find_package(KokkosKernels)
+find_package(KokkosKernels REQUIRED)
 if (${DEXRT_USE_MPI})
     find_package(MPI REQUIRED)
 endif()
@@ -42,7 +42,6 @@ endif()
 if (${YAKL_AUTO_FENCE})
     set(YAKL_DEFS "${YAKL_DEFS} -DYAKL_AUTO_FENCE")
 endif()
-
 
 list(APPEND DEX_SOURCE_FILES
     "source/main.cpp"

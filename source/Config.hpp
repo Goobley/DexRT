@@ -7,7 +7,7 @@
 
 #include "UserConfig2d.hpp"
 
-#ifdef YAKL_DEBUG
+#ifdef KOKKOS_ENABLE_DEBUG
 #define DEXRT_DEBUG
 #endif
 
@@ -17,6 +17,7 @@
 #define YAKL_EXECUTE_ON_HOST_ONLY KOKKOS_IF_ON_HOST
 
 namespace yakl {
+    // NOTE(cmo): Stubs for functions I can't be bothered to rewrite right now.
     inline void fence() {
         Kokkos::fence();
     }
@@ -24,16 +25,6 @@ namespace yakl {
     template <typename str>
     YAKL_INLINE void yakl_throw(str in) {
         Kokkos::abort(in);
-    }
-
-    template <typename T>
-    YAKL_INLINE void atomicAdd(T& ref, T update) {
-        Kokkos::atomic_add(&ref, update);
-    }
-
-    template <typename T>
-    YAKL_INLINE void atomicMax(T& ref, T update) {
-        Kokkos::atomic_max(&ref, update);
     }
 }
 

@@ -92,8 +92,8 @@ struct DirectionalEmisOpacInterp {
                     const fp_t vtherm_frac = dv / vtherm;
 
                     if (vtherm_frac > INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH) {
-                        yakl::atomicMax(max_thermal_vel_frac(0), vtherm_frac);
-                        yakl::atomicAdd(thermal_vel_frac_over_count(0), 1);
+                        Kokkos::atomic_max(&max_thermal_vel_frac(0), vtherm_frac);
+                        Kokkos::atomic_add(&thermal_vel_frac_over_count(0), 1);
                     }
                 }
                 AtmosPointParams local_atmos;

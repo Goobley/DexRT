@@ -36,8 +36,7 @@ struct DexrtNgConfig {
 
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
-    fp_t mem_pool_initial_gb = FP(2.0);
-    fp_t mem_pool_grow_gb = FP(1.4);
+    fp_t mem_pool_gb = FP(4.0);
     std::string own_path;
     std::string atmos_path;
     std::string output_path;
@@ -288,11 +287,11 @@ inline DexrtConfig parse_dexrt_config(const std::string& path) {
     YAML::Node file = YAML::LoadFile(path);
     if (file["system"]) {
         auto system = file["system"];
-        if (system["mem_pool_initial_gb"]) {
-            config.mem_pool_initial_gb = system["mem_pool_initial_gb"].as<fp_t>();
-        }
-        if (system["mem_pool_grow_gb"]) {
-            config.mem_pool_grow_gb = system["mem_pool_grow_gb"].as<fp_t>();
+        if (system["mem_pool_gb"]) {
+            config.mem_pool_gb = system["mem_pool_gb"].as<fp_t>();
+        } else if (system["mem_pool_initial_gb"]) {
+            fmt::println("Found deprecated \"mem_pool_initial_gb\", using that value. The pool no longer grows and should be set with key \"mem_pool_gb\".");
+            config.mem_pool_gb = system["mem_pool_initial_gb"].as<fp_t>();
         }
     }
     if (file["atmos_path"]) {

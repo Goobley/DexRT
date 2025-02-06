@@ -824,7 +824,7 @@ int main(int argc, char** argv) {
     Kokkos::initialize();
     yakl::init(
         yakl::InitConfig()
-            .set_pool_size_mb(config.mem_pool_initial_gb * 1024)
+            .set_pool_size_mb(config.mem_pool_gb * 1024)
     );
 
     {

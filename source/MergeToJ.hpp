@@ -57,7 +57,7 @@ inline FpConst2d merge_c0_to_J(
                 ks = coord(1) * c0_dims.num_probes(0) + coord(0);
             }
             const fp_t sample = probe_fetch<RcMode>(c0, c0_dims, idx);
-            yakl::atomicAdd(J(la, ks), ray_weight * sample);
+            Kokkos::atomic_add(&J(la, ks), ray_weight * sample);
         }
     );
     return J;

@@ -315,7 +315,7 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                 // ballot across threads, do a popcount, and increment from one
                 // thread.
                 if (compute_criteria_on_base_array && do_increment) {
-                    yakl::atomicAdd(mippable_entries(tile_idx), 1);
+                    Kokkos::atomic_add(&mippable_entries(tile_idx), 1);
                 }
 
                 emis(ks, wave) = emis_mip;

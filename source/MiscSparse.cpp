@@ -256,8 +256,8 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
         curr_active = 0;
         yakl::fence();
         auto my_atomic_max = YAKL_LAMBDA (u64& ref, unsigned long long int val) {
-            yakl::atomicMax(
-                *reinterpret_cast<unsigned long long int*>(&ref),
+            Kokkos::atomic_max(
+                reinterpret_cast<unsigned long long int*>(&ref),
                 val
             );
         };
