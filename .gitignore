@@ -1,26 +1,11 @@
-hdf5/*
-!hdf5/docker_setup.sh
-
-netcdf/*
-!netcdf/docker_setup.sh
-
-pnetcdf/*
-!pnetcdf/setup.sh
-!pnetcdf/docker_setup.sh
-
-magma/*
-!magma/docker_setup.sh
-!magma/magma.conf
-
 kokkos/*
 kokkos-debug/*
 kokkos-kernels/*
 kokkos-kernels-debug/*
 
-docker_deps/kokkos/*
-!docker_deps/kokkos/*.sh
-docker_deps/kokkos-kernels/*
-!docker_deps/kokkos-kernels/*.sh
+docker_deps/*
+!docker_deps/**/*.sh
+!docker_deps/magma/magma.conf
 
 build/*
 !build/cmake_basic.sh
