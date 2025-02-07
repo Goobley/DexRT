@@ -58,6 +58,7 @@ list(APPEND DEX_SOURCE_FILES
     "source/DirectionalEmisOpacInterp.cpp"
     "source/CoreAndVoigtEmisOpac.cpp"
     "source/NgAcceleration.cpp"
+    "source/LineSweepSetup.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"

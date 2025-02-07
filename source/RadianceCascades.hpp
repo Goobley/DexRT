@@ -5,6 +5,7 @@
 #include "BoundaryDispatch.hpp"
 #include "RayMarching.hpp"
 #include "Atmosphere.hpp"
+#include "LineSweeping.hpp"
 
 template <typename DynamicState>
 struct RaymarchParams {

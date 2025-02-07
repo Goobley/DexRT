@@ -262,6 +262,11 @@ YAKL_INLINE i64 single_probe_storage(const CascadeStorage& c) {
     return result;
 }
 
+YAKL_INLINE constexpr fp_t probe_spacing(int n) {
+    fp_t probe_spacing = PROBE0_SPACING * (1 << n);
+    return probe_spacing;
+}
+
 YAKL_INLINE vec2 probe_pos(ivec2 probe_coord, int n) {
     fp_t probe_spacing = PROBE0_SPACING * (1 << n);
     vec2 pos;
@@ -542,15 +547,21 @@ YAKL_INLINE IntervalLength cascade_interval_length(int num_cascades, int n) {
     return length;
 }
 
+YAKL_INLINE vec2 ray_dir(const CascadeRays& dims, int phi_idx) {
+    namespace Const = ConstantsFP;
+    // NOTE(cmo): If this angle-generation code is adjusted, also adjust probe_frac_dir_idx
+    fp_t phi = FP(2.0) * Const::pi / fp_t(dims.num_flat_dirs) * (phi_idx + FP(0.5));
+    vec2 dir;
+    dir(0) = std::cos(phi);
+    dir(1) = std::sin(phi);
+    return dir;
+}
+
 YAKL_INLINE RayProps ray_props(const CascadeRays& dims, int num_cascades, int n, const ProbeIndex& probe) {
     RayProps ray;
     ray.centre = probe_pos(probe.coord, n);
 
-    namespace Const = ConstantsFP;
-    // NOTE(cmo): If this angle-generation code is adjusted, also adjust probe_frac_dir_idx
-    fp_t phi = FP(2.0) * Const::pi / fp_t(dims.num_flat_dirs) * (probe.dir + FP(0.5));
-    ray.dir(0) = std::cos(phi);
-    ray.dir(1) = std::sin(phi);
+    ray.dir = ray_dir(dims, probe.dir);
 
     IntervalLength length = cascade_interval_length(num_cascades, n);
     ray.start(0) = ray.centre(0) + ray.dir(0) * length.from;

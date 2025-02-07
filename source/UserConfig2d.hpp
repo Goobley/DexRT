@@ -148,6 +148,15 @@ constexpr int PARALLAX_MERGE_ABOVE_CASCADE = 1;
 // When using RC_CONFIG == rParallaxFixInner, apply the modified merge above this cascade level (exclusive)
 constexpr int INNER_PARALLAX_MERGE_ABOVE_CASCADE = -1;
 
+enum class RaymarchType {
+    Raymarch,
+    LineSweep
+};
+// Whether to raymarch or linesweep
+constexpr RaymarchType RAYMARCH_TYPE = RaymarchType::LineSweep;
+// Level to start sweeping on (classical march at levels lower than this)
+constexpr int LINE_SWEEP_START_LEVEL = 0;
+
 /*== Line emissivity/opacity =================================================*/
 
 constexpr const char* LineCoeffCalcNames[3] = {

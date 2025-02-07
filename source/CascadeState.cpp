@@ -56,5 +56,7 @@ bool CascadeState::init(const State& state, int max_cascades) {
     }
     mip_chain.init(state, state.mr_block_map.buffer_len(), c0.wave_batch);
 
+    line_sweep_data = construct_line_sweep_data(state, max_cascades);
+
     return true;
 }

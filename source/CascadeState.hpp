@@ -2,6 +2,7 @@
 #define DEXRT_CASCADE_STATE_HPP
 #include "Types.hpp"
 #include "Mipmaps.hpp"
+#include "LineSweepSetup.hpp"
 
 struct State;
 struct CascadeState {
@@ -11,6 +12,7 @@ struct CascadeState {
     Fp1d alo;
     ProbesToCompute probes_to_compute;
     MultiResMipChain mip_chain;
+    LineSweepData line_sweep_data;
 
     bool init(const State& state, int max_cascade);
 };
