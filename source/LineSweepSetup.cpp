@@ -3,6 +3,12 @@
 #include "BlockMap.hpp"
 #include "CascadeState.hpp"
 
+int LineSweepData::get_cascade_subset_idx(int cascade_idx, int subset_idx) const {
+    constexpr int RcFlags = RC_flags_storage();
+    constexpr int num_subsets = subset_tasks_per_cascade<RcFlags>();
+    return cascade_idx * num_subsets + subset_idx;
+}
+
 KOKKOS_INLINE_FUNCTION vec2 select_origin(const vec2& dir, const GridBbox& bbox) {
     vec2 result;
     result(0) = bbox.min(0);
@@ -30,6 +36,7 @@ CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, 
 
     int num_lines = 0;
     int num_steps = 0;
+    i32 max_steps = 0;
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset_idx);
     std::vector<LsLine> subset_lines;
     std::vector<LineSetDescriptor> subset_line_set_desc;
@@ -66,6 +73,7 @@ CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, 
         i32 line_set_start_steps = num_steps;
         num_lines += 1;
         num_steps += base_line.num_samples;
+        max_steps = std::max(max_steps, base_line.num_samples);
         for (int ni = 0; ni < 2; ++ni) {
             vec2 normal = normal_mul(ni) * normal0;
             vec2 pos(origin);
@@ -79,6 +87,7 @@ CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, 
                     continue;
                 }
                 num_steps += line.num_samples;
+                max_steps = std::max(max_steps, line.num_samples);
                 num_lines += 1;
                 subset_lines.emplace_back(line);
             }
@@ -109,20 +118,28 @@ CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, 
     for (const auto& ls_desc : subset_line_set_desc) {
         total_steps += ls_desc.total_steps;
     }
+    std::vector<i32> ls_start_idx(subset_line_set_desc.size());
+    for (int i = 0; i < ls_start_idx.size(); ++i) {
+        ls_start_idx[i] = subset_line_set_desc[i].line_start_idx;
+    }
+
 
     DirSetDescriptor dir_set_desc{
         .step = step,
         .total_lines = i32(subset_line_set_desc.size()),
-        .total_steps = total_steps
+        .total_steps = total_steps,
+        .max_line_steps = max_steps
     };
     auto line_set_desc_d = yakl::Array<LineSetDescriptor, 1, yakl::memHost>("line_set_desc", subset_line_set_desc.data(), subset_line_set_desc.size()).createDeviceCopy();
     auto lines_d = yakl::Array<LsLine, 1, yakl::memHost>("lines", subset_lines.data(), subset_lines.size()).createDeviceCopy();
     auto line_storage_start_idx_d = yakl::Array<i32, 1, yakl::memHost>("line_start_idx", line_storage_start_idx.data(), line_storage_start_idx.size()).createDeviceCopy();
+    auto line_set_start_idx_d = yakl::Array<i32, 1, yakl::memHost>("line_set_start_idx", ls_start_idx.data(), ls_start_idx.size()).createDeviceCopy();
     CascadeLineSet line_data{
         .dir_set_desc = dir_set_desc,
         .line_set_desc = line_set_desc_d,
         .lines = lines_d,
-        .line_storage_start_idx = line_storage_start_idx_d
+        .line_storage_start_idx = line_storage_start_idx_d,
+        .line_set_start_idx = line_set_start_idx_d
     };
 
     return line_data;
@@ -145,12 +162,12 @@ LineSweepData construct_line_sweep_data(const State& state, int max_cascade) {
     for (const auto& cs : cascade_sets) {
         max_entries = std::max(max_entries, cs.dir_set_desc.total_steps);
     }
-    state.println("Allocating 2x{} kB for line-sweeping storage", max_entries * sizeof(fp_t) / 1024);
+    state.println("Allocating 2x{} kB for line-sweeping storage", max_entries * sizeof(fp_t) * state.c0_size.num_incl / 1024);
 
-    // TODO(cmo): This is only enough storage for flatland, need to allocate this for each inclination.
+    // NOTE(cmo): This doesn't include space for each wavelength.
     LineSweepStorage storage {
-        .source_term = Fp1d("ls_source", max_entries),
-        .transmittance = Fp1d("ls_trans", max_entries)
+        .source_term = Fp2d("ls_source", state.c0_size.num_incl, max_entries),
+        .transmittance = Fp2d("ls_trans", state.c0_size.num_incl, max_entries)
     };
 
     return LineSweepData{

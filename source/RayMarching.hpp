@@ -313,6 +313,103 @@ struct Raymarch2dDynamicCoreAndVoigtState {
     const AtomicData<fp_t>& adata;
 };
 
+template <typename DynamicState>
+YAKL_INLINE
+DynamicState get_dyn_state(
+    int la,
+    const SparseAtmosphere& atmos,
+    const AtomicData<fp_t>& adata,
+    const VoigtProfile<fp_t>& profile,
+    const Fp2d& flat_pops,
+    const MultiResMipChain& mip_chain
+) {
+    return DynamicState{};
+}
+
+template <>
+YAKL_INLINE
+Raymarch2dDynamicState get_dyn_state(
+    int la,
+    const SparseAtmosphere& atmos,
+    const AtomicData<fp_t>& adata,
+    const VoigtProfile<fp_t>& profile,
+    const Fp2d& flat_pops,
+    const MultiResMipChain& mip_chain
+) {
+    return Raymarch2dDynamicState{
+        .active_set = slice_active_set(adata, la),
+        .atmos = atmos,
+        .adata = adata,
+        .profile = profile,
+        .nh0 = atmos.nh0,
+        .n = flat_pops
+    };
+}
+
+template <>
+YAKL_INLINE
+Raymarch2dDynamicInterpState get_dyn_state(
+    int la,
+    const SparseAtmosphere& atmos,
+    const AtomicData<fp_t>& adata,
+    const VoigtProfile<fp_t>& profile,
+    const Fp2d& flat_pops,
+    const MultiResMipChain& mip_chain
+) {
+    return Raymarch2dDynamicInterpState{};
+}
+
+template <>
+YAKL_INLINE
+Raymarch2dDynamicCoreAndVoigtState get_dyn_state(
+    int la,
+    const SparseAtmosphere& atmos,
+    const AtomicData<fp_t>& adata,
+    const VoigtProfile<fp_t>& profile,
+    const Fp2d& flat_pops,
+    const MultiResMipChain& mip_chain
+) {
+    auto basic_a_set = slice_active_set(adata, la);
+    yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> local_active_set; // These are krl indices for CoreAndVoigt
+    const auto& krl_mapping = mip_chain.cav_data.active_set_mapping;
+    int l_idx = 0;
+    for (int a = 0; a < basic_a_set.extent(0); ++a) {
+        i32 kr = basic_a_set(a);
+        for (int krl = 0; krl < CORE_AND_VOIGT_MAX_LINES; ++krl) {
+            if (krl_mapping(krl) == kr) {
+                local_active_set(l_idx++) = krl;
+            }
+        }
+    }
+    if (l_idx < CORE_AND_VOIGT_MAX_LINES) {
+        local_active_set(l_idx) = -1;
+    }
+
+    return Raymarch2dDynamicCoreAndVoigtState{
+        .active_set = local_active_set,
+        .profile = profile,
+        .adata = adata
+    };
+}
+
+template <int RcMode=0>
+struct RcDynamicState {
+    typedef typename std::conditional_t<
+        (RcMode & RC_DYNAMIC) && (LINE_SCHEME == LineCoeffCalc::VelocityInterp),
+        Raymarch2dDynamicInterpState,
+        std::conditional_t<
+            RcMode & RC_DYNAMIC && (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt),
+            Raymarch2dDynamicCoreAndVoigtState,
+            std::conditional_t<
+                RcMode & RC_DYNAMIC,
+                Raymarch2dDynamicState,
+                DexEmpty
+            >
+        >
+    > type;
+};
+
+
 template <typename Bc, class DynamicState=DexEmpty>
 struct Raymarch2dArgs {
     const CascadeStateAndBc<Bc>& casc_state_bc;

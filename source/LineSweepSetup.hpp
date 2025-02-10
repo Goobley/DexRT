@@ -98,24 +98,27 @@ struct DirSetDescriptor {
     fp_t step;
     i32 total_lines;
     i32 total_steps;
+    i32 max_line_steps; // the max steps on a single line in this set
 };
 
 /// Contains the descriptors and informations for a set of lines used on a cascade (or a cascade subset if using DIR_BY_DIR)
 struct CascadeLineSet {
     DirSetDescriptor dir_set_desc;
-    yakl::Array<LineSetDescriptor, 1> line_set_desc; // meta data for each lineset
+    yakl::Array<LineSetDescriptor, 1> line_set_desc; // metadata for each lineset
     yakl::Array<LsLine, 1> lines;
-    yakl::Array<i32, 1> line_storage_start_idx; /// starting index of storage associated with a line
+    yakl::Array<const i32, 1> line_storage_start_idx; /// starting index of storage associated with a line (sorted)
+    yakl::Array<const i32, 1> line_set_start_idx; /// starting index of the line set associated with a line (sorted)
 };
 
 struct LineSweepStorage {
-    Fp1d source_term;
-    Fp1d transmittance;
+    Fp2d source_term; // [incl, ks]
+    Fp2d transmittance; // [incl, ks]
 };
 
 struct LineSweepData {
     std::vector<CascadeLineSet> cascade_sets;
     LineSweepStorage storage;
+    int get_cascade_subset_idx(int cascade_idx, int subset_idx) const;
 };
 
 LineSweepData construct_line_sweep_data(const State& state, int max_cascade);
