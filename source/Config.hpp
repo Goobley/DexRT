@@ -35,6 +35,7 @@ typedef yakl::Array<GammaFp, 3, yakl::memDevice> GammaMat;
 
 constexpr bool VARY_BRANCHING_FACTOR = (BRANCHING_FACTOR_SWITCH > 0);
 static_assert(!(PREAVERAGE && VARY_BRANCHING_FACTOR), "Can't use preaveraging and variable branching factor because I was too lazy to implement it");
+static_assert(!(PREAVERAGE && RAYMARCH_TYPE == RaymarchType::LineSweep), "Currently can't use preaveraging and linesweeping");
 
 // Compile time errors for RC misconfig
 static_assert(! (PREAVERAGE && DIR_BY_DIR), "Cannot enable both DIR_BY_DIR treatment and PREAVERAGING");
@@ -50,6 +51,7 @@ static_assert(
     "Parallax (reprojection) methods cannot be used with DIR_BY_DIR"
 );
 static_assert(! (!STORE_TAU_CASCADES && RC_CONFIG == RcConfiguration::ParallaxFixInner), "Need to store tau cascades for the inner parallax fix");
+static_assert(! (!STORE_TAU_CASCADES && RAYMARCH_TYPE == RaymarchType::LineSweep), "Need to store tau cascades when line sweeping");
 
 // NOTE(cmo): The contents of mip0 is determined by LINE_SCHEME, and determines
 // how we handle computing variance for mip-mapping.
@@ -67,7 +69,7 @@ constexpr BaseMipContents BASE_MIP_CONTAINS =
 static_assert(std::has_single_bit(u32(BLOCK_SIZE)), "BLOCK_SIZE must be a power of two (>= 2)");
 
 #ifdef FLATLAND
-constexpr int NUM_GAUSS_LOBATTO = yakl::max(NUM_INCL - 1, 1);
+constexpr int NUM_GAUSS_LOBATTO = std::max(NUM_INCL - 1, 1);
 constexpr fp_t INCL_RAYS[NUM_INCL] = {FP(0.000000)};
 constexpr fp_t INCL_WEIGHTS[NUM_INCL] = {FP(1.0)};
 #else

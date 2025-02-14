@@ -43,7 +43,7 @@ typedef fp_t GammaFp;
 // 16, defining the number of inclination rays used in a Gauss-Radau quadrature
 // over 1 hemisphere (of y).
 
-// #define FLATLAND
+#define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_INCL = 1;
 #else
@@ -55,17 +55,18 @@ constexpr int NUM_INCL = 8;
 // Number of threads to set up to treat contiguously. These all take the same
 // steps through the grid, at different wavelengths and inclinations as
 // necessary. 32 works well in most places, but can be lowered to reduce memory.
-constexpr int DEXRT_WARP_SIZE = 32;
+constexpr int DEXRT_WARP_SIZE = 4;
 
 // Whether to store the cascades containing tau. These aren't directly necessary
 // for RC methods other than ParallaxFixInner, and can halve the memory
 // consumption of the cascades -- which aren't currently stored sparsely.
-constexpr bool STORE_TAU_CASCADES = false;
+// The storage of these is also needed for line-sweeping
+constexpr bool STORE_TAU_CASCADES = true;
 
 // Whether to store all cascades, e.g. for saving or debugging, or simply
 // "ping-pong" between two cascades, merging as we go between cascade i+1 and i.
-// Can be a significatn memory saving
-constexpr bool PINGPONG_BUFFERS = true;
+// Can be a significant memory saving
+constexpr bool PINGPONG_BUFFERS = false;
 
 // The wavelength batch is typically set based on the warp size and number of
 // inclinations, but can be overridden here. Override not well tested.
@@ -88,7 +89,7 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(1.5);
+constexpr fp_t PROBE0_LENGTH = FP(2.0);
 // The number of rays to trace on cascade 0
 constexpr int PROBE0_NUM_RAYS = 4;
 
@@ -116,7 +117,7 @@ constexpr bool PREAVERAGE = false;
 // Whether to treat the subset of each cascade associated with each ray of C0
 // separately. This is a good default with good memory savings, but is
 // incompatible with the parallax fixes.
-constexpr bool DIR_BY_DIR = true;
+constexpr bool DIR_BY_DIR = false;
 
 constexpr const char* RcConfigurationNames[4] = {
     "Vanilla",
@@ -155,7 +156,7 @@ enum class RaymarchType {
 // Whether to raymarch or linesweep
 constexpr RaymarchType RAYMARCH_TYPE = RaymarchType::LineSweep;
 // Level to start sweeping on (classical march at levels lower than this)
-constexpr int LINE_SWEEP_START_LEVEL = 0;
+constexpr int LINE_SWEEP_START_CASCADE = 2;
 
 /*== Line emissivity/opacity =================================================*/
 

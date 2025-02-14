@@ -678,119 +678,190 @@ void cascade_i_25d(
     );
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());
-    dex_parallel_for(
-        "RC Loop",
-        FlatLoop<4>(
-            spatial_bounds,
-            ray_subset.num_flat_dirs / num_rays_per_texel,
-            wave_batch,
-            ray_subset.num_incl
-        ),
-        YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
-            constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
-            ivec2 probe_coord = probe_coord_lookup(ks);
+    if (RAYMARCH_TYPE == RaymarchType::Raymarch || cascade_idx < LINE_SWEEP_START_CASCADE) {
+        dex_parallel_for(
+            "RC Loop",
+            FlatLoop<4>(
+                spatial_bounds,
+                ray_subset.num_flat_dirs / num_rays_per_texel,
+                wave_batch,
+                ray_subset.num_incl
+            ),
+            YAKL_LAMBDA (i64 ks, int phi_idx, int wave, int theta_idx) {
+                constexpr bool dev_compute_alo = RcMode & RC_COMPUTE_ALO;
+                ivec2 probe_coord = probe_coord_lookup(ks);
 
-            phi_idx += ray_subset.start_flat_dirs;
-            int la = la_start + wave + ray_subset.start_wave_batch;
-            theta_idx += ray_subset.start_incl;
+                phi_idx += ray_subset.start_flat_dirs;
+                int la = la_start + wave + ray_subset.start_wave_batch;
+                theta_idx += ray_subset.start_incl;
 
-            RadianceInterval<AloType> average_ri{};
-            const fp_t sample_weight = FP(1.0) / fp_t(num_rays_per_texel);
-            for (int i = 0; i < num_rays_per_texel; ++i) {
+                RadianceInterval<AloType> average_ri{};
+                const fp_t sample_weight = FP(1.0) / fp_t(num_rays_per_texel);
+                for (int i = 0; i < num_rays_per_texel; ++i) {
+                    ProbeIndex probe_idx{
+                        .coord=probe_coord,
+                        // NOTE(cmo): Handles preaveraging case
+                        .dir=phi_idx * num_rays_per_texel + i,
+                        .incl=theta_idx,
+                        .wave=wave
+                    };
+                    RayProps ray = ray_props(ray_set, dev_casc_state.num_cascades, cascade_idx, probe_idx);
+                    DynamicState dyn_state = get_dyn_state<DynamicState>(
+                        la,
+                        atmos,
+                        adata,
+                        profile,
+                        pops,
+                        mip_chain
+                    );
+                    RaymarchParams<DynamicState> params {
+                        .distance_scale = atmos.voxel_scale,
+                        .mu = inverted_mu(ray, incl_quad.muy(theta_idx)),
+                        .incl = incl_quad.muy(theta_idx),
+                        .incl_weight = incl_quad.wmuy(theta_idx),
+                        .la = la,
+                        .offset = offset,
+                        .max_mip_to_sample = max_mip_to_sample,
+                        .block_map = block_map,
+                        .mr_block_map = mr_block_map,
+                        .mip_chain = mip_chain,
+                        .dyn_state = dyn_state
+                    };
+
+
+                    RadianceInterval<AloType> ri;
+                    auto& casc_rays = ray_set;
+                    const auto& boundaries = boundaries_h;
+
+                    auto dispatch_outer = [&]<typename BcType>(BcType bc_type){
+                        auto casc_and_bc = get_bc<BcType>(dev_casc_state, boundaries);
+                        ri = march_and_merge_dispatch<RcMode>(
+                            casc_and_bc,
+                            casc_rays,
+                            probe_idx,
+                            ray,
+                            params
+                        );
+                    };
+
+                    if constexpr (RcMode & RC_SAMPLE_BC) {
+                        switch (boundaries.boundary) {
+                            case BoundaryType::Zero: {
+                                // NOTE(cmo): lambdas aren't templated... they're
+                                // essentially structs with a template on
+                                // operator(), so we have to put the "template" in
+                                // as an arg
+                                dispatch_outer(ZeroBc{});
+                            } break;
+                            case BoundaryType::Promweaver: {
+                                dispatch_outer(PwBc<>{});
+                            } break;
+                            default: {
+                                yakl::yakl_throw("Unknown BC type");
+                            }
+                        }
+                    } else {
+                        dispatch_outer(ZeroBc{});
+                    }
+                    average_ri.I += sample_weight * ri.I;
+                    average_ri.tau += sample_weight * ri.tau;
+                    if constexpr (dev_compute_alo) {
+                        average_ri.alo += sample_weight * ri.alo;
+                    }
+                }
+
                 ProbeIndex probe_idx{
                     .coord=probe_coord,
-                    // NOTE(cmo): Handles preaveraging case
-                    .dir=phi_idx * num_rays_per_texel + i,
+                    // NOTE(cmo): Access the "first" entry stored in a texel, if we
+                    // have more than one ray per texel
+                    .dir=phi_idx * num_rays_per_texel,
                     .incl=theta_idx,
                     .wave=wave
                 };
-                RayProps ray = ray_props(ray_set, dev_casc_state.num_cascades, cascade_idx, probe_idx);
-                DynamicState dyn_state = get_dyn_state<DynamicState>(
-                    la,
-                    atmos,
-                    adata,
-                    profile,
-                    pops,
-                    mip_chain
-                );
-                RaymarchParams<DynamicState> params {
-                    .distance_scale = atmos.voxel_scale,
-                    .mu = inverted_mu(ray, incl_quad.muy(theta_idx)),
-                    .incl = incl_quad.muy(theta_idx),
-                    .incl_weight = incl_quad.wmuy(theta_idx),
-                    .la = la,
-                    .offset = offset,
-                    .max_mip_to_sample = max_mip_to_sample,
-                    .block_map = block_map,
-                    .mr_block_map = mr_block_map,
-                    .mip_chain = mip_chain,
-                    .dyn_state = dyn_state
-                };
-
-
-                RadianceInterval<AloType> ri;
-                auto& casc_rays = ray_set;
-                const auto& boundaries = boundaries_h;
-
-                auto dispatch_outer = [&]<typename BcType>(BcType bc_type){
-                    auto casc_and_bc = get_bc<BcType>(dev_casc_state, boundaries);
-                    ri = march_and_merge_dispatch<RcMode>(
-                        casc_and_bc,
-                        casc_rays,
-                        probe_idx,
-                        ray,
-                        params
-                    );
-                };
-
-                if constexpr (RcMode & RC_SAMPLE_BC) {
-                    switch (boundaries.boundary) {
-                        case BoundaryType::Zero: {
-                            // NOTE(cmo): lambdas aren't templated... they're
-                            // essentially structs with a template on
-                            // operator(), so we have to put the "template" in
-                            // as an arg
-                            dispatch_outer(ZeroBc{});
-                        } break;
-                        case BoundaryType::Promweaver: {
-                            dispatch_outer(PwBc<>{});
-                        } break;
-                        default: {
-                            yakl::yakl_throw("Unknown BC type");
-                        }
-                    }
-                } else {
-                    dispatch_outer(ZeroBc{});
+                i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
+                dev_casc_state.cascade_I(lin_idx) = average_ri.I;
+                if constexpr (STORE_TAU_CASCADES) {
+                    dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
                 }
-                average_ri.I += sample_weight * ri.I;
-                average_ri.tau += sample_weight * ri.tau;
                 if constexpr (dev_compute_alo) {
-                    average_ri.alo += sample_weight * ri.alo;
+                    dev_casc_state.alo(lin_idx) = average_ri.alo;
                 }
             }
-
-            ProbeIndex probe_idx{
-                .coord=probe_coord,
-                // NOTE(cmo): Access the "first" entry stored in a texel, if we
-                // have more than one ray per texel
-                .dir=phi_idx * num_rays_per_texel,
-                .incl=theta_idx,
-                .wave=wave
-            };
-            i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
-            dev_casc_state.cascade_I(lin_idx) = average_ri.I;
-            if constexpr (STORE_TAU_CASCADES) {
-                dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
-            }
-            if constexpr (dev_compute_alo) {
-                dev_casc_state.alo(lin_idx) = average_ri.alo;
+        );
+        yakl::fence();
+        if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
+            if (cascade_idx > INNER_PARALLAX_MERGE_ABOVE_CASCADE && dev_casc_state.upper_I.initialized()) {
+                parallax_fix_inner_merge<RcMode>(state, dev_casc_state, probe_coord_lookup, ray_set, subset);
             }
         }
-    );
-    yakl::fence();
-    if constexpr (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
-        if (cascade_idx > INNER_PARALLAX_MERGE_ABOVE_CASCADE && dev_casc_state.upper_I.initialized()) {
-            parallax_fix_inner_merge<RcMode>(state, dev_casc_state, probe_coord_lookup, ray_set, subset);
+    } else if (RAYMARCH_TYPE == RaymarchType::LineSweep) {
+        fmt::println("-- Cascade {}", cascade_idx);
+        for (int wave = 0; wave < wave_batch; ++wave) {
+            compute_line_sweep_samples<RcMode>(state, casc_state, cascade_idx, subset, wave, mip_chain);
+            interpolate_line_sweep_samples_to_cascade<RcMode>(state, casc_state, cascade_idx, subset, wave);
+
+            if (lookup.ip == -1) {
+                continue;
+            }
+
+            fmt::println("merge with upper start");
+            dex_parallel_for(
+                "Merge samples with upper cascade",
+                FlatLoop<3>(
+                    spatial_bounds,
+                    ray_subset.num_flat_dirs,
+                    ray_subset.num_incl
+                ),
+                YAKL_LAMBDA (i64 ks, int phi_idx, int theta_idx) {
+                    ivec2 probe_coord = probe_coord_lookup(ks);
+                    phi_idx += ray_subset.start_flat_dirs;
+                    theta_idx += ray_subset.start_incl;
+
+                    ProbeIndex this_probe{
+                        .coord=probe_coord,
+                        .dir=phi_idx,
+                        .incl=theta_idx,
+                        .wave=wave
+                    };
+                    const int upper_ray_start_idx = upper_ray_idx(this_probe.dir, dev_casc_state.n);
+                    const int num_rays_per_ray = upper_texels_per_ray<RcMode>(dev_casc_state.n);
+                    const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
+                    BilinearCorner base = bilinear_corner(this_probe.coord);
+                    vec4 weights = bilinear_weights(base);
+
+                    RadianceInterval<DexEmpty> interp;
+                    for (int bilin = 0; bilin < 4; ++bilin) {
+                        ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, bilin);
+                        for (
+                            int upper_ray_idx = upper_ray_start_idx;
+                            upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
+                            ++upper_ray_idx
+                        ) {
+                            ProbeIndex upper_probe{
+                                .coord = base.corner + bilin_offset,
+                                .dir = upper_ray_idx,
+                                .incl = this_probe.incl,
+                                .wave = this_probe.wave
+                            };
+                            const i64 upper_lin_idx = probe_linear_index<RcMode>(upper_dims, upper_probe);
+                            interp.I += ray_weight * weights(bilin) * dev_casc_state.upper_I(upper_lin_idx);
+                            interp.tau += ray_weight * weights(bilin) * dev_casc_state.upper_tau(upper_lin_idx);
+                        }
+                    }
+
+                    const i64 lin_idx = probe_linear_index<RcMode>(dims, this_probe);
+                    RadianceInterval ri;
+                    ri.I = dev_casc_state.cascade_I(lin_idx);
+                    ri.tau = dev_casc_state.cascade_tau(lin_idx);
+
+                    auto merged_ri = merge_intervals(ri, interp);
+
+                    dev_casc_state.cascade_I(lin_idx) = merged_ri.I;
+                    dev_casc_state.cascade_tau(lin_idx) = merged_ri.tau;
+                }
+            );
+            Kokkos::fence();
+            fmt::println("merge with upper done");
         }
     }
 

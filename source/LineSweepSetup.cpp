@@ -6,7 +6,7 @@
 int LineSweepData::get_cascade_subset_idx(int cascade_idx, int subset_idx) const {
     constexpr int RcFlags = RC_flags_storage();
     constexpr int num_subsets = subset_tasks_per_cascade<RcFlags>();
-    return cascade_idx * num_subsets + subset_idx;
+    return (cascade_idx - LINE_SWEEP_START_CASCADE) * num_subsets + subset_idx;
 }
 
 KOKKOS_INLINE_FUNCTION vec2 select_origin(const vec2& dir, const GridBbox& bbox) {
@@ -64,7 +64,7 @@ CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, 
         normal_mul(0) = FP(1.0);
         normal_mul(1) = FP(-1.0);
 
-        origin = origin + FP(0.5) * primary_vec;
+        origin = origin + FP(0.5) * primary_vec * std::copysign(FP(1.0), dir(primary_axis));
         LsLine base_line(origin);
         bool intersect = base_line.clip(bbox, dir, step);
         KOKKOS_ASSERT(intersect);
@@ -126,7 +126,7 @@ CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, 
 
     DirSetDescriptor dir_set_desc{
         .step = step,
-        .total_lines = i32(subset_line_set_desc.size()),
+        .total_lines = i32(subset_lines.size()),
         .total_steps = total_steps,
         .max_line_steps = max_steps
     };
@@ -147,12 +147,12 @@ CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, 
 
 LineSweepData construct_line_sweep_data(const State& state, int max_cascade) {
 
-    int min_cascade = LINE_SWEEP_START_LEVEL;
+    int min_cascade = LINE_SWEEP_START_CASCADE;
     constexpr int RcMode = RC_flags_storage();
     constexpr int num_subsets = subset_tasks_per_cascade<RcMode>();
 
     std::vector<CascadeLineSet> cascade_sets;
-    for (int cascade_idx = min_cascade; cascade_idx < max_cascade; ++cascade_idx) {
+    for (int cascade_idx = min_cascade; cascade_idx <= max_cascade; ++cascade_idx) {
         for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
             cascade_sets.emplace_back(construct_line_sweep_subset(state, cascade_idx, subset_idx));
         }
