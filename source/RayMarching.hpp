@@ -459,7 +459,8 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         .I = FP(0.0),
         .tau = FP(0.0)
     };
-    constexpr bool always_sample_bc = (RcMode & RC_SAMPLE_BC) && LAST_CASCADE_TO_INFTY;
+    // NOTE(cmo): always_sample_bc is a problem with LS
+    constexpr bool always_sample_bc = (RcMode & RC_SAMPLE_BC) && LAST_CASCADE_TO_INFTY && !(RcMode & RC_LINE_SWEEP);
     const bool ray_starts_outside = (RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped);
     if (always_sample_bc || ray_starts_outside) {
         // NOTE(cmo): Check the ray is going up along z.

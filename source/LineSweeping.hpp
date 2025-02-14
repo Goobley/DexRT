@@ -47,7 +47,6 @@ inline void compute_line_sweep_samples(
     const auto& dir_set_desc = ls_data.dir_set_desc;
 
     // Do a normal cascade-like dispatch that traces from the previous probe to each probe (ensuring to extend to capture the bc for first_sample). N.B. The line sweep rays are already inverted!
-    fmt::println("{} {}", dir_set_desc.total_steps, ray_subset.num_incl);
     dex_parallel_for(
         "Initial probe-probe raymarch",
         FlatLoop<2>(
@@ -68,7 +67,7 @@ inline void compute_line_sweep_samples(
 
             fp_t t0, t1;
             if (step_idx == 0) {
-                t0 = line.t0 - FP(1.0); // NOTE(cmo): Force to sample boundary
+                t0 = line.t0 - FP(10.0); // NOTE(cmo): Force to sample boundary
                 t1 = line.first_sample;
             } else {
                 t0 = line.first_sample + (step_idx - 1) * step;
@@ -77,7 +76,7 @@ inline void compute_line_sweep_samples(
             }
             vec2 start = line.o + t0 * dir;
             vec2 end = line.o + t1 * dir;
-            vec2 centre = start;
+            vec2 centre = end;
 
             RayProps ray{
                 .start = start,
@@ -110,7 +109,7 @@ inline void compute_line_sweep_samples(
             auto dispatch_raymarch = [&]<typename BcType>(BcType bc_type) {
                 // NOTE(cmo): We don't actually use the cascade state in the raymarcher
                 auto casc_and_bc = get_bc<BcType>(DeviceCascadeState{}, boundaries);
-                ri = multi_level_dda_raymarch_2d(
+                ri = multi_level_dda_raymarch_2d<RcMode | RC_LINE_SWEEP, BcType, DynamicState, DexEmpty>(
                     Raymarch2dArgs<BcType, DynamicState> {
                         .casc_state_bc = casc_and_bc,
                         .ray = ray,
@@ -150,12 +149,9 @@ inline void compute_line_sweep_samples(
             // from coalesced access whilst tracing above.
             ls_storage.source_term(theta_idx, line_step) = ri.I;
             ls_storage.transmittance(theta_idx, line_step) = std::exp(-ri.tau);
-
         }
     );
     Kokkos::fence();
-    fmt::println("probe-probe done");
-    fmt::println("Max I during tracing {}", yakl::intrinsics::maxval(ls_storage.source_term));
 
     // Launch co-operative groups -- one per line, and do the extensions
     // TODO(cmo): This isn't proper log2 extensions, but it'll let us test
@@ -163,9 +159,7 @@ inline void compute_line_sweep_samples(
     const fp_t interval_length = int_length.to - int_length.from;
     size_t scratch_size = 2 * ScratchView<fp_t*>::shmem_size(dir_set_desc.max_line_steps);
     const int num_incl = state.c0_size.num_incl;
-    fmt::println("extension start");
     yakl::timer_start("Extend lines");
-    fmt::println("{}", dir_set_desc.total_lines);
     Kokkos::parallel_for(
         "Extend lines",
         Kokkos::TeamPolicy(dir_set_desc.total_lines, Kokkos::AUTO()).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
@@ -191,11 +185,6 @@ inline void compute_line_sweep_samples(
 
                 // NOTE(cmo): Integrate RIs -- assumption that interval_length is a multiple of step
                 i32 steps_to_merge = interval_length / step;
-                if (line_idx == 0) {
-                    Kokkos::single(Kokkos::PerTeam(team), [&](){
-                        printf("interval: %.1f, step: %.1f, steps_to_merge: %d, cascade_idx %d\n", interval_length, step, steps_to_merge, cascade_idx);
-                    });
-                }
                 Kokkos::parallel_for(
                     Kokkos::TeamVectorRange(team, line.num_samples),
                     [&] (const int t) {
@@ -218,8 +207,6 @@ inline void compute_line_sweep_samples(
     );
     Kokkos::fence();
     yakl::timer_stop("Extend lines");
-    fmt::println("Max I post extension {}", yakl::intrinsics::maxval(ls_storage.source_term));
-    fmt::println("Extension done");
 }
 
 template <int p_ax>
@@ -323,11 +310,12 @@ inline void interpolate_line_sweep_samples_to_cascade(
     i64 spatial_bounds = casc_state.probes_to_compute.num_active_probes(cascade_idx);
     DeviceProbesToCompute probe_coord_lookup = casc_state.probes_to_compute.bind(cascade_idx);
     const IntervalLength interval_length = cascade_interval_length(casc_state.num_cascades, cascade_idx);
+    // NOTE(cmo): This ensures the boundary conditions get properly incorporated.
+    constexpr bool clamp_inside = true;
 
     // NOTE(cmo): We could actually support preaveraging by not using it in the
     // above, but merging multiple directions into the same texel during the
     // interpolation... but we don't currently
-    fmt::println("Sweep interp start");
     dex_parallel_for(
         "Line Sweep Interp",
         FlatLoop<3>(
@@ -336,6 +324,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
             ray_subset.num_flat_dirs
         ),
         KOKKOS_LAMBDA (int theta_idx, i64 ks, int phi_idx) {
+            JasUse(clamp_inside);
             ivec2 probe_coord = probe_coord_lookup(ks);
             const int dir_by_dir_phi_idx = phi_idx;
             phi_idx += ray_subset.start_flat_dirs;
@@ -354,7 +343,6 @@ inline void interpolate_line_sweep_samples_to_cascade(
             vec2 p = probe_pos(probe_coord, cascade_idx);
 
             vec2 grid_pos = world_to_line_grid_pos(line_set, ls_data.lines(line_set.line_start_idx), p);
-            // printf("%d, %d, [%e, %e] -> [%e, %e] (%d, %d)\n", theta_idx, phi_idx, p(0), p(1), grid_pos(0), grid_pos(1), line_set.primary_axis, line_set.line_start_idx);
             fp_t line_idx, t_idx;
             if (p_ax == 0) {
                 line_idx = grid_pos(0);
@@ -366,8 +354,10 @@ inline void interpolate_line_sweep_samples_to_cascade(
             // NOTE(cmo): Offset for start of interval
             t_idx -= interval_length.from / step_size;
 
-            if (line_idx < FP(0.0)) {
-                return;
+            if constexpr (!clamp_inside) {
+                if (line_idx < FP(0.0)) {
+                    return;
+                }
             }
 
             const int li = i32(line_idx);
@@ -387,13 +377,18 @@ inline void interpolate_line_sweep_samples_to_cascade(
             RadianceInterval<DexEmpty> interp_ri{
                 .tau = FP(1.0)
             };
+
             #pragma unroll
             for (int i = 0; i < 2; ++i) {
                 int l_idx = lis(i);
                 fp_t l_wgt = liw(i);
-
-                if (l_idx >= line_set.num_lines) {
-                    continue;
+                if constexpr (clamp_inside) {
+                    // clamp to range [0, n)
+                    l_idx = std::min(u32(l_idx), u32(line_set.num_lines-1));
+                } else {
+                    if (l_idx >= line_set.num_lines) {
+                        continue;
+                    }
                 }
 
                 int line_base_idx = line_set.line_start_idx + l_idx;
@@ -414,17 +409,19 @@ inline void interpolate_line_sweep_samples_to_cascade(
                     int s_idx = sis(j);
                     fp_t s_wgt = siw(j);
 
-                    if (s_idx < 0 or s_idx >= ls_data.lines(line_base_idx).num_samples) {
-                        continue;
+                    if constexpr (clamp_inside) {
+                        // clamp to range [0, n)
+                        s_idx = std::min(u32(s_idx), u32(ls_data.lines(line_base_idx).num_samples-1));
+                    } else {
+                        if (s_idx < 0 or s_idx >= ls_data.lines(line_base_idx).num_samples) {
+                            continue;
+                        }
                     }
 
                     const fp_t I_sample = ls_storage.source_term(theta_idx, line_storage_base_idx + s_idx);
                     const fp_t trans_sample = ls_storage.transmittance(theta_idx, line_storage_base_idx + s_idx);
                     interp_ri.I += l_wgt * s_wgt * I_sample;
                     interp_ri.tau -= l_wgt * s_wgt * (FP(1.0) - trans_sample);
-                    if (probe_coord(0) == 16 && probe_coord(1) == 16 && dir_by_dir_phi_idx == 0) {
-                        printf("%.3e, %.3e l: %.3e s: %.3e, step_size: %f\n", I_sample, trans_sample, l_wgt, s_wgt, step_size);
-                    }
                 }
             }
 
@@ -435,8 +432,6 @@ inline void interpolate_line_sweep_samples_to_cascade(
         }
     );
     Kokkos::fence();
-    fmt::println("Sweep Interp Done");
-    fmt::println("Max I post-interp: {}, min tau: {}", yakl::intrinsics::maxval(dev_casc_state.cascade_I), yakl::intrinsics::minval(dev_casc_state.cascade_tau));
 
 }
 

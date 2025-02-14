@@ -43,7 +43,7 @@ typedef fp_t GammaFp;
 // 16, defining the number of inclination rays used in a Gauss-Radau quadrature
 // over 1 hemisphere (of y).
 
-#define FLATLAND
+// #define FLATLAND
 #ifdef FLATLAND
 constexpr int NUM_INCL = 1;
 #else
@@ -55,7 +55,7 @@ constexpr int NUM_INCL = 8;
 // Number of threads to set up to treat contiguously. These all take the same
 // steps through the grid, at different wavelengths and inclinations as
 // necessary. 32 works well in most places, but can be lowered to reduce memory.
-constexpr int DEXRT_WARP_SIZE = 4;
+constexpr int DEXRT_WARP_SIZE = 32;
 
 // Whether to store the cascades containing tau. These aren't directly necessary
 // for RC methods other than ParallaxFixInner, and can halve the memory
@@ -89,7 +89,7 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(2.0);
+constexpr fp_t PROBE0_LENGTH = FP(1.0);
 // The number of rays to trace on cascade 0
 constexpr int PROBE0_NUM_RAYS = 4;
 

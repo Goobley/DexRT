@@ -9,6 +9,7 @@ constexpr int RC_PREAVERAGE = 0x2;
 constexpr int RC_SAMPLE_BC = 0x4;
 constexpr int RC_COMPUTE_ALO = 0x8;
 constexpr int RC_DIR_BY_DIR = 0x10;
+constexpr int RC_LINE_SWEEP = 0x20; // NOTE(cmo) only added in one place to flag for BC handling
 
 struct RcFlags {
     bool dynamic = false;

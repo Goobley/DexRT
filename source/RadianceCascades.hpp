@@ -795,7 +795,6 @@ void cascade_i_25d(
             }
         }
     } else if (RAYMARCH_TYPE == RaymarchType::LineSweep) {
-        fmt::println("-- Cascade {}", cascade_idx);
         for (int wave = 0; wave < wave_batch; ++wave) {
             compute_line_sweep_samples<RcMode>(state, casc_state, cascade_idx, subset, wave, mip_chain);
             interpolate_line_sweep_samples_to_cascade<RcMode>(state, casc_state, cascade_idx, subset, wave);
@@ -804,7 +803,6 @@ void cascade_i_25d(
                 continue;
             }
 
-            fmt::println("merge with upper start");
             dex_parallel_for(
                 "Merge samples with upper cascade",
                 FlatLoop<3>(
@@ -861,7 +859,6 @@ void cascade_i_25d(
                 }
             );
             Kokkos::fence();
-            fmt::println("merge with upper done");
         }
     }
 
