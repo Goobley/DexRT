@@ -111,8 +111,8 @@ struct CascadeLineSet {
 };
 
 struct LineSweepStorage {
-    Fp2d source_term; // [incl, ks]
-    Fp2d transmittance; // [incl, ks]
+    Fp2d source_term; // [ks, incl]
+    Fp2d transmittance; // [ks, incl]
 };
 
 struct LineSweepData {

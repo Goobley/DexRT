@@ -6,6 +6,44 @@
 #include "CascadeState.hpp"
 #include "RayMarching.hpp"
 
+/// Extend using values in sc/tc and store in sc_desc/tc_dest
+KOKKOS_FORCEINLINE_FUNCTION void log2_extension(
+    const KTeam& team,
+    const ScratchView<fp_t*> sc_dest,
+    const ScratchView<fp_t*> tc_dest,
+    const ScratchView<fp_t*> sc,
+    const ScratchView<fp_t*> tc,
+    i32 num_samples,
+    i32 log2_offset
+) {
+    const i32 offset = 1 << log2_offset;
+    const i32 prev_offset = 1 << std::max(log2_offset - 1, 0);
+    Kokkos::parallel_for(
+        Kokkos::TeamVectorRange(team, num_samples),
+        [&] (const int t) {
+            i32 far_idx = t - offset;
+
+            const fp_t sc_sample = sc(t);
+            const fp_t tc_sample = tc(t);
+
+            // if (far_idx >= -offset && far_idx < prev_offset) {
+            if (far_idx >= -offset) {
+                far_idx = std::max(far_idx, 0);
+            } else {
+                sc_dest(t) = sc_sample;
+                tc_dest(t) = tc_sample;
+                return;
+            }
+
+            const fp_t far_sc = sc(far_idx);
+            const fp_t far_tc = tc(far_idx);
+
+            sc_dest(t) = far_sc * tc_sample + sc_sample;
+            tc_dest(t) = tc_sample * far_tc;
+        }
+    );
+}
+
 template <int RcMode>
 inline void compute_line_sweep_samples(
     const State& state,
@@ -147,29 +185,58 @@ inline void compute_line_sweep_samples(
             // NOTE(cmo): Writing to these isn't coalesced because we need
             // contiguous access to each line later, but still want to benefit
             // from coalesced access whilst tracing above.
-            ls_storage.source_term(theta_idx, line_step) = ri.I;
-            ls_storage.transmittance(theta_idx, line_step) = std::exp(-ri.tau);
+            ls_storage.source_term(line_step, theta_idx) = ri.I;
+            ls_storage.transmittance(line_step, theta_idx) = std::exp(-ri.tau);
         }
     );
     Kokkos::fence();
 
     // Launch co-operative groups -- one per line, and do the extensions
-    // TODO(cmo): This isn't proper log2 extensions, but it'll let us test
+    // NOTE(cmo): Whilst a good idea, for sane model sizes, these don't seem to
+    // profile much faster, and there's an issue with the treatment of the
+    // uppermost cascade due to its interval length being super long (to ensure
+    // the boundary is hit), which isn't clipped here.
+    constexpr bool do_log2_extensions = false;
     const IntervalLength int_length = cascade_interval_length(casc_state.num_cascades, cascade_idx);
     const fp_t interval_length = int_length.to - int_length.from;
+    const fp_t step_length = dir_set_desc.step;
+
+    i32 max_pow2 = 0;
+    if constexpr (do_log2_extensions) {
+        for (int i = 0; i < 14; ++i) {
+            i32 extension_length = 1 << i;
+            if ((i32(interval_length / step_length) % extension_length) == 0) {
+                max_pow2 = i;
+                continue;
+            }
+            break;
+        }
+    }
+    const fp_t log2_extended_length = step_length * (1 << max_pow2);
+    const i32 max_steps_to_merge = i32(interval_length / log2_extended_length);
     size_t scratch_size = 2 * ScratchView<fp_t*>::shmem_size(dir_set_desc.max_line_steps);
+    if constexpr (do_log2_extensions) {
+        scratch_size += 2 * ScratchView<fp_t*>::shmem_size(dir_set_desc.max_line_steps);
+    }
     const int num_incl = state.c0_size.num_incl;
     yakl::timer_start("Extend lines");
     Kokkos::parallel_for(
         "Extend lines",
-        Kokkos::TeamPolicy(dir_set_desc.total_lines, Kokkos::AUTO()).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+        Kokkos::TeamPolicy(dir_set_desc.total_lines, std::min(DEXRT_WARP_SIZE, 32)).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
         KOKKOS_LAMBDA (const KTeam& team) {
-            ScratchView<fp_t*> source_copy(team.team_scratch(0), dir_set_desc.max_line_steps);
-            ScratchView<fp_t*> trans_copy(team.team_scratch(0), dir_set_desc.max_line_steps);
+            ScratchView<fp_t*> source_copy_0(team.team_scratch(0), dir_set_desc.max_line_steps);
+            ScratchView<fp_t*> trans_copy_0(team.team_scratch(0), dir_set_desc.max_line_steps);
+            ScratchView<fp_t*> source_copy_1;
+            ScratchView<fp_t*> trans_copy_1;
+            JasUse(do_log2_extensions, max_pow2);
+            if constexpr (do_log2_extensions) {
+                source_copy_1 = decltype(source_copy_1)(team.team_scratch(0), dir_set_desc.max_line_steps);
+                trans_copy_1 = decltype(trans_copy_1)(team.team_scratch(0), dir_set_desc.max_line_steps);
+            }
+            const auto& source_copy = source_copy_0;
+            const auto& trans_copy = trans_copy_0;
             const i32 line_idx = team.league_rank();
             const auto& line = ls_data.lines(line_idx);
-            const auto& dir_set_desc = ls_data.dir_set_desc;
-            const fp_t step = dir_set_desc.step;
             const i32 line_start = ls_data.line_storage_start_idx(line_idx);
 
             for (int theta_idx = 0; theta_idx < num_incl; ++theta_idx) {
@@ -177,28 +244,72 @@ inline void compute_line_sweep_samples(
                 Kokkos::parallel_for(
                     Kokkos::TeamVectorRange(team, line.num_samples),
                     [&] (const int t) {
-                        source_copy(t) = ls_storage.source_term(theta_idx, line_start + t);
-                        trans_copy(t) = ls_storage.transmittance(theta_idx, line_start + t);
+                        source_copy(t) = ls_storage.source_term(line_start + t, theta_idx);
+                        trans_copy(t) = ls_storage.transmittance(line_start + t, theta_idx);
                     }
                 );
                 team.team_barrier();
 
+                if constexpr (do_log2_extensions) {
+                    // NOTE(cmo): We need to pingpong between sc/1
+                    const auto& sc = source_copy;
+                    const auto& tc = trans_copy;
+                    const auto& sc1 = source_copy_1;
+                    const auto& tc1 = trans_copy_1;
+                    for (int e = 0; e < max_pow2; ++e) {
+                        if (e & 1) {
+                            log2_extension(
+                                team,
+                                sc,
+                                tc,
+                                sc1,
+                                tc1,
+                                line.num_samples,
+                                e
+                            );
+                        } else {
+                            log2_extension(
+                                team,
+                                sc1,
+                                tc1,
+                                sc,
+                                tc,
+                                line.num_samples,
+                                e
+                            );
+                        }
+                        team.team_barrier();
+                    }
+                }
+
+                // select final log2_extension dest
+                auto& source_copy_dest = (do_log2_extensions && (max_pow2 & 1)) ? source_copy_1 : source_copy;
+                auto& trans_copy_dest = (do_log2_extensions && (max_pow2 & 1)) ? trans_copy_1 : trans_copy;
+
                 // NOTE(cmo): Integrate RIs -- assumption that interval_length is a multiple of step
-                i32 steps_to_merge = interval_length / step;
+                const i32 steps_to_merge = interval_length / log2_extended_length;
+                const i32 grid_step_size = do_log2_extensions ? (1 << max_pow2) : 1;
                 Kokkos::parallel_for(
                     Kokkos::TeamVectorRange(team, line.num_samples),
                     [&] (const int t) {
-                        i32 starting_sample_idx = t - (steps_to_merge - 1);
-                        starting_sample_idx = std::max(starting_sample_idx, 0);
+                        i32 starting_sample_idx = t - ((steps_to_merge - 1) * grid_step_size);
+                        if constexpr (!do_log2_extensions) {
+                            starting_sample_idx = std::max(starting_sample_idx, 0);
+                        }
 
                         fp_t source_acc = FP(0.0);
                         fp_t trans_acc = FP(1.0);
-                        for (int sample_idx = starting_sample_idx; sample_idx < (t + 1); ++sample_idx) {
-                            source_acc = source_copy(sample_idx) + source_acc * trans_copy(sample_idx);
-                            trans_acc *= trans_copy(sample_idx);
+                        for (int sample_idx = starting_sample_idx; sample_idx < (t + 1); sample_idx += grid_step_size) {
+                            if constexpr (do_log2_extensions) {
+                                if (sample_idx < 0) {
+                                    continue;
+                                }
+                            }
+                            source_acc = source_copy_dest(sample_idx) + source_acc * trans_copy_dest(sample_idx);
+                            trans_acc *= trans_copy_dest(sample_idx);
                         }
-                        ls_storage.source_term(theta_idx, line_start + t) = source_acc;
-                        ls_storage.transmittance(theta_idx, line_start + t) = trans_acc;
+                        ls_storage.source_term(line_start + t, theta_idx) = source_acc;
+                        ls_storage.transmittance(line_start + t, theta_idx) = trans_acc;
                     }
                 );
                 team.team_barrier();
@@ -312,6 +423,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
     const IntervalLength interval_length = cascade_interval_length(casc_state.num_cascades, cascade_idx);
     // NOTE(cmo): This ensures the boundary conditions get properly incorporated.
     constexpr bool clamp_inside = true;
+    const fp_t inv_step_size = FP(1.0) / ls_data.dir_set_desc.step;
     // constexpr bool clamp_inside = RcMode & RC_SAMPLE_BC;
     // constexpr bool clamp_inside = false;
 
@@ -321,11 +433,12 @@ inline void interpolate_line_sweep_samples_to_cascade(
     dex_parallel_for(
         "Line Sweep Interp",
         FlatLoop<3>(
-            ray_subset.num_incl,
+            ray_subset.num_flat_dirs,
             spatial_bounds,
-            ray_subset.num_flat_dirs
+            ray_subset.num_incl
         ),
-        KOKKOS_LAMBDA (int theta_idx, i64 ks, int phi_idx) {
+        // KOKKOS_LAMBDA (int theta_idx, i64 ks, int phi_idx) {
+        KOKKOS_LAMBDA (int phi_idx, i64 ks, int theta_idx) {
             JasUse(clamp_inside);
             ivec2 probe_coord = probe_coord_lookup(ks);
             const int dir_by_dir_phi_idx = phi_idx;
@@ -341,7 +454,6 @@ inline void interpolate_line_sweep_samples_to_cascade(
 
             const auto& line_set = ls_data.line_set_desc(dir_by_dir_phi_idx);
             const int p_ax = line_set.primary_axis;
-            const fp_t step_size = line_set.step;
             vec2 p = probe_pos(probe_coord, cascade_idx);
 
             vec2 grid_pos = world_to_line_grid_pos(line_set, ls_data.lines(line_set.line_start_idx), p);
@@ -354,7 +466,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
                 t_idx = grid_pos(0);
             }
             // NOTE(cmo): Offset for start of interval
-            t_idx -= interval_length.from / step_size;
+            t_idx -= interval_length.from * inv_step_size;
 
             if constexpr (!clamp_inside) {
                 if (line_idx < FP(0.0)) {
@@ -395,7 +507,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
 
                 int line_base_idx = line_set.line_start_idx + l_idx;
                 int line_storage_base_idx = ls_data.line_storage_start_idx(line_base_idx);
-                const fp_t step_idx = t_idx - ls_data.lines(line_base_idx).first_sample / step_size;
+                const fp_t step_idx = t_idx - ls_data.lines(line_base_idx).first_sample * inv_step_size;
                 const int si = i32(std::floor(step_idx));
                 const int sip = si + 1;
                 const fp_t sipw = fp_t(sip) - step_idx;
@@ -420,8 +532,8 @@ inline void interpolate_line_sweep_samples_to_cascade(
                         }
                     }
 
-                    const fp_t I_sample = ls_storage.source_term(theta_idx, line_storage_base_idx + s_idx);
-                    const fp_t trans_sample = ls_storage.transmittance(theta_idx, line_storage_base_idx + s_idx);
+                    const fp_t I_sample = ls_storage.source_term(line_storage_base_idx + s_idx, theta_idx);
+                    const fp_t trans_sample = ls_storage.transmittance(line_storage_base_idx + s_idx, theta_idx);
                     interp_ri.I += l_wgt * s_wgt * I_sample;
                     interp_ri.tau -= l_wgt * s_wgt * (FP(1.0) - trans_sample);
                 }
