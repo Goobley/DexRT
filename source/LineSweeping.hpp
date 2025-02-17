@@ -53,7 +53,7 @@ inline void compute_line_sweep_samples(
             dir_set_desc.total_steps,
             ray_subset.num_incl
         ),
-        YAKL_LAMBDA (int line_step, int theta_idx) {
+        KOKKOS_LAMBDA (int line_step, int theta_idx) {
             // NOTE(cmo): find line associated with sample.
             const i32 line_idx = upper_bound(ls_data.line_storage_start_idx, line_step) - 1;
             // NOTE(cmo): find line set associated with line
@@ -312,6 +312,8 @@ inline void interpolate_line_sweep_samples_to_cascade(
     const IntervalLength interval_length = cascade_interval_length(casc_state.num_cascades, cascade_idx);
     // NOTE(cmo): This ensures the boundary conditions get properly incorporated.
     constexpr bool clamp_inside = true;
+    // constexpr bool clamp_inside = RcMode & RC_SAMPLE_BC;
+    // constexpr bool clamp_inside = false;
 
     // NOTE(cmo): We could actually support preaveraging by not using it in the
     // above, but merging multiple directions into the same texel during the
@@ -384,7 +386,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
                 fp_t l_wgt = liw(i);
                 if constexpr (clamp_inside) {
                     // clamp to range [0, n)
-                    l_idx = std::min(u32(l_idx), u32(line_set.num_lines-1));
+                    l_idx = std::min(std::max(l_idx, 0), line_set.num_lines-1);
                 } else {
                     if (l_idx >= line_set.num_lines) {
                         continue;
@@ -411,7 +413,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
 
                     if constexpr (clamp_inside) {
                         // clamp to range [0, n)
-                        s_idx = std::min(u32(s_idx), u32(ls_data.lines(line_base_idx).num_samples-1));
+                        s_idx = std::min(std::max(s_idx, 0), ls_data.lines(line_base_idx).num_samples-1);
                     } else {
                         if (s_idx < 0 or s_idx >= ls_data.lines(line_base_idx).num_samples) {
                             continue;

@@ -89,7 +89,7 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(1.0);
+constexpr fp_t PROBE0_LENGTH = FP(2.0);
 // The number of rays to trace on cascade 0
 constexpr int PROBE0_NUM_RAYS = 4;
 
@@ -154,7 +154,7 @@ enum class RaymarchType {
     LineSweep
 };
 // Whether to raymarch or linesweep
-constexpr RaymarchType RAYMARCH_TYPE = RaymarchType::LineSweep;
+constexpr RaymarchType RAYMARCH_TYPE = RaymarchType::Raymarch;
 // Level to start sweeping on (classical march at levels lower than this)
 constexpr int LINE_SWEEP_START_CASCADE = 2;
 
