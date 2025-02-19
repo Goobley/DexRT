@@ -34,8 +34,10 @@ typedef yakl::SArray<fp_t, 1, 2> vec2;
 typedef yakl::SArray<fp_t, 1, 3> vec3;
 typedef yakl::SArray<fp_t, 1, 4> vec4;
 typedef yakl::SArray<fp_t, 2, 2, 2> mat2x2;
-typedef yakl::SArray<int, 2, 2, 2> imat2x2;
+typedef yakl::SArray<int32_t, 2, 2, 2> imat2x2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
+typedef yakl::SArray<int32_t, 1, 3> ivec3;
+typedef yakl::SArray<int32_t, 1, 4> ivec4;
 
 typedef Kokkos::LayoutRight Layout;
 template <class T, typename... Args>

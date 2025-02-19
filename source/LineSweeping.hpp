@@ -185,8 +185,8 @@ inline void compute_line_sweep_samples(
             // NOTE(cmo): Writing to these isn't coalesced because we need
             // contiguous access to each line later, but still want to benefit
             // from coalesced access whilst tracing above.
-            ls_storage.source_term(line_step, theta_idx) = ri.I;
-            ls_storage.transmittance(line_step, theta_idx) = std::exp(-ri.tau);
+            ls_storage.source_term(theta_idx, line_step) = ri.I;
+            ls_storage.transmittance(theta_idx, line_step) = std::exp(-ri.tau);
         }
     );
     Kokkos::fence();
@@ -244,8 +244,8 @@ inline void compute_line_sweep_samples(
                 Kokkos::parallel_for(
                     Kokkos::TeamVectorRange(team, line.num_samples),
                     [&] (const int t) {
-                        source_copy(t) = ls_storage.source_term(line_start + t, theta_idx);
-                        trans_copy(t) = ls_storage.transmittance(line_start + t, theta_idx);
+                        source_copy(t) = ls_storage.source_term(theta_idx, line_start + t);
+                        trans_copy(t) = ls_storage.transmittance(theta_idx, line_start + t);
                     }
                 );
                 team.team_barrier();
@@ -308,8 +308,8 @@ inline void compute_line_sweep_samples(
                             source_acc = source_copy_dest(sample_idx) + source_acc * trans_copy_dest(sample_idx);
                             trans_acc *= trans_copy_dest(sample_idx);
                         }
-                        ls_storage.source_term(line_start + t, theta_idx) = source_acc;
-                        ls_storage.transmittance(line_start + t, theta_idx) = trans_acc;
+                        ls_storage.source_term(theta_idx, line_start + t) = source_acc;
+                        ls_storage.transmittance(theta_idx, line_start + t) = trans_acc;
                     }
                 );
                 team.team_barrier();
@@ -432,25 +432,17 @@ inline void interpolate_line_sweep_samples_to_cascade(
     // interpolation... but we don't currently
     dex_parallel_for(
         "Line Sweep Interp",
-        FlatLoop<3>(
+        FlatLoop<2>(
             ray_subset.num_flat_dirs,
-            spatial_bounds,
-            ray_subset.num_incl
+            spatial_bounds
+            // ray_subset.num_incl
         ),
         // KOKKOS_LAMBDA (int theta_idx, i64 ks, int phi_idx) {
-        KOKKOS_LAMBDA (int phi_idx, i64 ks, int theta_idx) {
+        KOKKOS_LAMBDA (int phi_idx, i64 ks) {
             JasUse(clamp_inside);
             ivec2 probe_coord = probe_coord_lookup(ks);
             const int dir_by_dir_phi_idx = phi_idx;
             phi_idx += ray_subset.start_flat_dirs;
-            theta_idx += ray_subset.start_incl;
-
-            ProbeIndex probe_idx{
-                .coord = probe_coord,
-                .dir = phi_idx,
-                .incl = theta_idx,
-                .wave = wave
-            };
 
             const auto& line_set = ls_data.line_set_desc(dir_by_dir_phi_idx);
             const int p_ax = line_set.primary_axis;
@@ -474,75 +466,102 @@ inline void interpolate_line_sweep_samples_to_cascade(
                 }
             }
 
+            constexpr int neg_sentinel = -60000;
+            auto clamp_or_set_neg = [&](int v, int max_val) {
+                if constexpr (clamp_inside) {
+                    // clamp to range [0, n)
+                    return std::min(std::max(v, 0), max_val);
+                } else {
+                    return neg_sentinel;
+                }
+            };
+
             const int li = i32(line_idx);
             const int lip = li + 1;
             const fp_t lipw = fp_t(lip) - line_idx;
             ivec2 lis;
-            lis(0) = li;
-            lis(1) = lip;
+            lis(0) = clamp_or_set_neg(li, line_set.num_lines-1);
+            lis(1) = clamp_or_set_neg(lip, line_set.num_lines-1);
             vec2 liw;
             liw(0) = lipw;
             liw(1) = FP(1.0) - lipw;
 
-            // NOTE(cmo): In this loop "tau" is still transmittance. Starting
-            // with a transmittance of one and then subtract absorption means
-            // that points that don't sample outside the grid have no opacity
-            // (and so merge with upper cascades/boundaries)
-            RadianceInterval<DexEmpty> interp_ri{
-                .tau = FP(1.0)
-            };
-
+            ivec4 sis;
+            vec4 siw;
             #pragma unroll
             for (int i = 0; i < 2; ++i) {
                 int l_idx = lis(i);
                 fp_t l_wgt = liw(i);
-                if constexpr (clamp_inside) {
-                    // clamp to range [0, n)
-                    l_idx = std::min(std::max(l_idx, 0), line_set.num_lines-1);
-                } else {
-                    if (l_idx >= line_set.num_lines) {
+                if constexpr (!clamp_inside) {
+                    if (l_idx == neg_sentinel) {
                         continue;
                     }
                 }
 
                 int line_base_idx = line_set.line_start_idx + l_idx;
-                int line_storage_base_idx = ls_data.line_storage_start_idx(line_base_idx);
                 const fp_t step_idx = t_idx - ls_data.lines(line_base_idx).first_sample * inv_step_size;
                 const int si = i32(std::floor(step_idx));
                 const int sip = si + 1;
                 const fp_t sipw = fp_t(sip) - step_idx;
-                ivec2 sis;
-                sis(0) = si;
-                sis(1) = sip;
-                vec2 siw;
-                siw(0) = sipw;
-                siw(1) = FP(1.0) - sipw;
+                const int max_sample = ls_data.lines(line_base_idx).num_samples - 1;
+                sis(i * 2 + 0) = clamp_or_set_neg(si, max_sample);
+                sis(i * 2 + 1) = clamp_or_set_neg(sip, max_sample);
+                siw(i * 2 + 0) = sipw;
+                siw(i * 2 + 1) = FP(1.0) - sipw;
+            }
+
+            for (int theta_idx = ray_subset.start_incl; theta_idx < ray_subset.start_incl + ray_subset.num_incl; ++theta_idx) {
+                ProbeIndex probe_idx{
+                    .coord = probe_coord,
+                    .dir = phi_idx,
+                    .incl = theta_idx,
+                    .wave = wave
+                };
+                // NOTE(cmo): In this loop "tau" is still transmittance. Starting
+                // with a transmittance of one and then subtract absorption means
+                // that points that don't sample outside the grid have no opacity
+                // (and so merge with upper cascades/boundaries)
+                RadianceInterval<DexEmpty> interp_ri{
+                    .tau = FP(1.0)
+                };
+
 
                 #pragma unroll
-                for (int j = 0; j < 2; ++j) {
-                    int s_idx = sis(j);
-                    fp_t s_wgt = siw(j);
-
-                    if constexpr (clamp_inside) {
-                        // clamp to range [0, n)
-                        s_idx = std::min(std::max(s_idx, 0), ls_data.lines(line_base_idx).num_samples-1);
-                    } else {
-                        if (s_idx < 0 or s_idx >= ls_data.lines(line_base_idx).num_samples) {
+                for (int i = 0; i < 2; ++i) {
+                    int l_idx = lis(i);
+                    fp_t l_wgt = liw(i);
+                    if constexpr (!clamp_inside) {
+                        if (l_idx == neg_sentinel) {
                             continue;
                         }
                     }
 
-                    const fp_t I_sample = ls_storage.source_term(line_storage_base_idx + s_idx, theta_idx);
-                    const fp_t trans_sample = ls_storage.transmittance(line_storage_base_idx + s_idx, theta_idx);
-                    interp_ri.I += l_wgt * s_wgt * I_sample;
-                    interp_ri.tau -= l_wgt * s_wgt * (FP(1.0) - trans_sample);
-                }
-            }
+                    int line_base_idx = line_set.line_start_idx + l_idx;
+                    int line_storage_base_idx = ls_data.line_storage_start_idx(line_base_idx);
 
-            i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
-            interp_ri.tau = std::min(-std::log(std::max(interp_ri.tau, FP(1e-15))), FP(1e3));
-            dev_casc_state.cascade_I(lin_idx) = interp_ri.I;
-            dev_casc_state.cascade_tau(lin_idx) = interp_ri.tau;
+                    #pragma unroll
+                    for (int j = 0; j < 2; ++j) {
+                        int s_idx = sis(2 * i + j);
+                        fp_t s_wgt = siw(2 * i + j);
+
+                        if constexpr (!clamp_inside) {
+                            if (s_idx == neg_sentinel) {
+                                continue;
+                            }
+                        }
+
+                        const fp_t I_sample = ls_storage.source_term(theta_idx, line_storage_base_idx + s_idx);
+                        const fp_t trans_sample = ls_storage.transmittance(theta_idx, line_storage_base_idx + s_idx);
+                        interp_ri.I += l_wgt * s_wgt * I_sample;
+                        interp_ri.tau -= l_wgt * s_wgt * (FP(1.0) - trans_sample);
+                    }
+                }
+
+                i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
+                interp_ri.tau = std::min(-std::log(std::max(interp_ri.tau, FP(1e-15))), FP(1e3));
+                dev_casc_state.cascade_I(lin_idx) = interp_ri.I;
+                dev_casc_state.cascade_tau(lin_idx) = interp_ri.tau;
+            }
         }
     );
     Kokkos::fence();

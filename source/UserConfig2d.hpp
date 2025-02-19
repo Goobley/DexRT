@@ -156,7 +156,7 @@ enum class RaymarchType {
 // Whether to raymarch or linesweep
 constexpr RaymarchType RAYMARCH_TYPE = RaymarchType::LineSweep;
 // Level to start sweeping on (classical march at levels lower than this)
-constexpr int LINE_SWEEP_START_CASCADE = 2;
+constexpr int LINE_SWEEP_START_CASCADE = 3;
 
 /*== Line emissivity/opacity =================================================*/
 

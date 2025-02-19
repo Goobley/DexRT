@@ -166,8 +166,8 @@ LineSweepData construct_line_sweep_data(const State& state, int max_cascade) {
 
     // NOTE(cmo): This doesn't include space for each wavelength.
     LineSweepStorage storage {
-        .source_term = Fp2d("ls_source", max_entries, state.c0_size.num_incl),
-        .transmittance = Fp2d("ls_trans", max_entries, state.c0_size.num_incl)
+        .source_term = Fp2d("ls_source", state.c0_size.num_incl, max_entries),
+        .transmittance = Fp2d("ls_trans", state.c0_size.num_incl, max_entries)
     };
 
     return LineSweepData{
