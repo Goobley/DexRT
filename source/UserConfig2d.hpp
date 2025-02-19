@@ -60,8 +60,7 @@ constexpr int DEXRT_WARP_SIZE = 32;
 // Whether to store the cascades containing tau. These aren't directly necessary
 // for RC methods other than ParallaxFixInner, and can halve the memory
 // consumption of the cascades -- which aren't currently stored sparsely.
-// The storage of these is also needed for line-sweeping
-constexpr bool STORE_TAU_CASCADES = true;
+constexpr bool STORE_TAU_CASCADES = false;
 
 // Whether to store all cascades, e.g. for saving or debugging, or simply
 // "ping-pong" between two cascades, merging as we go between cascade i+1 and i.
@@ -89,7 +88,7 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(2.0);
+constexpr fp_t PROBE0_LENGTH = FP(1.5);
 // The number of rays to trace on cascade 0
 constexpr int PROBE0_NUM_RAYS = 4;
 
@@ -117,7 +116,7 @@ constexpr bool PREAVERAGE = false;
 // Whether to treat the subset of each cascade associated with each ray of C0
 // separately. This is a good default with good memory savings, but is
 // incompatible with the parallax fixes.
-constexpr bool DIR_BY_DIR = false;
+constexpr bool DIR_BY_DIR = true;
 
 constexpr const char* RcConfigurationNames[4] = {
     "Vanilla",
@@ -154,7 +153,7 @@ enum class RaymarchType {
     LineSweep
 };
 // Whether to raymarch or linesweep
-constexpr RaymarchType RAYMARCH_TYPE = RaymarchType::LineSweep;
+constexpr RaymarchType RAYMARCH_TYPE = RaymarchType::Raymarch;
 // Level to start sweeping on (classical march at levels lower than this)
 constexpr int LINE_SWEEP_START_CASCADE = 2;
 

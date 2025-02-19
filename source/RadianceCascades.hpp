@@ -798,67 +798,6 @@ void cascade_i_25d(
         for (int wave = 0; wave < wave_batch; ++wave) {
             compute_line_sweep_samples<RcMode>(state, casc_state, cascade_idx, subset, wave, mip_chain);
             interpolate_line_sweep_samples_to_cascade<RcMode>(state, casc_state, cascade_idx, subset, wave);
-
-            if (lookup.ip == -1) {
-                continue;
-            }
-
-            dex_parallel_for(
-                "Merge samples with upper cascade",
-                FlatLoop<3>(
-                    spatial_bounds,
-                    ray_subset.num_flat_dirs,
-                    ray_subset.num_incl
-                ),
-                YAKL_LAMBDA (i64 ks, int phi_idx, int theta_idx) {
-                    ivec2 probe_coord = probe_coord_lookup(ks);
-                    phi_idx += ray_subset.start_flat_dirs;
-                    theta_idx += ray_subset.start_incl;
-
-                    ProbeIndex this_probe{
-                        .coord=probe_coord,
-                        .dir=phi_idx,
-                        .incl=theta_idx,
-                        .wave=wave
-                    };
-                    const int upper_ray_start_idx = upper_ray_idx(this_probe.dir, dev_casc_state.n);
-                    const int num_rays_per_ray = upper_texels_per_ray<RcMode>(dev_casc_state.n);
-                    const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
-                    BilinearCorner base = bilinear_corner(this_probe.coord);
-                    vec4 weights = bilinear_weights(base);
-
-                    RadianceInterval<DexEmpty> interp;
-                    for (int bilin = 0; bilin < 4; ++bilin) {
-                        ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, bilin);
-                        for (
-                            int upper_ray_idx = upper_ray_start_idx;
-                            upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
-                            ++upper_ray_idx
-                        ) {
-                            ProbeIndex upper_probe{
-                                .coord = base.corner + bilin_offset,
-                                .dir = upper_ray_idx,
-                                .incl = this_probe.incl,
-                                .wave = this_probe.wave
-                            };
-                            const i64 upper_lin_idx = probe_linear_index<RcMode>(upper_dims, upper_probe);
-                            interp.I += ray_weight * weights(bilin) * dev_casc_state.upper_I(upper_lin_idx);
-                            interp.tau += ray_weight * weights(bilin) * dev_casc_state.upper_tau(upper_lin_idx);
-                        }
-                    }
-
-                    const i64 lin_idx = probe_linear_index<RcMode>(dims, this_probe);
-                    RadianceInterval ri;
-                    ri.I = dev_casc_state.cascade_I(lin_idx);
-                    ri.tau = dev_casc_state.cascade_tau(lin_idx);
-
-                    auto merged_ri = merge_intervals(ri, interp);
-
-                    dev_casc_state.cascade_I(lin_idx) = merged_ri.I;
-                    dev_casc_state.cascade_tau(lin_idx) = merged_ri.tau;
-                }
-            );
-            Kokkos::fence();
         }
     }
 

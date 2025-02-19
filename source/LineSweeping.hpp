@@ -403,13 +403,21 @@ inline void interpolate_line_sweep_samples_to_cascade(
     CascadeIdxs lookup = cascade_indices(casc_state, cascade_idx);
     Fp1d i_cascade_i = casc_state.i_cascades[lookup.i];
     Fp1d tau_cascade_i = casc_state.tau_cascades[lookup.i];
+    FpConst1d i_cascade_ip, tau_cascade_ip;
+    if (lookup.ip != -1) {
+        i_cascade_ip = casc_state.i_cascades[lookup.ip];
+        tau_cascade_ip = casc_state.tau_cascades[lookup.ip];
+    }
     CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
+    CascadeStorage upper_dims = cascade_size(state.c0_size, cascade_idx+1);
     DeviceCascadeState dev_casc_state {
         .num_cascades = casc_state.num_cascades,
         .n = cascade_idx,
         .casc_dims = dims,
         .cascade_I = i_cascade_i,
-        .cascade_tau = tau_cascade_i
+        .cascade_tau = tau_cascade_i,
+        .upper_I = i_cascade_ip,
+        .upper_tau = tau_cascade_ip
     };
 
     int ls_idx = line_sweep_data.get_cascade_subset_idx(cascade_idx, subset_idx);
@@ -541,8 +549,42 @@ inline void interpolate_line_sweep_samples_to_cascade(
 
             i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
             interp_ri.tau = std::min(-std::log(std::max(interp_ri.tau, FP(1e-15))), FP(1e3));
+
+            if (dev_casc_state.upper_I.initialized()) {
+                const int upper_ray_start_idx = upper_ray_idx(probe_idx.dir, dev_casc_state.n);
+                const int num_rays_per_ray = upper_texels_per_ray<RcMode>(dev_casc_state.n);
+                const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
+                BilinearCorner base = bilinear_corner(probe_idx.coord);
+                vec4 weights = bilinear_weights(base);
+
+                RadianceInterval<DexEmpty> upper;
+                for (int bilin = 0; bilin < 4; ++bilin) {
+                    ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, bilin);
+                    for (
+                        int upper_ray_idx = upper_ray_start_idx;
+                        upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
+                        ++upper_ray_idx
+                    ) {
+                        ProbeIndex upper_probe{
+                            .coord = base.corner + bilin_offset,
+                            .dir = upper_ray_idx,
+                            .incl = probe_idx.incl,
+                            .wave = probe_idx.wave
+                        };
+                        const i64 upper_lin_idx = probe_linear_index<RcMode>(upper_dims, upper_probe);
+                        upper.I += ray_weight * weights(bilin) * dev_casc_state.upper_I(upper_lin_idx);
+                        if constexpr (STORE_TAU_CASCADES) {
+                            upper.tau += ray_weight * weights(bilin) * dev_casc_state.upper_tau(upper_lin_idx);
+                        }
+                    }
+                }
+                interp_ri = merge_intervals(interp_ri, upper);
+            }
+
             dev_casc_state.cascade_I(lin_idx) = interp_ri.I;
-            dev_casc_state.cascade_tau(lin_idx) = interp_ri.tau;
+            if constexpr (STORE_TAU_CASCADES) {
+                dev_casc_state.cascade_tau(lin_idx) = interp_ri.tau;
+            }
         }
     );
     Kokkos::fence();

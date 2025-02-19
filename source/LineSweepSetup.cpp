@@ -28,10 +28,15 @@ KOKKOS_INLINE_FUNCTION vec2 select_origin(const vec2& dir, const GridBbox& bbox)
     return result;
 }
 
-CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, int subset_idx) {
+CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, int max_cascade, int subset_idx) {
     constexpr int RcMode = RC_flags_storage();
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
     const fp_t step = probe_spacing(cascade_idx);
+    const IntervalLength interval = cascade_interval_length(max_cascade, cascade_idx);
+    const fp_t interval_ratio = (interval.to - interval.from) / step;
+    if (interval_ratio != std::floor(interval_ratio)) {
+        throw std::runtime_error(fmt::format("Interval should be a multiple of step got {} ({}-{}) for a step of {} (cascade {}).", interval_ratio, interval.to, interval.from, step, cascade_idx));
+    }
     const auto& bbox = state.mr_block_map.block_map.bbox;
 
     int num_lines = 0;
@@ -154,7 +159,7 @@ LineSweepData construct_line_sweep_data(const State& state, int max_cascade) {
     std::vector<CascadeLineSet> cascade_sets;
     for (int cascade_idx = min_cascade; cascade_idx <= max_cascade; ++cascade_idx) {
         for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
-            cascade_sets.emplace_back(construct_line_sweep_subset(state, cascade_idx, subset_idx));
+            cascade_sets.emplace_back(construct_line_sweep_subset(state, cascade_idx, max_cascade, subset_idx));
         }
     }
 

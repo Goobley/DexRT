@@ -51,7 +51,6 @@ static_assert(
     "Parallax (reprojection) methods cannot be used with DIR_BY_DIR"
 );
 static_assert(! (!STORE_TAU_CASCADES && RC_CONFIG == RcConfiguration::ParallaxFixInner), "Need to store tau cascades for the inner parallax fix");
-static_assert(! (!STORE_TAU_CASCADES && RAYMARCH_TYPE == RaymarchType::LineSweep), "Need to store tau cascades when line sweeping");
 
 // NOTE(cmo): The contents of mip0 is determined by LINE_SCHEME, and determines
 // how we handle computing variance for mip-mapping.
