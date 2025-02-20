@@ -148,6 +148,10 @@ constexpr int PARALLAX_MERGE_ABOVE_CASCADE = 1;
 // When using RC_CONFIG == rParallaxFixInner, apply the modified merge above this cascade level (exclusive)
 constexpr int INNER_PARALLAX_MERGE_ABOVE_CASCADE = -1;
 
+constexpr const char* RaymarchTypeNames[2] = {
+    "Raymarch",
+    "LineSweep"
+};
 enum class RaymarchType {
     Raymarch,
     LineSweep

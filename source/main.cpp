@@ -480,6 +480,19 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         );
     }
 
+    std::string raymarch_type(RaymarchTypeNames[int(RAYMARCH_TYPE)]);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "raymarch_type", raymarch_type.size(), raymarch_type.c_str()),
+        __LINE__
+    );
+    if (RAYMARCH_TYPE == RaymarchType::LineSweep) {
+        i32 line_sweep_on_and_above = LINE_SWEEP_START_CASCADE;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "line_sweep_start_cascade", NC_INT, 1, &line_sweep_on_and_above),
+            __LINE__
+        );
+    }
+
     f64 probe0_length = PROBE0_LENGTH;
     ncwrap(
         nc_put_att_double(ncid, NC_GLOBAL, "probe0_length", NC_DOUBLE, 1, &probe0_length),

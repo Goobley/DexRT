@@ -99,6 +99,7 @@ Features/ToDo
         - Jrest from J and v
         - directly to rho
     - Paletou 1995 method?
+- [x] Support for linesweeping. Somewhat faster when treating non-sparse models, but surprisingly doesn't really win on dense models.
 
 
 Ideas
@@ -149,3 +150,4 @@ copying the mips out to 2d arrays for debugging.
     was activated...
 
 [ ] Magma 2.8.0 builds on nvhpc 24.7 (not on 24.9) but does not yield correct results. Current git HEAD works on 24.7
+    - [x] Magma not used by default now that we build on kokkos/kokkos-kernels
