@@ -9,7 +9,7 @@ int LineSweepData::get_cascade_subset_idx(int cascade_idx, int subset_idx) const
     return (cascade_idx - LINE_SWEEP_START_CASCADE) * num_subsets + subset_idx;
 }
 
-KOKKOS_INLINE_FUNCTION vec2 select_origin(const vec2& dir, const GridBbox& bbox) {
+KOKKOS_INLINE_FUNCTION vec2 select_origin(const vec2& dir, const GridBbox<2>& bbox) {
     vec2 result;
     result(0) = bbox.min(0);
     result(1) = bbox.min(1);

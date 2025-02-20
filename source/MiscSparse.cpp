@@ -48,8 +48,8 @@ SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLO
 yakl::Array<u8, 2, yakl::memDevice> reify_active_c0(const BlockMap<BLOCK_SIZE>& block_map) {
     yakl::Array<u8, 2, yakl::memDevice> result(
         "active c0",
-        block_map.num_z_tiles * BLOCK_SIZE,
-        block_map.num_x_tiles * BLOCK_SIZE
+        block_map.num_z_tiles() * BLOCK_SIZE,
+        block_map.num_x_tiles() * BLOCK_SIZE
     );
     result = 0;
     yakl::fence();
@@ -142,8 +142,8 @@ void rehydrate_page(
 }
 
 Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp2d& quantity) {
-    const int num_x = block_map.num_x_tiles * BLOCK_SIZE;
-    const int num_z = block_map.num_z_tiles * BLOCK_SIZE;
+    const int num_x = block_map.num_x_tiles() * BLOCK_SIZE;
+    const int num_z = block_map.num_z_tiles() * BLOCK_SIZE;
     Fp3dHost result(
         quantity.myname,
         quantity.extent(0),
@@ -168,8 +168,8 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
 Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp2dHost& quantity) {
     // NOTE(cmo): This is not efficient, it just reuses the GPU machinery,
     // copying a page of CPU memory over at a time
-    const int num_x = block_map.num_x_tiles * BLOCK_SIZE;
-    const int num_z = block_map.num_z_tiles * BLOCK_SIZE;
+    const int num_x = block_map.num_x_tiles() * BLOCK_SIZE;
+    const int num_z = block_map.num_z_tiles() * BLOCK_SIZE;
     Fp3dHost result(
         quantity.myname,
         quantity.extent(0),
@@ -195,7 +195,7 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
 
 Fp2dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp1d& quantity) {
     Fp2d qtyx1("1 x qty", quantity.data(), 1, quantity.extent(0));
-    Fp2d qty_page("qty_page", block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
+    Fp2d qty_page("qty_page", block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
     rehydrate_page(block_map, qtyx1, qty_page, 0);
     Fp2dHost result = qty_page.createHostCopy();
     return result;
@@ -296,7 +296,7 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
         for (int z = 0; z < curr_active_h.extent(0); ++z) {
             for (int x = 0; x < curr_active_h.extent(1); ++x) {
                 if (curr_active_h(z, x)) {
-                    probes_to_compute_morton(idx++) = encode_morton_2(Coord2{.x = x, .z = z});
+                    probes_to_compute_morton(idx++) = encode_morton(Coord2{.x = x, .z = z});
                 }
             }
         }
@@ -304,7 +304,7 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
         std::sort(probes_to_compute_morton.begin(), probes_to_compute_morton.end());
         yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("probes to compute", num_active, 2);
         for (int idx = 0; idx < num_active; ++idx) {
-            Coord2 coord = decode_morton_2(probes_to_compute_morton(idx));
+            Coord2 coord = decode_morton<2>(probes_to_compute_morton(idx));
             probes_to_compute_h(idx, 0) = coord.x;
             probes_to_compute_h(idx, 1) = coord.z;
         }

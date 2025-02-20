@@ -428,10 +428,10 @@ struct Raymarch2dArgs {
     const DynamicState& dyn_state;
 };
 
-YAKL_INLINE RaySegment ray_seg_from_ray_props(const RayProps& ray) {
+YAKL_INLINE RaySegment<2> ray_seg_from_ray_props(const RayProps& ray) {
     fp_t t1 = (ray.end(0) - ray.start(0)) / ray.dir(0);
 
-    return RaySegment(ray.start, ray.dir, FP(0.0), t1);
+    return RaySegment<2>(ray.start, ray.dir, FP(0.0), t1);
 }
 
 template <

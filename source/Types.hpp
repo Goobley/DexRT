@@ -33,9 +33,13 @@ typedef yakl::Array<fp_t const, 5, yakl::memHost> FpConst5dHost;
 typedef yakl::SArray<fp_t, 1, 2> vec2;
 typedef yakl::SArray<fp_t, 1, 3> vec3;
 typedef yakl::SArray<fp_t, 1, 4> vec4;
+template <int N>
+using vec = yakl::SArray<fp_t, 1, N>;
 typedef yakl::SArray<fp_t, 2, 2, 2> mat2x2;
 typedef yakl::SArray<int, 2, 2, 2> imat2x2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
+template <int N>
+using ivec = yakl::SArray<int32_t, 1, N>;
 
 typedef Kokkos::LayoutRight Layout;
 template <class T, typename... Args>
@@ -53,16 +57,37 @@ typedef DefaultExecutionSpace::scratch_memory_space ScratchSpace;
 template <class T>
 using ScratchView = KView<T, ScratchSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
-struct Coord2 {
+template <int N>
+struct Coord {
+};
+
+template <>
+struct Coord<2> {
     i32 x;
     i32 z;
 
-    YAKL_INLINE bool operator==(const Coord2& other) const {
+    YAKL_INLINE bool operator==(const Coord<2>& other) const {
         return (x == other.x) && (z == other.z);
     }
 };
 
-using yakl::Dims;
+template <>
+struct Coord<3> {
+    i32 x;
+    i32 y;
+    i32 z;
+
+    YAKL_INLINE bool operator==(const Coord<3>& other) const {
+        return (x == other.x) && (y == other.y) && (z == other.z);
+    }
+};
+
+typedef Coord<2> Coord2;
+typedef Coord<3> Coord3;
+
+template <int N>
+using Dims = Coord<N>;
+
 struct State;
 
 enum class DexrtMode {
@@ -184,22 +209,24 @@ struct CascadeCalcSubset {
     int subset_idx = 0;
 };
 
-struct Atmosphere {
+template <int NumDim=2>
+struct AtmosphereNd {
     fp_t voxel_scale;
     fp_t offset_x = FP(0.0);
     fp_t offset_y = FP(0.0);
     fp_t offset_z = FP(0.0);
     bool moving = false;
-    Fp2d temperature;
-    Fp2d pressure;
-    Fp2d ne;
-    Fp2d nh_tot;
-    Fp2d nh0;
-    Fp2d vturb;
-    Fp2d vx;
-    Fp2d vy;
-    Fp2d vz;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> temperature;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> pressure;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> ne;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> nh_tot;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> nh0;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> vturb;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> vx;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> vy;
+    yakl::Array<fp_t, NumDim, yakl::memDevice> vz;
 };
+typedef AtmosphereNd<2> Atmosphere;
 
 struct SparseAtmosphere {
     fp_t voxel_scale;

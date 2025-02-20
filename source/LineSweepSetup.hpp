@@ -21,7 +21,7 @@ struct LsLine {
         t1(t1_)
     {}
 
-    KOKKOS_INLINE_FUNCTION IntersectionResult intersects(const GridBbox& bbox, const vec2& d, fp_t step) const {
+    KOKKOS_INLINE_FUNCTION IntersectionResult intersects(const GridBbox<2>& bbox, const vec2& d, fp_t step) const {
         fp_t t0_ = t0;
         fp_t t1_ = t1;
 
@@ -65,7 +65,7 @@ struct LsLine {
         };
     }
 
-    KOKKOS_INLINE_FUNCTION bool clip(const GridBbox& bbox, const vec2& d, fp_t step) {
+    KOKKOS_INLINE_FUNCTION bool clip(const GridBbox<2>& bbox, const vec2& d, fp_t step) {
         IntersectionResult result = intersects(bbox, d, step);
         if (!result.intersects) {
             return false;

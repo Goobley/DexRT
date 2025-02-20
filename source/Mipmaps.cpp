@@ -159,7 +159,7 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
     // of mipping, and then divided by the number of sub blocks and placed into
     // max mip_level. max_mip_level then holds the max_mip_level + 1 s.t. 0 represents empty.
     yakl::Array<i32, 1, yakl::memDevice> mippable_entries("mippable entries", block_map.num_active_tiles);
-    yakl::Array<i32, 1, yakl::memDevice> max_mip_level("max mip entries", block_map.num_z_tiles * block_map.num_x_tiles);
+    yakl::Array<i32, 1, yakl::memDevice> max_mip_level("max mip entries", block_map.num_z_tiles() * block_map.num_x_tiles());
 
     const bool compute_criteria_on_base_array = (state.config.mode == DexrtMode::GivenFs) || (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest);
     const MipmapTolerance mip_config = {
