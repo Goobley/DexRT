@@ -178,10 +178,10 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
 
             const i32 upper_vox_size = vox_size / 2;
             i64 idxs[mip_block] = {
-                idx_gen.idx(level_m_1, coord.x, coord.z),
-                idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z),
-                idx_gen.idx(level_m_1, coord.x, coord.z+upper_vox_size),
-                idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z+upper_vox_size)
+                idx_gen.idx(level_m_1, coord),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z}),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x, .z = coord.z+upper_vox_size}),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z+upper_vox_size})
             };
             yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES> eta_star_mip;
             yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES> chi_star_mip;

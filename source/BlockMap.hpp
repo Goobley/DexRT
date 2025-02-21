@@ -12,6 +12,8 @@ struct GridBbox {
     yakl::SArray<i32, 1, NumDim> min;
     yakl::SArray<i32, 1, NumDim> max;
 };
+// NOTE(cmo): Whether to assume that GridBbox.min is always 0 (in practice, yes).
+constexpr bool assume_lower_tile_bound_0 = true;
 
 template <int NumDim=2, int mem_space=yakl::memDevice>
 struct BlockMapLookup {
@@ -114,8 +116,47 @@ struct DimIndex<3> {
     constexpr static i32 z = 2;
 };
 
-template <i32 BLOCK_SIZE, i32 NumDim=2, class Lookup=BlockMapLookup<NumDim>>
+namespace DexImpl {
+    template <int N=0>
+    KOKKOS_FORCEINLINE_FUNCTION int int_pow(int x) {
+        static_assert(N==0, "int_pow only defined for N = 1, 2, 3");
+        return 1;
+    }
+
+    template <>
+    KOKKOS_FORCEINLINE_FUNCTION int int_pow<1>(int x) {
+        return x;
+    }
+
+    template <>
+    KOKKOS_FORCEINLINE_FUNCTION int int_pow<2>(int x) {
+        return x * x;
+    }
+
+    template <>
+    KOKKOS_FORCEINLINE_FUNCTION int int_pow<3>(int x) {
+        return x * x * x;
+    }
+}
+
+// NOTE(cmo): This forward declare is a bit messy, but needed to let us define these in a different TU;
+template<i32 BLOCK_SIZE, i32 NumDim, class Lookup>
+struct BlockMap;
+
+template <i32 NumDim>
+struct BlockMapInit {
+    template <class BlockMap>
+    static void setup_dense(BlockMap*, Dims<NumDim>);
+
+    template <class BlockMap>
+    static void setup_sparse(BlockMap*, const AtmosphereNd<NumDim>&, fp_t);
+};
+extern template struct BlockMapInit<2>;
+extern template struct BlockMapInit<3>;
+
+template <i32 BlockSize, i32 NumDim=2, class Lookup=BlockMapLookup<NumDim>>
 struct BlockMap {
+    static constexpr i32 BLOCK_SIZE = BlockSize;
     yakl::SArray<i32, 1, NumDim> num_tiles;
     i32 num_active_tiles;
     GridBbox<NumDim> bbox;
@@ -124,95 +165,26 @@ struct BlockMap {
     yakl::Array<uint32_t, 1, yakl::memDevice> morton_traversal_order;
     yakl::Array<uint32_t, 1, yakl::memDevice> active_tiles;
 
-    void init(const Atmosphere& atmos, fp_t cutoff_temperature) {
-        if (atmos.temperature.extent(0) % BLOCK_SIZE != 0 || atmos.temperature.extent(1) % BLOCK_SIZE != 0) {
-            throw std::runtime_error("Grid is not a multiple of BLOCK_SIZE");
-        }
-        num_x_tiles() = atmos.temperature.extent(1) / BLOCK_SIZE;
-        num_z_tiles() = atmos.temperature.extent(0) / BLOCK_SIZE;
-        num_active_tiles = 0;
-        bbox.min(0) = 0;
-        bbox.min(1) = 0;
-        bbox.max(0) = atmos.temperature.extent(1);
-        bbox.max(1) = atmos.temperature.extent(0);
-
-        yakl::Array<uint32_t, 1, yakl::memHost> morton_order("morton_traversal_order", num_x_tiles() * num_z_tiles());
-        for (int z = 0; z < num_z_tiles(); ++z) {
-            for (int x = 0; x < num_x_tiles(); ++x) {
-                morton_order(z * num_x_tiles() + x) = encode_morton<NumDim>(Coord2{.x = x, .z = z});
-            }
-        }
-        std::sort(morton_order.begin(), morton_order.end());
-        morton_traversal_order = morton_order.createDeviceCopy();
-
-        lookup.init(Dims<2>{.x = num_x_tiles(), .z = num_z_tiles()});
-
-        yakl::Array<bool, 2, yakl::memDevice> active("active tiles", num_z_tiles(), num_x_tiles());
-        bool all_active = cutoff_temperature == FP(0.0);
-        if (all_active) {
-            active = true;
-            num_active_tiles = num_x_tiles() * num_z_tiles();
-        } else {
-            auto& temperature = atmos.temperature;
-            dex_parallel_for(
-                "Compute active cells",
-                FlatLoop<2>(num_z_tiles(), num_x_tiles()),
-                YAKL_LAMBDA (int zt, int xt) {
-                    active(zt, xt) = false;
-                    for (int z = zt * BLOCK_SIZE; z < (zt + 1) * BLOCK_SIZE; ++z) {
-                        for (int x = xt * BLOCK_SIZE; x < (xt + 1) * BLOCK_SIZE; ++x) {
-                            if (temperature(z, x) <= cutoff_temperature) {
-                                active(zt, xt) = true;
-                                return;
-                            }
-                        }
-                    }
-                }
-            );
-        }
-        yakl::fence();
-        auto active_host = active.createHostCopy();
-        auto lookup_host = lookup.createHostCopy();
-        i64 grid_idx = 0;
-
-        for (int m_idx = 0; m_idx < morton_order.extent(0); ++m_idx) {
-            Coord2 tile_index = decode_morton<NumDim>(morton_order(m_idx));
-            if (active_host(tile_index.z, tile_index.x)) {
-                // TODO(cmo): This is awful that the order needs to be swapped!
-                lookup_host(Coord2{.x = tile_index.x, .z = tile_index.z}) = grid_idx++;
-            }
-        }
-        num_active_tiles = grid_idx;
-        fmt::println("Num active tiles: {}/{} ({:.1f} %)", num_active_tiles, num_z_tiles() * num_x_tiles(), fp_t(num_active_tiles) / fp_t(num_z_tiles() * num_x_tiles()) * FP(100.0));
-        lookup = lookup_host.createDeviceCopy();
-
-        if (all_active) {
-            active_tiles = morton_traversal_order;
-        } else {
-            yakl::Array<uint32_t, 1, yakl::memHost> active_tiles_host("morton_traversal_active", num_active_tiles);
-            int entry = 0;
-            for (int m_idx = 0; m_idx < morton_order.extent(0); ++m_idx) {
-                uint32_t code = morton_order(m_idx);
-                Coord2 tile_index = decode_morton<NumDim>(morton_order(m_idx));
-                if (active_host(tile_index.z, tile_index.x)) {
-                    active_tiles_host(entry++) = code;
-                }
-            }
-            active_tiles = active_tiles_host.createDeviceCopy();
-        }
+    void init(const AtmosphereNd<NumDim>& atmos, fp_t cutoff_temperature) {
+        BlockMapInit<NumDim>::setup_sparse(this, atmos, cutoff_temperature);
     }
 
-    YAKL_INLINE
+    /// Everything active, no atmosphere, used for given fs
+    void init(Dims<NumDim> dims) {
+        BlockMapInit<NumDim>::setup_dense(this, dims);
+    }
+
+    KOKKOS_FORCEINLINE_FUNCTION
     i32& num_x_tiles() {
         return num_tiles(DimIndex<NumDim>::x);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32 num_x_tiles() const {
         return num_tiles(DimIndex<NumDim>::x);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32& num_y_tiles() {
         if constexpr (NumDim == 2) {
             KOKKOS_ASSERT(false);
@@ -220,7 +192,7 @@ struct BlockMap {
         return num_tiles(DimIndex<NumDim>::y);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32 num_y_tiles() const {
         if constexpr (NumDim == 2) {
             KOKKOS_ASSERT(false);
@@ -228,68 +200,37 @@ struct BlockMap {
         return num_tiles(DimIndex<NumDim>::y);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32& num_z_tiles() {
         return num_tiles(DimIndex<NumDim>::z);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32 num_z_tiles() const {
         return num_tiles(DimIndex<NumDim>::z);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i64 get_num_active_cells() const {
-        return num_active_tiles * square(BLOCK_SIZE);
+        return num_active_tiles * DexImpl::int_pow<NumDim>(BLOCK_SIZE);
     }
 
-    /// Everything active, no atmosphere, used for given fs
-    void init(i32 x_size, i32 z_size) {
-        if (x_size % BLOCK_SIZE != 0 || z_size % BLOCK_SIZE != 0) {
-            throw std::runtime_error("Grid is not a multiple of BLOCK_SIZE");
-        }
-        num_x_tiles() = x_size / BLOCK_SIZE;
-        num_z_tiles() = z_size / BLOCK_SIZE;
-        num_active_tiles = num_x_tiles() * num_z_tiles();
-        bbox.min(0) = 0;
-        bbox.min(1) = 0;
-        bbox.max(0) = x_size;
-        bbox.max(1) = z_size;
-
-
-        yakl::Array<uint32_t, 1, yakl::memHost> morton_order("morton_traversal_order", num_x_tiles() * num_z_tiles());
-        for (int z = 0; z < num_z_tiles(); ++z) {
-            for (int x = 0; x < num_x_tiles(); ++x) {
-                morton_order(z * num_x_tiles() + x) = encode_morton<NumDim>(Coord2{.x = x, .z = z});
-            }
-        }
-        std::sort(morton_order.begin(), morton_order.end());
-        morton_traversal_order = morton_order.createDeviceCopy();
-        active_tiles = morton_traversal_order;
-
-        lookup.init(Dims<2>{.x = num_x_tiles(), .z = num_z_tiles()});
-        auto lookup_host = lookup.createHostCopy();
-        i64 grid_idx = 0;
-        for (int m_idx = 0; m_idx < morton_order.extent(0); ++m_idx) {
-            Coord2 tile_index = decode_morton<NumDim>(morton_order(m_idx));
-            lookup_host(tile_index) = grid_idx++;
-        }
-        lookup = lookup_host.createDeviceCopy();
-    }
-
-    YAKL_INLINE i64 buffer_len(i32 mip_px_size=1) const {
-        return i64(num_active_tiles) * i64(square(BLOCK_SIZE) / square(mip_px_size));
+    KOKKOS_FORCEINLINE_FUNCTION
+     i64 buffer_len(i32 mip_px_size=1) const {
+        using DexImpl::int_pow;
+        return i64(num_active_tiles) * i64(int_pow<NumDim>(BLOCK_SIZE) / int_pow<NumDim>(mip_px_size));
     }
 
     FlatLoop<2> loop_bounds(i32 mip_px_size=1) const {
+        using DexImpl::int_pow;
         return FlatLoop<2>(
             num_active_tiles,
-            square(BLOCK_SIZE) / square(mip_px_size)
+            int_pow<NumDim>(BLOCK_SIZE) / int_pow<NumDim>(mip_px_size)
         );
     }
 };
 
-template <u8 entry_size=3, int NumDim=2, int mem_space=yakl::memDevice>
+template <int NumDim=2, u8 entry_size=3, int mem_space=yakl::memDevice>
 struct MultiLevelLookup {
     static constexpr u8 packed_entries_per_u64 = (sizeof(u64) * CHAR_BIT) / entry_size;
     static constexpr u64 lowest_entry_mask = ((1 << entry_size) - 1);
@@ -301,7 +242,7 @@ struct MultiLevelLookup {
     // should remain resident in cache.
     yakl::Array<u64, 1, mem_space> entries;
 
-    template <class BlockMap>
+    template <class BlockMap, int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     void init(const BlockMap& block_map) {
         num_x_tiles() = block_map.num_x_tiles();
         num_z_tiles() = block_map.num_z_tiles();
@@ -317,20 +258,36 @@ struct MultiLevelLookup {
         entries = decltype(entries)("MultiLevel Entries", storage_for_entries);
     }
 
-    YAKL_INLINE i32 flat_tile_index(i32 x, i32 z) const {
+    template <class BlockMap, int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    void init(const BlockMap& block_map) {
+        static_assert(NumDim != 3, "3D");
+    }
+
+    // 2D
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
+    YAKL_INLINE i32 flat_tile_index(Coord<NumDim> c) const {
         i32 flat_idx;
         if constexpr (HYPERBLOCK2x2) {
-            const i32 hyper_tile_idx = (z >> 1) * num_x_tiles() + (x >> 1);
+            const i32 hyper_tile_idx = (c.z >> 1) * num_x_tiles() + (c.x >> 1);
             constexpr i32 hyper_tile_size = 4;
-            flat_idx = hyper_tile_idx * hyper_tile_size + ((z & 1) << 1) + (x & 1);
+            flat_idx = hyper_tile_idx * hyper_tile_size + ((c.z & 1) << 1) + (c.x & 1);
         } else {
-            flat_idx = z * num_x_tiles() + x;
+            flat_idx = c.z * num_x_tiles() + c.x;
         }
         return flat_idx;
     }
 
-    YAKL_INLINE u8 get(i32 x, i32 z) const {
-        const i32 flat_idx = flat_tile_index(x, z);
+    // 3D
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    YAKL_INLINE i32 flat_tile_index(Coord<NumDim> c) const {
+        // NOTE(cmo): Hyperblocking not supported in 3D
+        i32 flat_idx = c.z * (num_x_tiles() * num_y_tiles()) + c.y * (num_x_tiles()) + c.x;
+        return flat_idx;
+    }
+
+    /// Returns the mip level + 1 for a particular coordinate (i.e. 0 means no data)
+    YAKL_INLINE u8 get(Coord<NumDim> c) const {
+        const i32 flat_idx = flat_tile_index(c);
         const i32 block_idx = flat_idx / packed_entries_per_u64;
         const i32 entry_idx = flat_idx % packed_entries_per_u64;
 
@@ -339,18 +296,20 @@ struct MultiLevelLookup {
         return entry;
     }
 
-    /// NOTE(cmo): NOT THREADSAFE -- should probably be host only?
-    YAKL_INLINE void set(i32 x, i32 z, u8 val) {
-        const i32 flat_idx = flat_tile_index(x, z);
-        const i32 block_idx = flat_idx / packed_entries_per_u64;
-        const i32 entry_idx = flat_idx % packed_entries_per_u64;
+    // NOTE(cmo): This function is never used, but its definition is quite clear
+    // and could be useful in the future
+    // /// NOTE(cmo): NOT THREADSAFE -- should probably be host only?
+    // YAKL_INLINE void set(i32 x, i32 z, u8 val) {
+    //     const i32 flat_idx = flat_tile_index(x, z);
+    //     const i32 block_idx = flat_idx / packed_entries_per_u64;
+    //     const i32 entry_idx = flat_idx % packed_entries_per_u64;
 
-        const u64 shifted_entry = u64(val) << (entry_idx * entry_size); // ---- --ab ----
-        const u64 shifted_mask = ~(lowest_entry_mask << (entry_idx * entry_size)); // ffff ff00 ffff
-        const u64 block = entries(block_idx); // 0123 4567 89ab
-        const u64 updated_block = (block & shifted_mask) | shifted_entry; // 0123 45ab 89ab
-        entries(block_idx) = updated_block;
-    }
+    //     const u64 shifted_entry = u64(val) << (entry_idx * entry_size); // ---- --ab ----
+    //     const u64 shifted_mask = ~(lowest_entry_mask << (entry_idx * entry_size)); // ffff ff00 ffff
+    //     const u64 block = entries(block_idx); // 0123 4567 89ab
+    //     const u64 updated_block = (block & shifted_mask) | shifted_entry; // 0123 45ab 89ab
+    //     entries(block_idx) = updated_block;
+    // }
 
     /// Pack an array of entries into the u64 storage backing array. This isn't
     /// really const, but it only changes the array contents... ehhhhh
@@ -376,39 +335,39 @@ struct MultiLevelLookup {
         yakl::fence();
     }
 
-    MultiLevelLookup<entry_size, NumDim, yakl::memHost> createHostCopy() {
+    MultiLevelLookup<NumDim, entry_size, yakl::memHost> createHostCopy() {
         if constexpr (mem_space == yakl::memHost) {
             return *this;
         }
 
-        MultiLevelLookup<entry_size, NumDim, yakl::memHost> result;
+        MultiLevelLookup<NumDim, entry_size, yakl::memHost> result;
         result.num_tiles = num_tiles;
         result.entries = entries.createHostCopy();
         return result;
     }
 
-    MultiLevelLookup<entry_size, NumDim, yakl::memDevice> createDeviceCopy() {
+    MultiLevelLookup<NumDim, entry_size, yakl::memDevice> createDeviceCopy() {
         if constexpr (mem_space == yakl::memDevice) {
             return *this;
         }
 
-        MultiLevelLookup<entry_size, NumDim, yakl::memDevice> result;
+        MultiLevelLookup<NumDim, entry_size, yakl::memDevice> result;
         result.num_tiles = num_tiles;
         result.entries = entries.createDeviceCopy();
         return result;
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32& num_x_tiles() {
         return num_tiles(DimIndex<NumDim>::x);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32 num_x_tiles() const {
         return num_tiles(DimIndex<NumDim>::x);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32& num_y_tiles() {
         if constexpr (NumDim == 2) {
             KOKKOS_ASSERT(false);
@@ -416,7 +375,7 @@ struct MultiLevelLookup {
         return num_tiles(DimIndex<NumDim>::y);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32 num_y_tiles() const {
         if constexpr (NumDim == 2) {
             KOKKOS_ASSERT(false);
@@ -424,12 +383,12 @@ struct MultiLevelLookup {
         return num_tiles(DimIndex<NumDim>::y);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32& num_z_tiles() {
         return num_tiles(DimIndex<NumDim>::z);
     }
 
-    YAKL_INLINE
+    KOKKOS_FORCEINLINE_FUNCTION
     i32 num_z_tiles() const {
         return num_tiles(DimIndex<NumDim>::z);
     }
@@ -447,7 +406,7 @@ struct MultiResBlockMap {
     i32 max_mip_level;
     yakl::SArray<i64, 1, max_storable_entry> mip_offsets;
     BlockMap block_map;
-    MultiLevelLookup<ENTRY_SIZE, NumDim> lookup;
+    MultiLevelLookup<NumDim, ENTRY_SIZE> lookup;
 
     void init(const BlockMap& block_map_, i32 max_mip_level_) {
         block_map = block_map_;
@@ -478,32 +437,28 @@ struct MultiResBlockMap {
     }
 };
 
-
 constexpr bool INNER_MORTON_LOOKUP = false;
 template<i32 BLOCK_SIZE, i32 NumDim=2>
 struct IndexGen {
     Coord<NumDim> tile_key;
     i64 tile_base_idx;
-    i32 refined_size;
     const BlockMap<BLOCK_SIZE, NumDim>& block_map;
 
     static constexpr i32 L2_BLOCK_SIZE = std::bit_width(u32(BLOCK_SIZE)) - 1;
 
     YAKL_INLINE
-    IndexGen(const BlockMap<BLOCK_SIZE>& block_map_, i32 refined_size_=1) :
-        tile_key({.x = -1, .z = -1}),
+    IndexGen(const BlockMap<BLOCK_SIZE>& block_map_) :
+        tile_key(), // Now auto initialises to -1
         tile_base_idx(),
-        block_map(block_map_),
-        refined_size(refined_size_)
+        block_map(block_map_)
     {}
 
     template <int entry_size>
     YAKL_INLINE
-    IndexGen(const MultiResBlockMap<BLOCK_SIZE, entry_size, NumDim>& mr_block_map, i32 refined_size_=1) :
-        tile_key({.x = -1, .z = -1}),
+    IndexGen(const MultiResBlockMap<BLOCK_SIZE, entry_size, NumDim>& mr_block_map) :
+        tile_key(),
         tile_base_idx(),
-        block_map(mr_block_map.block_map),
-        refined_size(refined_size_)
+        block_map(mr_block_map.block_map)
     {}
 
     YAKL_INLINE
@@ -511,58 +466,76 @@ struct IndexGen {
         return decode_morton<NumDim>(block_map.active_tiles(tile_idx));
     }
 
+    /// Returns the index of the storage associated with the first element of
+    /// the nth tile
     YAKL_INLINE
     i64 compute_base_idx(i64 tile_idx) const {
-        return tile_idx * square(BLOCK_SIZE / refined_size);
+        return tile_idx * DexImpl::int_pow<NumDim>(BLOCK_SIZE);
     }
 
+    /// Convert from inner tile flat index to tile-local coordinates (these
+    /// include the effects of being on a mip level)
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE
     Coord<NumDim> compute_tile_inner_offset(i32 tile_offset) const {
         Coord2 coord;
         if constexpr (INNER_MORTON_LOOKUP) {
             coord = decode_morton<NumDim>(uint32_t(tile_offset));
         } else {
-            coord = Coord2 {
-                .x = tile_offset % (BLOCK_SIZE / refined_size),
-                .z = tile_offset / (BLOCK_SIZE / refined_size)
-            };
+            coord.z = tile_offset / BLOCK_SIZE;
+            coord.x = tile_offset - BLOCK_SIZE * coord.z;
         }
-        coord.x *= refined_size;
-        coord.z *= refined_size;
         return coord;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
     YAKL_INLINE
-    i32 compute_inner_offset(i32 inner_x, i32 inner_z) const {
+    Coord<NumDim> compute_tile_inner_offset(i32 tile_offset) const {
+        Coord3 coord;
+        i32 stride = square(BLOCK_SIZE);
+        coord.z = tile_offset / stride;
+        i32 lower_dims = coord.z * stride;
+        stride = BLOCK_SIZE;
+        coord.y = (tile_offset - lower_dims) / stride;
+        lower_dims += coord.y * stride;
+        coord.x = tile_offset - lower_dims;
+
+        return coord;
+    }
+
+    /// Convert from tile-local coordinates to flat index
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
+    YAKL_INLINE
+    i32 compute_inner_offset(Coord<NumDim> c) const {
         if constexpr (INNER_MORTON_LOOKUP) {
-            Coord2 coord {
-                .x = inner_x / refined_size,
-                .z = inner_z / refined_size
-            };
-            return encode_morton<NumDim>(coord);
+            return encode_morton<NumDim>(c);
         } else {
-            return (inner_z * (BLOCK_SIZE / refined_size) + inner_x) / refined_size;
+            return (c.z * BLOCK_SIZE + c.x);
         }
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
     YAKL_INLINE
-    i64 full_flat_idx(i32 x, i32 z) {
-        return z * block_map.num_x_tiles * BLOCK_SIZE + x;
+    i32 compute_inner_offset(Coord<NumDim> c) const {
+        return (c.z * BLOCK_SIZE + c.y) * BLOCK_SIZE + c.x;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE
-    i64 idx(i32 x, i32 z) {
-        i32 tile_x = x >> L2_BLOCK_SIZE;
-        i32 tile_z = z >> L2_BLOCK_SIZE;
-        i32 inner_x = x % BLOCK_SIZE;
-        i32 inner_z = z % BLOCK_SIZE;
+    i64 idx(Coord<NumDim> c) {
+        i32 tile_x = c.x >> L2_BLOCK_SIZE;
+        i32 tile_z = c.z >> L2_BLOCK_SIZE;
+        i32 inner_x = c.x - tile_x * BLOCK_SIZE;
+        i32 inner_z = c.z - tile_z * BLOCK_SIZE;
+        // i32 inner_x = c.x % BLOCK_SIZE;
+        // i32 inner_z = c.z % BLOCK_SIZE;
         Coord2 tile_key_lookup{
             .x = tile_x,
             .z = tile_z
         };
 
         if (tile_key == tile_key_lookup) {
-            return tile_base_idx + compute_inner_offset(inner_x, inner_z);
+            return tile_base_idx + compute_inner_offset(Coord2{.x = inner_x, .z = inner_z});
         }
 
         i64 tile_idx = block_map.lookup(tile_key_lookup);
@@ -574,15 +547,51 @@ struct IndexGen {
         if (tile_idx >= 0) {
             tile_base_idx = compute_base_idx(tile_idx);
             tile_key = tile_key_lookup;
-            return tile_base_idx + compute_inner_offset(inner_x, inner_z);
+            return tile_base_idx + compute_inner_offset(Coord2{.x = inner_x, .z = inner_z});
         }
         return -1;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
     YAKL_INLINE
-    bool has_leaves(i32 x, i32 z) {
-        i32 tile_x = x >> L2_BLOCK_SIZE;
-        i32 tile_z = z >> L2_BLOCK_SIZE;
+    i64 idx(Coord<NumDim> c) {
+        i32 tile_x = c.x >> L2_BLOCK_SIZE;
+        i32 tile_y = c.y >> L2_BLOCK_SIZE;
+        i32 tile_z = c.z >> L2_BLOCK_SIZE;
+        i32 inner_x = c.x - tile_x * BLOCK_SIZE;
+        i32 inner_y = c.y - tile_y * BLOCK_SIZE;
+        i32 inner_z = c.z - tile_z * BLOCK_SIZE;
+
+        Coord3 tile_key_lookup{
+            .x = tile_x,
+            .y = tile_y,
+            .z = tile_z
+        };
+
+        if (tile_key == tile_key_lookup) {
+            return tile_base_idx + compute_inner_offset(Coord3{.x = inner_x, .y = inner_y, .z = inner_z});
+        }
+
+        i64 tile_idx = block_map.lookup(tile_key_lookup);
+#ifdef DEXRT_DEBUG
+        if (tile_idx < 0) {
+            yakl::yakl_throw("OOB block requested!");
+        }
+#endif
+        if (tile_idx >= 0) {
+            tile_base_idx = compute_base_idx(tile_idx);
+            tile_key = tile_key_lookup;
+            return tile_base_idx + compute_inner_offset(Coord3{.x = inner_x, .y = inner_y, .z = inner_z});
+        }
+        return -1;
+    }
+
+
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
+    YAKL_INLINE
+    bool has_leaves(Coord<NumDim> c) {
+        i32 tile_x = c.x >> L2_BLOCK_SIZE;
+        i32 tile_z = c.z >> L2_BLOCK_SIZE;
         Coord2 tile_key_lookup{
             .x = tile_x,
             .z = tile_z
@@ -591,13 +600,64 @@ struct IndexGen {
         if (tile_key == tile_key_lookup) {
             return true;
         }
-        if (
-            (x < 0) || (x >= block_map.bbox.max(0)) ||
-            (z < 0) || (z >= block_map.bbox.max(1))
-        ) {
-            return false;
+        if constexpr (assume_lower_tile_bound_0) {
+            if (
+                (u32(c.x) >= block_map.bbox.max(DimIndex<NumDim>::x)) ||
+                (u32(c.z) >= block_map.bbox.max(DimIndex<NumDim>::z))
+            ) {
+                return false;
+            }
+        } else {
+            if (
+                (c.x < 0) || (c.x >= block_map.bbox.max(DimIndex<NumDim>::x)) ||
+                (c.z < 0) || (c.z >= block_map.bbox.max(DimIndex<NumDim>::z))
+            ) {
+                return false;
+            }
         }
-        i64 tile_idx = block_map.lookup(tile_x, tile_z);
+        i64 tile_idx = block_map.lookup(tile_key_lookup);
+        bool result = tile_idx != -1;
+        if (result) {
+            tile_base_idx = compute_base_idx(tile_idx);
+            tile_key = tile_key_lookup;
+        }
+        return result;
+    }
+
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    YAKL_INLINE
+    bool has_leaves(Coord<NumDim> c) {
+        i32 tile_x = c.x >> L2_BLOCK_SIZE;
+        i32 tile_y = c.y >> L2_BLOCK_SIZE;
+        i32 tile_z = c.z >> L2_BLOCK_SIZE;
+        Coord3 tile_key_lookup{
+            .x = tile_x,
+            .y = tile_y,
+            .z = tile_z
+        };
+
+        if (tile_key == tile_key_lookup) {
+            return true;
+        }
+        if constexpr (assume_lower_tile_bound_0) {
+            if (
+                u32(c.x) >= block_map.bbox.max(DimIndex<NumDim>::x) ||
+                u32(c.y) >= block_map.bbox.max(DimIndex<NumDim>::y) ||
+                u32(c.z) >= block_map.bbox.max(DimIndex<NumDim>::z)
+            ) {
+                return false;
+            }
+        } else {
+            if (
+                (c.x < block_map.bbox.min(DimIndex<NumDim>::x)) || (c.x >= block_map.bbox.max(DimIndex<NumDim>::x)) ||
+                (c.y < block_map.bbox.min(DimIndex<NumDim>::y)) || (c.y >= block_map.bbox.max(DimIndex<NumDim>::y)) ||
+                (c.z < block_map.bbox.min(DimIndex<NumDim>::z)) || (c.z >= block_map.bbox.max(DimIndex<NumDim>::z))
+            ) {
+                return false;
+            }
+        }
+
+        i64 tile_idx = block_map.lookup(tile_key_lookup);
         bool result = tile_idx != -1;
         if (result) {
             tile_base_idx = compute_base_idx(tile_idx);
@@ -611,12 +671,25 @@ struct IndexGen {
         return compute_base_idx(tile_idx) + block_idx;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE
     Coord2 loop_coord(i64 tile_idx, i32 block_idx) const {
         Coord2 tile_coord = compute_tile_coord(tile_idx);
         Coord2 tile_offset = compute_tile_inner_offset(block_idx);
         return Coord2 {
             .x = tile_coord.x * BLOCK_SIZE + tile_offset.x,
+            .z = tile_coord.z * BLOCK_SIZE + tile_offset.z
+        };
+    }
+
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    YAKL_INLINE
+    Coord3 loop_coord(i64 tile_idx, i32 block_idx) const {
+        Coord3 tile_coord = compute_tile_coord(tile_idx);
+        Coord3 tile_offset = compute_tile_inner_offset(block_idx);
+        return Coord3 {
+            .x = tile_coord.x * BLOCK_SIZE + tile_offset.x,
+            .y = tile_coord.y * BLOCK_SIZE + tile_offset.y,
             .z = tile_coord.z * BLOCK_SIZE + tile_offset.z
         };
     }
@@ -648,7 +721,7 @@ struct MultiLevelIndexGen {
     MultiLevelIndexGen(
         const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim>& mip_block_map_
     ) :
-        tile_key({.mip_level = -1, .coord = {.x = -1, .z = -1}}),
+        tile_key({.mip_level = -1}),
         tile_base_idx(),
         block_map(mip_block_map_.block_map),
         mip_block_map(mip_block_map_)
@@ -661,58 +734,80 @@ struct MultiLevelIndexGen {
 
     YAKL_INLINE
     i64 compute_base_idx(i32 mip_level, i64 tile_idx) const {
-        return mip_block_map.mip_offsets(mip_level) + tile_idx * square(BLOCK_SIZE >> mip_level);
+        return mip_block_map.mip_offsets(mip_level) + tile_idx * DexImpl::int_pow<NumDim>(BLOCK_SIZE >> mip_level);
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE
     Coord<NumDim> compute_tile_inner_offset(i32 mip_level, i32 tile_offset) const {
         Coord2 coord;
         if constexpr (INNER_MORTON_LOOKUP) {
             coord = decode_morton<NumDim>(uint32_t(tile_offset));
         } else {
-            coord = Coord2 {
-                .x = tile_offset % (BLOCK_SIZE >> mip_level),
-                .z = tile_offset / (BLOCK_SIZE >> mip_level)
-            };
+            coord.z = tile_offset / (BLOCK_SIZE >> mip_level);
+            coord.x = tile_offset - (BLOCK_SIZE >> mip_level) * coord.z;
+            // coord = Coord2 {
+            //     .x = tile_offset % (BLOCK_SIZE >> mip_level),
+            //     .z = tile_offset / (BLOCK_SIZE >> mip_level)
+            // };
         }
         coord.x <<= mip_level;
         coord.z <<= mip_level;
         return coord;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
     YAKL_INLINE
-    i32 compute_inner_offset(i32 mip_level, i32 inner_x, i32 inner_z) const {
+    Coord<NumDim> compute_tile_inner_offset(i32 mip_level, i32 tile_offset) const {
+        Coord3 coord;
+        i32 stride = square(BLOCK_SIZE >> mip_level);
+        coord.z = tile_offset / stride;
+        i32 lower_dims = coord.z * stride;
+        stride = BLOCK_SIZE >> mip_level;
+        coord.y = (tile_offset - lower_dims) / stride;
+        lower_dims += coord.y * stride;
+        coord.x = tile_offset - lower_dims;
+
+        coord.x <<= mip_level;
+        coord.y <<= mip_level;
+        coord.z <<= mip_level;
+        return coord;
+    }
+
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
+    YAKL_INLINE
+    i32 compute_inner_offset(i32 mip_level, Coord<NumDim> inner) const {
         if constexpr (INNER_MORTON_LOOKUP) {
             Coord<NumDim> coord {
-                .x = inner_x >> mip_level,
-                .z = inner_z >> mip_level
+                .x = inner.x >> mip_level,
+                .z = inner.z >> mip_level
             };
             return encode_morton<NumDim>(coord);
         } else {
-            return (inner_z * (BLOCK_SIZE >> mip_level) + inner_x) >> mip_level;
+            return inner.z * (BLOCK_SIZE >> mip_level) + inner.x >> mip_level;
         }
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
     YAKL_INLINE
-    i64 full_flat_idx(i32 mip_level, i32 x, i32 z) {
-#ifdef DEXRT_DEBUG
-        if (mip_level != 0) {
-            yakl::yakl_throw("No concept of a flat index for mip_level != 0");
-        }
-#endif
-        return z * block_map.num_x_tiles * BLOCK_SIZE + x;
+    i32 compute_inner_offset(i32 mip_level, Coord<NumDim> inner) const {
+        const i32 reduced_block_size = BLOCK_SIZE >> mip_level;
+        return (inner.z * reduced_block_size + inner.y) * reduced_block_size + inner.x >> mip_level;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE
-    i64 idx(i32 mip_level, i32 x, i32 z) {
+    i64 idx(i32 mip_level, Coord<NumDim> c) {
         // NOTE(cmo): The shift vs integer division may seem like premature
         // optimisation here. I assure you it isn't. It properly captures the
         // case of x and z being small negatives. Due to integer rules -1 / 16
         // == 0, but -1 >> 4 == -1
-        i32 tile_x = x >> L2_BLOCK_SIZE;
-        i32 tile_z = z >> L2_BLOCK_SIZE;
-        i32 inner_x = x % BLOCK_SIZE;
-        i32 inner_z = z % BLOCK_SIZE;
+        i32 tile_x = c.x >> L2_BLOCK_SIZE;
+        i32 tile_z = c.z >> L2_BLOCK_SIZE;
+        i32 inner_x = c.x - tile_x * BLOCK_SIZE;
+        i32 inner_z = c.z - tile_z * BLOCK_SIZE;
+        // i32 inner_x = c.x % BLOCK_SIZE;
+        // i32 inner_z = c.z % BLOCK_SIZE;
         MultiLevelTileKey<NumDim> tile_key_lookup{
             .mip_level = mip_level,
             .coord {
@@ -722,7 +817,7 @@ struct MultiLevelIndexGen {
         };
 
         if (tile_key == tile_key_lookup) {
-            return tile_base_idx + compute_inner_offset(mip_level, inner_x, inner_z);
+            return tile_base_idx + compute_inner_offset(mip_level, Coord2{.x = inner_x, .z = inner_z});
         }
 
         i64 tile_idx = block_map.lookup(Coord2{.x = tile_x, .z = tile_z});
@@ -734,40 +829,146 @@ struct MultiLevelIndexGen {
         if (tile_idx >= 0) {
             tile_base_idx = compute_base_idx(mip_level, tile_idx);
             tile_key = tile_key_lookup;
-            return tile_base_idx + compute_inner_offset(mip_level, inner_x, inner_z);
+            return tile_base_idx + compute_inner_offset(mip_level, Coord2{.x = inner_x, .z = inner_z});
+        }
+        return -1;
+    }
+
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    YAKL_INLINE
+    i64 idx(i32 mip_level, Coord<NumDim> c) {
+        // NOTE(cmo): The shift vs integer division may seem like premature
+        // optimisation here. I assure you it isn't. It properly captures the
+        // case of x and z being small negatives. Due to integer rules -1 / 16
+        // == 0, but -1 >> 4 == -1
+        i32 tile_x = c.x >> L2_BLOCK_SIZE;
+        i32 tile_y = c.y >> L2_BLOCK_SIZE;
+        i32 tile_z = c.z >> L2_BLOCK_SIZE;
+        i32 inner_x = c.x - tile_x * BLOCK_SIZE;
+        i32 inner_y = c.y - tile_y * BLOCK_SIZE;
+        i32 inner_z = c.z - tile_z * BLOCK_SIZE;
+
+        MultiLevelTileKey<NumDim> tile_key_lookup{
+            .mip_level = mip_level,
+            .coord {
+                .x = tile_x,
+                .y = tile_y,
+                .z = tile_z
+            }
+        };
+
+        if (tile_key == tile_key_lookup) {
+            return tile_base_idx + compute_inner_offset(
+                mip_level,
+                Coord3{.x = inner_x, .y = inner_y, .z = inner_z}
+            );
+        }
+
+        i64 tile_idx = block_map.lookup(tile_key_lookup.coord);
+#ifdef DEXRT_DEBUG
+        if (tile_idx < 0) {
+            yakl::yakl_throw("OOB block requested!");
+        }
+#endif
+        if (tile_idx >= 0) {
+            tile_base_idx = compute_base_idx(mip_level, tile_idx);
+            tile_key = tile_key_lookup;
+            return tile_base_idx + compute_inner_offset(
+                mip_level,
+                Coord3{.x = inner_x, .y = inner_y, .z = inner_z}
+            );
         }
         return -1;
     }
 
     /// Returns the mip level to sample on, or -1 if empty
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE
-    i32 get_sample_level(i32 x, i32 z) {
-        i32 tile_x = x >> L2_BLOCK_SIZE;
-        i32 tile_z = z >> L2_BLOCK_SIZE;
+    i32 get_sample_level(Coord<NumDim> c) {
+        i32 tile_x = c.x >> L2_BLOCK_SIZE;
+        i32 tile_z = c.z >> L2_BLOCK_SIZE;
+        Coord2 tile_coord {
+            .x = tile_x,
+            .z = tile_z
+        };
         /// NOTE(cmo): This makes the assumption that if one is requesting the
         /// mip level of the current tile, then whatever level is there is the
         /// one returned.
-        if (tile_x == tile_key.coord.x && tile_z == tile_key.coord.z) {
+        if (tile_coord == tile_key.coord) {
             return tile_key.mip_level;
         }
-        if (
-            (x < 0) || (x >= block_map.bbox.max(0)) ||
-            (z < 0) || (z >= block_map.bbox.max(1))
-        ) {
-            return -1;
+        if constexpr (assume_lower_tile_bound_0) {
+            if (
+                (u32(c.x) >= block_map.bbox.max(DimIndex<NumDim>::x)) ||
+                (u32(c.z) >= block_map.bbox.max(DimIndex<NumDim>::z))
+            ) {
+                return -1;
+            }
+        } else {
+            if (
+                (c.x < block_map.bbox.min(DimIndex<NumDim>::x)) || (c.x >= block_map.bbox.max(DimIndex<NumDim>::x)) ||
+                (c.z < block_map.bbox.min(DimIndex<NumDim>::z)) || (c.z >= block_map.bbox.max(DimIndex<NumDim>::z))
+            ) {
+                return -1;
+            }
         }
 
-        i32 tile_mip_level = i32(mip_block_map.lookup.get(tile_x, tile_z)) - 1;
+        i32 tile_mip_level = i32(mip_block_map.lookup.get(tile_coord)) - 1;
         bool sampleable = tile_mip_level != -1;
         if (sampleable) {
-            i64 tile_idx = block_map.lookup(Coord2{.x = tile_x, .z = tile_z});
+            i64 tile_idx = block_map.lookup(tile_coord);
             tile_base_idx = compute_base_idx(tile_mip_level, tile_idx);
-            tile_key = MultiLevelTileKey<> {
+            tile_key = MultiLevelTileKey<NumDim> {
                 .mip_level = tile_mip_level,
-                .coord {
-                    .x = tile_x,
-                    .z = tile_z
-                }
+                .coord = tile_coord
+            };
+        }
+        return tile_mip_level;
+    }
+
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    YAKL_INLINE
+    i32 get_sample_level(Coord<NumDim> c) {
+        i32 tile_x = c.x >> L2_BLOCK_SIZE;
+        i32 tile_y = c.y >> L2_BLOCK_SIZE;
+        i32 tile_z = c.z >> L2_BLOCK_SIZE;
+        Coord3 tile_coord {
+            .x = tile_x,
+            .y = tile_y,
+            .z = tile_z
+        };
+        /// NOTE(cmo): This makes the assumption that if one is requesting the
+        /// mip level of the current tile, then whatever level is there is the
+        /// one returned.
+        if (tile_coord == tile_key.coord) {
+            return tile_key.mip_level;
+        }
+        if constexpr (assume_lower_tile_bound_0) {
+            if (
+                u32(c.x) >= block_map.bbox.max(DimIndex<NumDim>::x) ||
+                u32(c.y) >= block_map.bbox.max(DimIndex<NumDim>::y) ||
+                u32(c.z) >= block_map.bbox.max(DimIndex<NumDim>::z)
+            ) {
+                return -1;
+            }
+        } else {
+            if (
+                (c.x < block_map.bbox.min(DimIndex<NumDim>::x)) || (c.x >= block_map.bbox.max(DimIndex<NumDim>::x)) ||
+                (c.y < block_map.bbox.min(DimIndex<NumDim>::y)) || (c.y >= block_map.bbox.max(DimIndex<NumDim>::y)) ||
+                (c.z < block_map.bbox.min(DimIndex<NumDim>::z)) || (c.z >= block_map.bbox.max(DimIndex<NumDim>::z))
+            ) {
+                return -1;
+            }
+        }
+
+        i32 tile_mip_level = i32(mip_block_map.lookup.get(tile_coord)) - 1;
+        bool sampleable = tile_mip_level != -1;
+        if (sampleable) {
+            i64 tile_idx = block_map.lookup(tile_coord);
+            tile_base_idx = compute_base_idx(tile_mip_level, tile_idx);
+            tile_key = MultiLevelTileKey<NumDim> {
+                .mip_level = tile_mip_level,
+                .coord = tile_coord
             };
         }
         return tile_mip_level;
@@ -778,12 +979,25 @@ struct MultiLevelIndexGen {
         return compute_base_idx(mip_level, tile_idx) + block_idx;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE
     Coord2 loop_coord(i32 mip_level, i64 tile_idx, i32 block_idx) const {
         Coord2 tile_coord = compute_tile_coord(tile_idx);
         Coord2 tile_offset = compute_tile_inner_offset(mip_level, block_idx);
         return Coord2 {
             .x = tile_coord.x * BLOCK_SIZE + tile_offset.x,
+            .z = tile_coord.z * BLOCK_SIZE + tile_offset.z
+        };
+    }
+
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    YAKL_INLINE
+    Coord3 loop_coord(i32 mip_level, i64 tile_idx, i32 block_idx) const {
+        Coord3 tile_coord = compute_tile_coord(tile_idx);
+        Coord3 tile_offset = compute_tile_inner_offset(mip_level, block_idx);
+        return Coord3 {
+            .x = tile_coord.x * BLOCK_SIZE + tile_offset.x,
+            .y = tile_coord.y * BLOCK_SIZE + tile_offset.y,
             .z = tile_coord.z * BLOCK_SIZE + tile_offset.z
         };
     }
@@ -1019,7 +1233,7 @@ struct MultiLevelDDA {
     }
 
     YAKL_INLINE i32 get_sample_level() const {
-        i32 mip_level = idx_gen.get_sample_level(curr_coord(0), curr_coord(1));
+        i32 mip_level = idx_gen.get_sample_level(Coord2{.x = curr_coord(0), .z = curr_coord(1)});
         return std::min(mip_level, i32(max_mip_level));
     }
 
@@ -1057,16 +1271,34 @@ struct MultiLevelDDA {
 
     YAKL_INLINE void compute_axis_and_dt() {
         step_axis = 0;
-        if (next_hit(1) < next_hit(0)) {
-            step_axis = 1;
-        }
-        switch (step_axis) {
-            case 0: {
-                compute_axis_and_dt_impl<0>();
-            } break;
-            case 1: {
-                compute_axis_and_dt_impl<1>();
-            } break;
+        if constexpr (NumDim == 2) {
+            if (next_hit(1) < next_hit(0)) {
+                step_axis = 1;
+            }
+            switch (step_axis) {
+                case 0: {
+                    compute_axis_and_dt_impl<0>();
+                } break;
+                case 1: {
+                    compute_axis_and_dt_impl<1>();
+                } break;
+            }
+        } else {
+            if (next_hit(1) < next_hit(0)) {
+                step_axis = 1;
+            }
+            static_assert(NumDim == 3, "We need an argmin that works here");
+            switch (step_axis) {
+                case 0: {
+                    compute_axis_and_dt_impl<0>();
+                } break;
+                case 1: {
+                    compute_axis_and_dt_impl<1>();
+                } break;
+                case 2: {
+                    compute_axis_and_dt_impl<2>();
+                }
+            }
         }
     }
 
@@ -1182,21 +1414,36 @@ struct MultiLevelDDA {
 
     YAKL_INLINE bool in_bounds() const {
         if constexpr (NumDim == 2) {
-            return (
-                curr_coord(0) >= idx_gen.block_map.bbox.min(0)
-                && curr_coord(1) >= idx_gen.block_map.bbox.min(1)
-                && curr_coord(0) < idx_gen.block_map.bbox.max(0)
-                && curr_coord(1) < idx_gen.block_map.bbox.max(1)
-            );
+            if constexpr (assume_lower_tile_bound_0) {
+                return (
+                    u32(curr_coord(DimIndex<NumDim>::x)) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::x) &&
+                    u32(curr_coord(DimIndex<NumDim>::z)) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::z)
+                );
+            } else {
+                return (
+                    curr_coord(DimIndex<NumDim>::x) >= idx_gen.block_map.bbox.min(DimIndex<NumDim>::x) &&
+                    curr_coord(DimIndex<NumDim>::z) >= idx_gen.block_map.bbox.min(DimIndex<NumDim>::z) &&
+                    curr_coord(DimIndex<NumDim>::x) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::x) &&
+                    curr_coord(DimIndex<NumDim>::z) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::z)
+                );
+            }
         } else {
-            return (
-                curr_coord(0) >= idx_gen.block_map.bbox.min(0)
-                && curr_coord(1) >= idx_gen.block_map.bbox.min(1)
-                && curr_coord(2) >= idx_gen.block_map.bbox.min(2)
-                && curr_coord(0) < idx_gen.block_map.bbox.max(0)
-                && curr_coord(1) < idx_gen.block_map.bbox.max(1)
-                && curr_coord(2) < idx_gen.block_map.bbox.max(2)
-            );
+            if constexpr (assume_lower_tile_bound_0) {
+                return (
+                    u32(curr_coord(DimIndex<NumDim>::x)) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::x) &&
+                    u32(curr_coord(DimIndex<NumDim>::y)) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::y) &&
+                    u32(curr_coord(DimIndex<NumDim>::z)) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::z)
+                );
+            } else {
+                return (
+                    curr_coord(DimIndex<NumDim>::x) >= idx_gen.block_map.bbox.min(DimIndex<NumDim>::x) &&
+                    curr_coord(DimIndex<NumDim>::y) >= idx_gen.block_map.bbox.min(DimIndex<NumDim>::y) &&
+                    curr_coord(DimIndex<NumDim>::z) >= idx_gen.block_map.bbox.min(DimIndex<NumDim>::z) &&
+                    curr_coord(DimIndex<NumDim>::x) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::x) &&
+                    curr_coord(DimIndex<NumDim>::y) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::y) &&
+                    curr_coord(DimIndex<NumDim>::z) < idx_gen.block_map.bbox.max(DimIndex<NumDim>::z)
+                );
+            }
         }
     }
 };

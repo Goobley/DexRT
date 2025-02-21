@@ -59,11 +59,13 @@ list(APPEND DEX_SOURCE_FILES
     "source/CoreAndVoigtEmisOpac.cpp"
     "source/NgAcceleration.cpp"
     "source/LineSweepSetup.cpp"
+    "source/BlockMap.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"
     "source/PromweaverBoundary.cpp"
     "source/MiscSparse.cpp"
+    "source/BlockMap.cpp"
 )
 
 add_executable(dexrt

@@ -52,7 +52,7 @@ inline FpConst2d merge_c0_to_J(
             i64 ks;
             if (sparse) {
                 IdxGen idx_gen(block_map);
-                ks = idx_gen.idx(coord(0), coord(1));
+                ks = idx_gen.idx(Coord2{.x = coord(0), .z = coord(1)});
             } else {
                 ks = coord(1) * c0_dims.num_probes(0) + coord(0);
             }

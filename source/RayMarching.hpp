@@ -491,7 +491,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         if (s.can_sample()) {
             i32 u = s.curr_coord(0);
             i32 v = s.curr_coord(1);
-            i64 ks = idx_gen.idx(s.current_mip_level, u, v);
+            i64 ks = idx_gen.idx(s.current_mip_level, Coord2{.x = u, .z = v});
 
             if constexpr (dynamic_interp) {
                 const fp_t vel = (

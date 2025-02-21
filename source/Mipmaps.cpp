@@ -178,7 +178,7 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
         YAKL_LAMBDA (i64 tile_idx) {
             MRIdxGen idx_gen(mr_block_map);
             Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
-            i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord.x, tile_coord.z);
+            i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord);
             max_mip_level(flat_entry) = 1;
         }
     );
@@ -207,10 +207,10 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                     fp_t vel_y = FP(0.0);
                     fp_t vel_z = FP(0.0);
                     i64 idxs[mip_block] = {
-                        idx_gen.idx(level_m_1, coord.x, coord.z),
-                        idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z),
-                        idx_gen.idx(level_m_1, coord.x, coord.z+upper_vox_size),
-                        idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z+upper_vox_size)
+                        idx_gen.idx(level_m_1, coord),
+                        idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z}),
+                        idx_gen.idx(level_m_1, Coord2{.x = coord.x, .z = coord.z+upper_vox_size}),
+                        idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z+upper_vox_size})
                     };
 
                     for (int i = 0; i < mip_block; ++i) {
@@ -250,10 +250,10 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                 fp_t emis_mip = FP(0.0);
                 fp_t opac_mip = FP(0.0);
                 i64 idxs[mip_block] = {
-                    idx_gen.idx(level_m_1, coord.x, coord.z),
-                    idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z),
-                    idx_gen.idx(level_m_1, coord.x, coord.z+upper_vox_size),
-                    idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z+upper_vox_size)
+                    idx_gen.idx(level_m_1, coord),
+                    idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z}),
+                    idx_gen.idx(level_m_1, Coord2{.x = coord.x, .z = coord.z+upper_vox_size}),
+                    idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z+upper_vox_size})
                 };
 
                 // E[log(chi ds)]
@@ -355,7 +355,7 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                 Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
                 const int level = level_m_1 + 1;
                 const i32 expected_entries = square(BLOCK_SIZE >> level) * wave_batch;
-                i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord.x, tile_coord.z);
+                i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord);
                 if (max_mip_level(flat_entry) == level) {
                     max_mip_level(flat_entry) += mippable_entries(tile_idx) / expected_entries;
                 }

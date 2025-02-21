@@ -63,8 +63,8 @@ struct Coord {
 
 template <>
 struct Coord<2> {
-    i32 x;
-    i32 z;
+    i32 x = -1;
+    i32 z = -1;
 
     YAKL_INLINE bool operator==(const Coord<2>& other) const {
         return (x == other.x) && (z == other.z);
@@ -73,9 +73,9 @@ struct Coord<2> {
 
 template <>
 struct Coord<3> {
-    i32 x;
-    i32 y;
-    i32 z;
+    i32 x = -1;
+    i32 y = -1;
+    i32 z = -1;
 
     YAKL_INLINE bool operator==(const Coord<3>& other) const {
         return (x == other.x) && (y == other.y) && (z == other.z);

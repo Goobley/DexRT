@@ -161,7 +161,7 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     st->given_state.voxel_scale = voxel_scale;
     st->println("Scale: {} m", st->atmos.voxel_scale);
     BlockMap<BLOCK_SIZE> block_map;
-    block_map.init(x_dim, z_dim);
+    block_map.init(Dims<2>{.x = x_dim, .z = z_dim});
     i32 max_mip_level = 0;
     for (int i = 0; i <= config.max_cascade; ++i) {
         max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
@@ -424,7 +424,7 @@ void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
             MRIdxGen idx_gen(mr_block_map);
             Coord2 coord = idx_gen.loop_coord(0, tile_idx, 0);
             Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
-            i32 mip_level = idx_gen.get_sample_level(coord.x, coord.z);
+            i32 mip_level = idx_gen.get_sample_level(coord);
             max_block_mip(wave_batch_idx, tile_coord.z, tile_coord.x) = mip_level;
         }
     );
