@@ -5,6 +5,7 @@
 #include "RcUtilsModes.hpp"
 #include "JasPP.hpp"
 #include "State.hpp"
+#include "CascadeState.hpp"
 #include "EmisOpac.hpp"
 #include "BlockMap.hpp"
 #include "DirectionalEmisOpacInterp.hpp"

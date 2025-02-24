@@ -6,6 +6,7 @@
 #include <bit>
 
 #include "UserConfig2d.hpp"
+#include "UserConfig3d.hpp"
 
 #ifdef KOKKOS_ENABLE_DEBUG
 #define DEXRT_DEBUG

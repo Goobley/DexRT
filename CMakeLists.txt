@@ -60,6 +60,10 @@ list(APPEND DEX_SOURCE_FILES
     "source/NgAcceleration.cpp"
     "source/LineSweepSetup.cpp"
     "source/BlockMap.cpp"
+    "source/ProbesToCompute.cpp"
+)
+list(APPEND DEX_3D_SOURCE_FILES
+    "source/main_3d.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"
@@ -70,6 +74,9 @@ list(APPEND DEX_RAY_SOURCE_FILES
 
 add_executable(dexrt
     "${DEX_SOURCE_FILES}"
+)
+add_executable(dexrt_3d
+    "${DEX_3D_SOURCE_FILES}"
 )
 add_executable(dexrt_ray
     "${DEX_RAY_SOURCE_FILES}"
@@ -83,8 +90,10 @@ endif()
 
 # NOTE(cmo): Override language type for cuda, may need to do this for HIP too.
 set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
+set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
+set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 if ("${DEX_ARCH}" STREQUAL "CUDA")
     set(DEX_EXTRA_CUDA_STD_FLAG "")
@@ -94,9 +103,11 @@ if ("${DEX_ARCH}" STREQUAL "CUDA")
         set(DEX_EXTRA_CUDA_STD_FLAG "-std=c++20")
     endif()
     set_target_properties(dexrt PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
+    set_target_properties(dexrt_3d PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
     set_target_properties(dexrt_ray PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
 
     set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
+    set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CXX_FLAGS} ${DEX_EXTRA_CUDA_STD_FLAG}")
 endif()
@@ -131,6 +142,34 @@ set_target_properties(dexrt PROPERTIES
 )
 
 message("Compiling with: ${CMAKE_CXX_FLAGS} ${YAKL_DEFS} ${DEX_CXX_FLAGS}")
+############## dexrt_3d ##############
+target_include_directories(dexrt_3d SYSTEM PUBLIC
+    "${GCC_INCLUDE_PATH}"
+    "${MPI_INCLUDE_PATH}"
+    "${NETCDF_INCLUDE_PATH}"
+    "${MAGMA_INCLUDE_PATH}"
+    "${CUDA_MATH_INCLUDE_PATH}"
+)
+target_link_libraries(dexrt_3d "${LDLIBS}")
+target_link_libraries(dexrt_3d fmt::fmt)
+target_link_libraries(dexrt_3d yaml-cpp::yaml-cpp)
+target_link_libraries(dexrt_3d argparse)
+target_link_libraries(dexrt_3d git_version)
+target_link_libraries(dexrt_3d Kokkos::kokkos)
+target_link_libraries(dexrt_3d yakl)
+if (KokkosKernels_FOUND)
+    target_link_libraries(dexrt_3d Kokkos::kokkoskernels)
+endif()
+if (${DEXRT_USE_MPI})
+    target_include_directories(dexrt_3d PRIVATE ${MPI_CXX_INCLUDE_PATH})
+    target_link_libraries(dexrt_3d MPI::MPI_CXX)
+    target_compile_definitions(dexrt_3d PUBLIC HAVE_MPI)
+endif()
+
+set_target_properties(dexrt_3d PROPERTIES
+    COMPILE_FLAGS "${YAKL_DEFS} ${DEX_CXX_FLAGS}"
+    LINK_FLAGS "${LDFLAGS}"
+)
 ############# dexrt_ray ##############
 target_include_directories(dexrt_ray SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"

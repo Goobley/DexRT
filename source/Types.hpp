@@ -38,6 +38,7 @@ using vec = yakl::SArray<fp_t, 1, N>;
 typedef yakl::SArray<fp_t, 2, 2, 2> mat2x2;
 typedef yakl::SArray<int, 2, 2, 2> imat2x2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
+typedef yakl::SArray<int32_t, 1, 3> ivec3;
 template <int N>
 using ivec = yakl::SArray<int32_t, 1, N>;
 
@@ -104,12 +105,24 @@ struct CascadeStorage {
     int num_incl;
 };
 
+struct CascadeStorage3d {
+    ivec3 num_probes;
+    int num_az_rays;
+    int num_polar_rays;
+};
+
 /// The rays to be computed in a cascade
 struct CascadeRays {
     ivec2 num_probes;
     int num_flat_dirs;
     int wave_batch;
     int num_incl;
+};
+
+struct CascadeRays3d {
+    ivec3 num_probes;
+    int num_az_rays;
+    int num_polar_rays;
 };
 
 /// The rays in the partition of a cascade we're computing. For all
@@ -123,6 +136,14 @@ struct CascadeRaysSubset {
     int wave_batch;
     int start_incl;
     int num_incl;
+};
+
+// NOTE(cmo): Don't allow splitting probes... directions only
+struct CascadeRaysSubset3d {
+    int start_az_rays;
+    int num_az_rays;
+    int start_polar_rays;
+    int num_polar_rays;
 };
 
 struct InclQuadrature {
@@ -146,11 +167,13 @@ struct RayProps {
     vec2 centre;
 };
 
+template <int NumDim=2>
 struct DeviceProbesToCompute {
     bool sparse;
-    ivec2 num_probes;
-    yakl::Array<i32, 2, yakl::memDevice> active_probes; // [n, 2 (u, v)]
+    ivec<NumDim> num_probes;
+    yakl::Array<i32, 2, yakl::memDevice> active_probes; // [n, NumDim (u, v, (w))]
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE ivec2 operator()(i64 ks) const {
         if (!sparse) {
             // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
@@ -159,8 +182,9 @@ struct DeviceProbesToCompute {
             // loop index k = v * Nu + u where Nu = dims.num_probes(0). This
             // preserves our iteration ordering
             ivec2 probe_coord;
-            probe_coord(0) = ks % num_probes(0);
+            // probe_coord(0) = ks % num_probes(0);
             probe_coord(1) = ks / num_probes(0);
+            probe_coord(0) = ks - num_probes(0) * probe_coord(1);
             return probe_coord;
         }
 
@@ -170,15 +194,40 @@ struct DeviceProbesToCompute {
         return probe_coord;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    YAKL_INLINE ivec3 operator()(i64 ks) const {
+        if (!sparse) {
+            ivec3 probe_coord;
+            i32 stride = num_probes(0) * num_probes(1);
+            probe_coord(2) = ks / stride;
+            i64 offset = probe_coord(2) * stride;
+            stride = num_probes(0);
+            probe_coord(1) = i32((ks - offset) / stride);
+            offset += probe_coord(1) * stride;
+            probe_coord(0) = i32(ks - offset);
+            return probe_coord;
+        }
+
+        ivec3 probe_coord;
+        probe_coord(0) = active_probes(ks, 0);
+        probe_coord(1) = active_probes(ks, 1);
+        probe_coord(2) = active_probes(ks, 2);
+        return probe_coord;
+    }
+
     YAKL_INLINE i64 num_active_probes() const {
         if (sparse) {
             return active_probes.extent(0);
         }
-        return num_probes(0) * num_probes(1);
+        i64 total_probes = num_probes(0) * num_probes(1);
+        if constexpr (NumDim == 3) {
+            total_probes *= num_probes(2);
+        }
+        return total_probes;
     }
 };
 
-struct ProbesToCompute {
+struct ProbesToCompute2d {
     bool sparse;
     CascadeStorage c0_size;
     std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes; // [n, 2 (u, v)]
@@ -197,7 +246,7 @@ struct ProbesToCompute {
     );
 
     /// Bind cascade n to device type
-    DeviceProbesToCompute bind(int cascade_idx) const;
+    DeviceProbesToCompute<2> bind(int cascade_idx) const;
 
     /// Number of probes to compute in cascade n
     i64 num_active_probes(int cascade_idx) const;

@@ -22,7 +22,7 @@ void dynamic_compute_gamma_atomic(
     using namespace ConstantsFP;
     const auto flat_atmos = flatten<const fp_t>(state.atmos);
 
-    constexpr int RcMode = RC_flags_storage();
+    constexpr int RcMode = RC_flags_storage_2d();
     if constexpr (RcMode & RC_PREAVERAGE) {
         throw std::runtime_error("Dynamic Non-LTE calculation of Gamma incompatible with PREAVERAGE. Try DIR_BY_DIR instead.");
     }
@@ -194,7 +194,7 @@ void dynamic_compute_gamma_nonatomic(
     using namespace ConstantsFP;
     const auto flat_atmos = flatten<const fp_t>(state.atmos);
 
-    constexpr int RcMode = RC_flags_storage();
+    constexpr int RcMode = RC_flags_storage_2d();
     if constexpr (RcMode & RC_PREAVERAGE) {
         throw std::runtime_error("Dynamic Non-LTE calculation of Gamma incompatible with PREAVERAGE. Try DIR_BY_DIR instead.");
     }
@@ -451,7 +451,7 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         .compute_alo = true,
         .dir_by_dir = DIR_BY_DIR
     });
-    constexpr int RcStorage = RC_flags_storage();
+    constexpr int RcStorage = RC_flags_storage_2d();
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {

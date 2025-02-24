@@ -1,4 +1,5 @@
 #include "ProfileNormalisation.hpp"
+#include "CascadeState.hpp"
 
 void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi) {
     const auto flatmos = flatten(state.atmos);
@@ -8,7 +9,7 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
     const int num_cascades = casc_state.num_cascades;
     auto bounds = mr_block_map.block_map.loop_bounds();
 
-    constexpr int RcMode = RC_flags_storage();
+    constexpr int RcMode = RC_flags_storage_2d();
     CascadeStorage dims = state.c0_size;
     CascadeRays ray_set = cascade_compute_size<RcMode>(dims, 0);
     // NOTE(cmo): This is pretty thrown-together

@@ -2,6 +2,7 @@
 #define DEXRT_BOUNDARY_DISPATCH_HPP
 
 #include "State.hpp"
+#include "CascadeState.hpp"
 
 struct DeviceBoundaries {
     BoundaryType boundary;

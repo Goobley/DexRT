@@ -4,7 +4,7 @@
 #include "CascadeState.hpp"
 
 int LineSweepData::get_cascade_subset_idx(int cascade_idx, int subset_idx) const {
-    constexpr int RcFlags = RC_flags_storage();
+    constexpr int RcFlags = RC_flags_storage_2d();
     constexpr int num_subsets = subset_tasks_per_cascade<RcFlags>();
     return (cascade_idx - LINE_SWEEP_START_CASCADE) * num_subsets + subset_idx;
 }
@@ -29,7 +29,7 @@ KOKKOS_INLINE_FUNCTION vec2 select_origin(const vec2& dir, const GridBbox<2>& bb
 }
 
 CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, int max_cascade, int subset_idx) {
-    constexpr int RcMode = RC_flags_storage();
+    constexpr int RcMode = RC_flags_storage_2d();
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
     const fp_t step = probe_spacing(cascade_idx);
     const IntervalLength interval = cascade_interval_length(max_cascade, cascade_idx);
@@ -153,7 +153,7 @@ CascadeLineSet construct_line_sweep_subset(const State& state, int cascade_idx, 
 LineSweepData construct_line_sweep_data(const State& state, int max_cascade) {
 
     int min_cascade = LINE_SWEEP_START_CASCADE;
-    constexpr int RcMode = RC_flags_storage();
+    constexpr int RcMode = RC_flags_storage_2d();
     constexpr int num_subsets = subset_tasks_per_cascade<RcMode>();
 
     std::vector<CascadeLineSet> cascade_sets;

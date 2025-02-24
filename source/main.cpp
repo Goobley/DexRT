@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "State.hpp"
+#include "CascadeState.hpp"
 #include "Utils.hpp"
 #include "Atmosphere.hpp"
 #include "Populations.hpp"
@@ -230,7 +231,7 @@ void init_state (State* state, const DexrtConfig& config) {
         c0_rays = init_given_emis_opac(state, config);
     }
 
-    constexpr int RcMode = RC_flags_storage();
+    constexpr int RcMode = RC_flags_storage_2d();
     state->c0_size = cascade_rays_to_storage<RcMode>(c0_rays);
 
     allocate_J(state);

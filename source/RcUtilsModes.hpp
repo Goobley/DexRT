@@ -2,46 +2,10 @@
 #define DEXRT_UTILS_MODES_HPP
 #include "Types.hpp"
 #include "State.hpp"
-#include "CascadeState.hpp"
-
-constexpr int RC_DYNAMIC = 0x1;
-constexpr int RC_PREAVERAGE = 0x2;
-constexpr int RC_SAMPLE_BC = 0x4;
-constexpr int RC_COMPUTE_ALO = 0x8;
-constexpr int RC_DIR_BY_DIR = 0x10;
-constexpr int RC_LINE_SWEEP = 0x20; // NOTE(cmo) only added in one place to flag for BC handling
-
-struct RcFlags {
-    bool dynamic = false;
-    bool preaverage = PREAVERAGE;
-    bool sample_bc = false;
-    bool compute_alo = false;
-    bool dir_by_dir = DIR_BY_DIR;
-} ;
-
-
-YAKL_INLINE constexpr int RC_flags_pack(const RcFlags& flags) {
-    int flag = 0;
-    if (flags.dynamic) {
-        flag |= RC_DYNAMIC;
-    }
-    if (flags.preaverage) {
-        flag |= RC_PREAVERAGE;
-    }
-    if (flags.sample_bc) {
-        flag |= RC_SAMPLE_BC;
-    }
-    if (flags.compute_alo) {
-        flag |= RC_COMPUTE_ALO;
-    }
-    if (flags.dir_by_dir) {
-        flag |= RC_DIR_BY_DIR;
-    }
-    return flag;
-}
+#include "RcConstants.hpp"
 
 /// Returns the packed RC flags that affect cascade storage (i.e. known at compile time)
-YAKL_INLINE constexpr int RC_flags_storage() {
+YAKL_INLINE constexpr int RC_flags_storage_2d() {
     return RC_flags_pack(RcFlags{
         .preaverage=PREAVERAGE,
         .dir_by_dir=DIR_BY_DIR
@@ -276,13 +240,13 @@ YAKL_INLINE vec2 probe_pos(ivec2 probe_coord, int n) {
     return pos;
 }
 
-struct BilinearCorner {
+struct TrilinearCorner {
     ivec2 corner;
     vec2 frac;
 };
 
-YAKL_INLINE BilinearCorner bilinear_corner(ivec2 probe_coord) {
-    BilinearCorner result;
+YAKL_INLINE TrilinearCorner bilinear_corner(ivec2 probe_coord) {
+    TrilinearCorner result;
     result.corner(0) = std::max(int((probe_coord(0) - 1) / 2), 0);
     result.corner(1) = std::max(int((probe_coord(1) - 1) / 2), 0);
     // NOTE(cmo): Weights for this corner
@@ -301,7 +265,7 @@ YAKL_INLINE BilinearCorner bilinear_corner(ivec2 probe_coord) {
     return result;
 }
 
-YAKL_INLINE vec4 bilinear_weights(const BilinearCorner& bilin) {
+YAKL_INLINE vec4 bilinear_weights(const TrilinearCorner& bilin) {
     vec4 result;
     result(0) = bilin.frac(0) * bilin.frac(1); // u_bc, v_bc
     result(1) = (FP(1.0) - bilin.frac(0)) * bilin.frac(1); // u_uc, v_bc
@@ -318,7 +282,7 @@ YAKL_INLINE ivec2 bilinear_offset() {
     return result;
 };
 
-YAKL_INLINE ivec2 bilinear_offset(const BilinearCorner& bilin, const ivec2& num_probes, int sample) {
+YAKL_INLINE ivec2 bilinear_offset(const TrilinearCorner& bilin, const ivec2& num_probes, int sample) {
     // const bool u0 = bilin.corner(0) == 0;
     const bool u0 = false; // NOTE(cmo): Handled by initial weight
     const bool u_max = bilin.corner(0) == (num_probes(0) - 1);
@@ -497,33 +461,6 @@ template <int RcMode>
 YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeRays& dims, const ProbeIndex& index) {
     i64 lin_idx = probe_linear_index<RcMode>(dims, index);
     return casc(lin_idx);
-}
-
-/// Index i for cascade n, ip for n+1. If no n+1, ip=-1
-struct CascadeIdxs {
-    int i;
-    int ip;
-};
-
-YAKL_INLINE CascadeIdxs cascade_indices(const CascadeState& casc, int n) {
-    CascadeIdxs idxs;
-    if constexpr (PINGPONG_BUFFERS) {
-        if (n & 1) {
-            idxs.i = 1;
-            idxs.ip = 0;
-        } else {
-            idxs.i = 0;
-            idxs.ip = 1;
-        }
-    } else {
-        idxs.i = n;
-        idxs.ip = n + 1;
-    }
-
-    if (n == casc.num_cascades) {
-        idxs.ip = -1;
-    }
-    return idxs;
 }
 
 struct IntervalLength {

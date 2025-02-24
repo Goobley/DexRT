@@ -10,12 +10,39 @@ struct CascadeState {
     std::vector<Fp1d> i_cascades;
     std::vector<Fp1d> tau_cascades;
     Fp1d alo;
-    ProbesToCompute probes_to_compute;
+    ProbesToCompute2d probes_to_compute;
     MultiResMipChain mip_chain;
     LineSweepData line_sweep_data;
 
     bool init(const State& state, int max_cascade);
 };
+
+/// Index i for cascade n, ip for n+1. If no n+1, ip=-1
+struct CascadeIdxs {
+    int i;
+    int ip;
+};
+
+YAKL_INLINE CascadeIdxs cascade_indices(const CascadeState& casc, int n) {
+    CascadeIdxs idxs;
+    if constexpr (PINGPONG_BUFFERS) {
+        if (n & 1) {
+            idxs.i = 1;
+            idxs.ip = 0;
+        } else {
+            idxs.i = 0;
+            idxs.ip = 1;
+        }
+    } else {
+        idxs.i = n;
+        idxs.ip = n + 1;
+    }
+
+    if (n == casc.num_cascades) {
+        idxs.ip = -1;
+    }
+    return idxs;
+}
 
 struct DeviceCascadeState {
     int num_cascades;

@@ -13,7 +13,7 @@ void compute_min_max_vel(
     max_vel = -FP(1e8);
     yakl::fence();
 
-    constexpr i32 RcMode = RC_flags_storage();
+    constexpr i32 RcMode = RC_flags_storage_2d();
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
 

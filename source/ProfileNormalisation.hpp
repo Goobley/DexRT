@@ -10,6 +10,7 @@
 #include "RcUtilsModes.hpp"
 
 
+struct CascadeState;
 void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi=true);
 
 #else

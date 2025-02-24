@@ -139,7 +139,7 @@ void MultiResMipChain::fill_subset_mip0_atomic(
             .vy = vy,
             .vz = vz
         };
-        dir_data.fill<RC_flags_storage()>(state, subset, vels, n_star);
+        dir_data.fill<RC_flags_storage_2d()>(state, subset, vels, n_star);
     }
 }
 

@@ -1165,7 +1165,7 @@ struct MultiLevelDDA {
     vec<NumDim> delta;
 
     RaySegment<NumDim> ray;
-    MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE>& idx_gen;
+    MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE, NumDim>& idx_gen;
 
     YAKL_INLINE MultiLevelDDA(MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE, NumDim>& idx_gen_) : idx_gen(idx_gen_) {};
 
@@ -1195,13 +1195,13 @@ struct MultiLevelDDA {
         if (in_bounds() && get_sample_level() < 0) {
             step_size = BLOCK_SIZE;
         }
-        for (int ax = 0; ax < NUM_DIM; ++ax) {
+        for (int ax = 0; ax < NumDim; ++ax) {
             curr_coord(ax) = curr_coord(ax) & (~uint32_t(step_size-1));
         }
         t = ray.t0;
 
         vec2 inv_d = ray.inv_d;
-        for (int ax = 0; ax < NUM_DIM; ++ax) {
+        for (int ax = 0; ax < NumDim; ++ax) {
             if (ray.d(ax) == FP(0.0)) {
                 step(ax) = 0;
                 next_hit(ax) = FP(1e24);
@@ -1233,7 +1233,12 @@ struct MultiLevelDDA {
     }
 
     YAKL_INLINE i32 get_sample_level() const {
-        i32 mip_level = idx_gen.get_sample_level(Coord2{.x = curr_coord(0), .z = curr_coord(1)});
+        i32 mip_level;
+        if constexpr (NumDim == 2) {
+            mip_level = idx_gen.get_sample_level(Coord2{.x = curr_coord(0), .z = curr_coord(1)});
+        } else {
+            mip_level = idx_gen.get_sample_level(Coord2{.x = curr_coord(0), .y = curr_coord(1), .z = curr_coord(2)});
+        }
         return std::min(mip_level, i32(max_mip_level));
     }
 
@@ -1270,8 +1275,8 @@ struct MultiLevelDDA {
     }
 
     YAKL_INLINE void compute_axis_and_dt() {
-        step_axis = 0;
         if constexpr (NumDim == 2) {
+            step_axis = 0;
             if (next_hit(1) < next_hit(0)) {
                 step_axis = 1;
             }
@@ -1284,10 +1289,13 @@ struct MultiLevelDDA {
                 } break;
             }
         } else {
-            if (next_hit(1) < next_hit(0)) {
+            if (next_hit(0) < next_hit(1) && next_hit(0) < next_hit(2)) {
+                step_axis = 0;
+            } else if (next_hit(1) < next_hit(2)) {
                 step_axis = 1;
+            } else {
+                step_axis = 2;
             }
-            static_assert(NumDim == 3, "We need an argmin that works here");
             switch (step_axis) {
                 case 0: {
                     compute_axis_and_dt_impl<0>();
@@ -1320,12 +1328,12 @@ struct MultiLevelDDA {
         if (!lock_to_block) {
             curr_coord = round_down<NumDim>(curr_pos);
         }
-        for (int ax = 0; ax < NUM_DIM; ++ax) {
+        for (int ax = 0; ax < NumDim; ++ax) {
             curr_coord(ax) = curr_coord(ax) & (~uint32_t(step_size-1));
         }
 
         vec2 inv_d = ray.inv_d;
-        for (int ax = 0; ax < NUM_DIM; ++ax) {
+        for (int ax = 0; ax < NumDim; ++ax) {
             if (step(ax) == 0) {
                 continue;
             }
@@ -1448,8 +1456,10 @@ struct MultiLevelDDA {
     }
 };
 
-typedef IndexGen<BLOCK_SIZE> IdxGen;
-typedef MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE> MRIdxGen;
+typedef IndexGen<BLOCK_SIZE, 2> IdxGen;
+typedef MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE, 2> MRIdxGen;
+typedef IndexGen<BLOCK_SIZE_3D, 3> IdxGen3d;
+typedef MultiLevelIndexGen<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3> MRIdxGen3d;
 
 #else
 #endif

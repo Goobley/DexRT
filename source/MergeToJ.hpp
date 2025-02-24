@@ -19,7 +19,7 @@ inline FpConst2d merge_c0_to_J(
     const auto& c0_dims = casc_state.probes_to_compute.c0_size;
     const auto& c0 = casc_state.i_cascades[0];
 
-    constexpr int RcMode = RC_flags_storage();
+    constexpr int RcMode = RC_flags_storage_2d();
     const fp_t phi_weight = FP(1.0) / fp_t(c0_dirs_to_average<RcMode>());
     int wave_batch = la_end - la_start;
 
@@ -27,7 +27,7 @@ inline FpConst2d merge_c0_to_J(
     if (c0_dims.wave_batch == J.extent(0)) {
         la_start = 0;
     }
-    DeviceProbesToCompute probes_to_compute = casc_state.probes_to_compute.bind(0);
+    DeviceProbesToCompute<2> probes_to_compute = casc_state.probes_to_compute.bind(0);
 
     // For a dense J, this is effectively filling in the flattened array
     dex_parallel_for(

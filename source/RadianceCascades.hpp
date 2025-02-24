@@ -61,7 +61,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        BilinearCorner base = bilinear_corner(this_probe.coord);
+        TrilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau, upper_dims);
         for (int bilin = 0; bilin < 4; ++bilin) {
@@ -108,7 +108,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        BilinearCorner base = bilinear_corner(this_probe.coord);
+        TrilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau);
         CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(casc_state.state.upper_dims);
@@ -277,7 +277,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        BilinearCorner base = bilinear_corner(this_probe.coord);
+        TrilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau);
         ProbeIndex prev_probe(this_probe);
@@ -453,7 +453,7 @@ template <
 inline void parallax_fix_inner_merge(
     const State& state,
     const DeviceCascadeState& dev_casc_state,
-    const DeviceProbesToCompute& probe_coord_lookup,
+    const DeviceProbesToCompute<2>& probe_coord_lookup,
     const CascadeRays& rays,
     const CascadeCalcSubset& subset
 ) {
@@ -500,7 +500,7 @@ inline void parallax_fix_inner_merge(
                 const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
                 RadianceInterval<DexEmpty> ri{};
-                BilinearCorner base = bilinear_corner(probe_idx.coord);
+                TrilinearCorner base = bilinear_corner(probe_idx.coord);
                 vec4 weights = bilinear_weights(base);
                 JasUnpack(dev_casc_state, upper_I, upper_tau);
 
@@ -668,7 +668,7 @@ void cascade_i_25d(
 
     wave_batch = std::min(wave_batch, ray_subset.wave_batch);
     i64 spatial_bounds = casc_state.probes_to_compute.num_active_probes(cascade_idx);
-    DeviceProbesToCompute probe_coord_lookup = casc_state.probes_to_compute.bind(cascade_idx);
+    DeviceProbesToCompute<2> probe_coord_lookup = casc_state.probes_to_compute.bind(cascade_idx);
 
     JasUnpack(state, mr_block_map);
     const auto& block_map = mr_block_map.block_map;
