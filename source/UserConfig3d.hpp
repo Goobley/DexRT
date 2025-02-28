@@ -17,9 +17,9 @@ constexpr int ENTRY_SIZE_3D = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t C0_LENGTH_3D = FP(1.5);
+constexpr fp_t C0_LENGTH_3D = FP(20.0);
 constexpr int C0_AZ_RAYS_3D = 4;
-constexpr int C0_POLAR_RAYS_3D = 4;
+constexpr int C0_POLAR_RAYS_3D = 8;
 
 // rays = C0 * 2 ** (BRANCHING_EXP * n)
 constexpr int AZ_BRANCHING_EXP_3D = 1;

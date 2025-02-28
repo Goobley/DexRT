@@ -554,7 +554,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
                 const int upper_ray_start_idx = upper_ray_idx(probe_idx.dir, dev_casc_state.n);
                 const int num_rays_per_ray = upper_texels_per_ray<RcMode>(dev_casc_state.n);
                 const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
-                TrilinearCorner base = bilinear_corner(probe_idx.coord);
+                BilinearCorner base = bilinear_corner(probe_idx.coord);
                 vec4 weights = bilinear_weights(base);
 
                 RadianceInterval<DexEmpty> upper;

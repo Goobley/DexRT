@@ -240,13 +240,13 @@ YAKL_INLINE vec2 probe_pos(ivec2 probe_coord, int n) {
     return pos;
 }
 
-struct TrilinearCorner {
+struct BilinearCorner {
     ivec2 corner;
     vec2 frac;
 };
 
-YAKL_INLINE TrilinearCorner bilinear_corner(ivec2 probe_coord) {
-    TrilinearCorner result;
+YAKL_INLINE BilinearCorner bilinear_corner(ivec2 probe_coord) {
+    BilinearCorner result;
     result.corner(0) = std::max(int((probe_coord(0) - 1) / 2), 0);
     result.corner(1) = std::max(int((probe_coord(1) - 1) / 2), 0);
     // NOTE(cmo): Weights for this corner
@@ -265,7 +265,7 @@ YAKL_INLINE TrilinearCorner bilinear_corner(ivec2 probe_coord) {
     return result;
 }
 
-YAKL_INLINE vec4 bilinear_weights(const TrilinearCorner& bilin) {
+YAKL_INLINE vec4 bilinear_weights(const BilinearCorner& bilin) {
     vec4 result;
     result(0) = bilin.frac(0) * bilin.frac(1); // u_bc, v_bc
     result(1) = (FP(1.0) - bilin.frac(0)) * bilin.frac(1); // u_uc, v_bc
@@ -282,7 +282,7 @@ YAKL_INLINE ivec2 bilinear_offset() {
     return result;
 };
 
-YAKL_INLINE ivec2 bilinear_offset(const TrilinearCorner& bilin, const ivec2& num_probes, int sample) {
+YAKL_INLINE ivec2 bilinear_offset(const BilinearCorner& bilin, const ivec2& num_probes, int sample) {
     // const bool u0 = bilin.corner(0) == 0;
     const bool u0 = false; // NOTE(cmo): Handled by initial weight
     const bool u_max = bilin.corner(0) == (num_probes(0) - 1);

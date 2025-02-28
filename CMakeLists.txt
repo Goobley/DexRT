@@ -64,6 +64,9 @@ list(APPEND DEX_SOURCE_FILES
 )
 list(APPEND DEX_3D_SOURCE_FILES
     "source/main_3d.cpp"
+    "source/StaticFormalSolution3d.cpp"
+    "source/CascadeState3d.cpp"
+    "source/BlockMap.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"

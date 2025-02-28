@@ -5,6 +5,7 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "BoundaryType.hpp"
+#include <fmt/core.h>
 #include <yaml-cpp/yaml.h>
 
 struct DexrtOutputConfig {

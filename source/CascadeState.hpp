@@ -23,6 +23,7 @@ struct CascadeIdxs {
     int ip;
 };
 
+template <typename CascadeState>
 YAKL_INLINE CascadeIdxs cascade_indices(const CascadeState& casc, int n) {
     CascadeIdxs idxs;
     if constexpr (PINGPONG_BUFFERS) {
@@ -44,7 +45,8 @@ YAKL_INLINE CascadeIdxs cascade_indices(const CascadeState& casc, int n) {
     return idxs;
 }
 
-struct DeviceCascadeState {
+template <typename CascadeStorage>
+struct DeviceCascadeStateImpl {
     int num_cascades;
     int n;
     CascadeStorage casc_dims;
@@ -55,6 +57,8 @@ struct DeviceCascadeState {
     FpConst1d upper_tau;
     Fp1d alo; /// [ks, phi, wave, theta], but flattened. Index using Cascade operators (probe_lin_index) -- you need to fetch intensity at the same time anyway.
 };
+typedef DeviceCascadeStateImpl<CascadeStorage> DeviceCascadeState;
+typedef DeviceCascadeStateImpl<CascadeStorage3d> DeviceCascadeState3d;
 
 template <typename Bc>
 struct CascadeStateAndBc {

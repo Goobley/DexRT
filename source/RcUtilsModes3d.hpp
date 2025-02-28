@@ -2,6 +2,7 @@
 #define DEXRT_UTILS_MODES_3D_HPP
 #include "Types.hpp"
 #include "RcConstants.hpp"
+#include "RcUtilsModes.hpp"
 #include "Utils.hpp"
 
 /// Returns the packed RC flags that affect cascade storage (i.e. known at compile time)
@@ -15,7 +16,7 @@ YAKL_INLINE constexpr int RC_flags_storage_3d() {
 namespace DexImpl {
     /// Simple x^exponent calculation for both being integers whilst
     /// remaining relatively efficient
-    int powi(int x, int exponent) {
+    KOKKOS_FORCEINLINE_FUNCTION int powi(int x, int exponent) {
         // We right-shift the exponent each iteration until there's no bits
         // left. If odd, we have to self-multiply twice (as (3 >> 1) == 1).
         int result = 1;
@@ -191,11 +192,6 @@ YAKL_INLINE i64 cascade_entries(const CascadeStorage3d& c) {
     return result;
 }
 
-YAKL_INLINE constexpr fp_t probe_spacing(int n) {
-    fp_t probe_spacing = PROBE0_SPACING * (1 << n);
-    return probe_spacing;
-}
-
 YAKL_INLINE vec3 probe_pos(ivec3 probe_coord, int n) {
     fp_t probe_spacing = PROBE0_SPACING * (1 << n);
     vec3 pos;
@@ -324,7 +320,7 @@ YAKL_INLINE i64 probe_linear_index(const CascadeStorage3d& dims, const ProbeInde
         stride = dims.num_az_rays;
         factor = probe.polar / dims.num_polar_rays;
         polar = probe.polar - factor * dims.num_polar_rays;
-        idx += polar;
+        idx += stride * polar;
         stride *= dims.num_polar_rays;
     } else {
         az = probe.az;
@@ -345,6 +341,7 @@ YAKL_INLINE i64 probe_linear_index(const CascadeStorage3d& dims, const ProbeInde
         YAKL_EXECUTE_ON_HOST_ONLY(
             fmt::println(stderr, "DexRT Error: Cascade index [az] ({} >= {}).", az, dims.num_az_rays);
         );
+        printf("%d > %d\n", az, dims.num_az_rays);
         yakl::yakl_throw("DexRT Error: Cascade index [az] out of bounds.");
     }
     if (polar >= dims.num_polar_rays) {
@@ -441,11 +438,6 @@ YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeRays3d& dims, c
     return casc(lin_idx);
 }
 
-struct IntervalLength {
-    fp_t from;
-    fp_t to;
-};
-
 YAKL_INLINE IntervalLength cascade_interval_length_3d(int num_cascades, int n) {
     IntervalLength length = {
         .from = C0_LENGTH_3D * ((n == 0) ? FP(0.0) : (1 << ((n-1) * SPATIAL_SCALE_EXP_3D))),
@@ -457,6 +449,9 @@ YAKL_INLINE IntervalLength cascade_interval_length_3d(int num_cascades, int n) {
     return length;
 }
 
+/// The direction of propagation along the ray (i.e. towards the probe), rather
+/// than in the classical RC sense. Use with t0/t1 as defined in `probe_ray`
+/// below.
 YAKL_INLINE vec3 ray_dir(const CascadeRays3d& dims, int phi_idx, int theta_idx) {
     namespace Const = ConstantsFP;
     fp_t phi = FP(2.0) * Const::pi / fp_t(dims.num_az_rays) * (phi_idx + FP(0.5)); // (0, 2pi)
@@ -470,18 +465,20 @@ YAKL_INLINE vec3 ray_dir(const CascadeRays3d& dims, int phi_idx, int theta_idx) 
     return dir;
 }
 
-// // TODO(cmo): Go immediately to a RaySegment<3>
-YAKL_INLINE RayProps ray_props(const CascadeRays& dims, int num_cascades, int n, const ProbeIndex& probe) {
-    RayProps ray;
-    ray.centre = probe_pos(probe.coord, n);
-
-    ray.dir = ray_dir(dims, probe.dir);
-
-    IntervalLength length = cascade_interval_length(num_cascades, n);
-    ray.start(0) = ray.centre(0) + ray.dir(0) * length.from;
-    ray.start(1) = ray.centre(1) + ray.dir(1) * length.from;
-    ray.end(0) = ray.centre(0) + ray.dir(0) * length.to;
-    ray.end(1) = ray.centre(1) + ray.dir(1) * length.to;
+/// Set up a RaySegment for a particular ray of a probe. No modifications to
+/// this have to be made before computing the RTE along it, i.e. the direction
+/// points towards the probe centre.
+YAKL_INLINE RaySegment<3> probe_ray(const CascadeRays3d& dims, int num_cascades, int n, const ProbeIndex3d& probe) {
+    // NOTE(cmo): In 3D we invert directly so that we're tracing towards the
+    // probe. In this case we keep the direction the same but set t0 = -t1 and
+    // t1 = -t0 to offset the ray to the other side of the probe so it's tracing
+    // towards the probe.
+    vec3 o = probe_pos(probe.coord, n);
+    vec3 dir = ray_dir(dims, probe.az, probe.polar);
+    IntervalLength length = cascade_interval_length_3d(num_cascades, n);
+    const fp_t t0 = -length.to;
+    const fp_t t1 = -length.from;
+    RaySegment<3> ray(o, dir, t0, t1);
     return ray;
 }
 

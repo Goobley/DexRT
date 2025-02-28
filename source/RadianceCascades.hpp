@@ -61,7 +61,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        TrilinearCorner base = bilinear_corner(this_probe.coord);
+        BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau, upper_dims);
         for (int bilin = 0; bilin < 4; ++bilin) {
@@ -108,7 +108,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        TrilinearCorner base = bilinear_corner(this_probe.coord);
+        BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau);
         CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(casc_state.state.upper_dims);
@@ -277,7 +277,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        TrilinearCorner base = bilinear_corner(this_probe.coord);
+        BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau);
         ProbeIndex prev_probe(this_probe);
@@ -500,7 +500,7 @@ inline void parallax_fix_inner_merge(
                 const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
                 RadianceInterval<DexEmpty> ri{};
-                TrilinearCorner base = bilinear_corner(probe_idx.coord);
+                BilinearCorner base = bilinear_corner(probe_idx.coord);
                 vec4 weights = bilinear_weights(base);
                 JasUnpack(dev_casc_state, upper_I, upper_tau);
 

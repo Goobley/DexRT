@@ -160,12 +160,159 @@ struct RadianceInterval {
     Alo alo;
 };
 
+/// deprecated but needs removing from API
 struct RayProps {
     vec2 start;
     vec2 end;
     vec2 dir;
     vec2 centre;
 };
+
+template <int NumDim=2>
+struct GridBbox {
+    yakl::SArray<i32, 1, NumDim> min;
+    yakl::SArray<i32, 1, NumDim> max;
+};
+
+struct IntersectionResult {
+    /// i.e. at least partially inside.
+    bool intersects;
+    fp_t t0;
+    fp_t t1;
+};
+
+template <int NumDim=2>
+struct RaySegment {
+    vec<NumDim> o;
+    vec<NumDim> d;
+    vec<NumDim> inv_d;
+    fp_t t0;
+    fp_t t1;
+
+
+    YAKL_INLINE
+    RaySegment() :
+        o(),
+        d(),
+        inv_d(),
+        t0(),
+        t1()
+    {}
+
+    YAKL_INLINE
+    RaySegment(vec<NumDim> o_, vec<NumDim> d_, fp_t t0_=FP(0.0), fp_t t1_=FP(1e24)) :
+        o(o_),
+        d(d_),
+        t0(t0_),
+        t1(t1_)
+    {
+        for (int i = 0; i < NumDim; ++i) {
+            inv_d(i) = FP(1.0) / d(i);
+        }
+    }
+
+    YAKL_INLINE vec<NumDim> operator()(fp_t t) const {
+        vec<NumDim> result;
+        for (int i = 0; i < NumDim; ++i) {
+            result(i) = o(i) + t * d(i);
+        }
+        return result;
+    }
+
+    /// Check intersection in the sense of whether the ray is inside the bbox,
+    /// not whether it hits a boundary. Shrink bbox contours in that fraction of
+    /// a voxel to try and force ray positions in bounds.
+    YAKL_INLINE IntersectionResult intersects(const GridBbox<NumDim>& bbox, fp_t shrink_bbox=FP(1e-4)) const {
+        fp_t t0_ = t0;
+        fp_t t1_ = t1;
+
+        for (int ax = 0; ax < NumDim; ++ax) {
+            fp_t a = fp_t(bbox.min(ax)) + shrink_bbox;
+            fp_t b = fp_t(bbox.max(ax)) - shrink_bbox;
+            if (a >= b) {
+                return IntersectionResult{
+                    .intersects = false,
+                    .t0 = t0_,
+                    .t1 = t1_
+                };
+            }
+
+            a = (a - o(ax)) * inv_d(ax);
+            b = (b - o(ax)) * inv_d(ax);
+            if (a > b) {
+                fp_t temp = b;
+                b = a;
+                a = temp;
+            }
+
+            if (a > t0_) {
+                t0_ = a;
+            }
+            if (b < t1_) {
+                t1_ = b;
+            }
+            if (t0_ > t1_) {
+                return IntersectionResult{
+                    .intersects = false,
+                    .t0 = t0_,
+                    .t1 = t1_
+                };
+            }
+        }
+        return IntersectionResult{
+            .intersects = true,
+            .t0 = t0_,
+            .t1 = t1_
+        };
+    }
+
+    YAKL_INLINE bool clip(const GridBbox<NumDim>& bbox, bool* start_clipped=nullptr, fp_t shrink_bbox=FP(1e-4)) {
+        IntersectionResult result = intersects(bbox, shrink_bbox);
+        if (start_clipped) {
+            *start_clipped = false;
+        }
+
+        if (result.intersects) {
+            if (start_clipped && result.t0 > t0) {
+                *start_clipped = true;
+            }
+
+            t0 = result.t0;
+            t1 = result.t1;
+        }
+        return result.intersects;
+    }
+
+    /// Updates the origin to be ray(t) and the start/end t accordingly
+    YAKL_INLINE void update_origin(fp_t t) {
+        o = (*this)(t);
+        t0 -= t;
+        t1 -= t;
+    }
+
+    /// Computes t for a particular position. Does not verify if actually on the
+    /// line! Uses x unless dir(x) == 0, in which case it uses z (y in 3D and
+    /// then onto z if necessary)
+    YAKL_INLINE fp_t compute_t(vec2 pos) {
+        fp_t t;
+        if (d(0) != FP(0.0)) {
+            t = (pos(0) - o(0)) * inv_d(0);
+        } else {
+            if constexpr (NumDim == 3) {
+                if (d(1) != FP(0.0)) {
+                    t = (pos(1) - o(1)) * inv_d(1);
+                } else {
+                    t = (pos(2) - o(2)) * inv_d(2);
+                }
+            } else {
+                t = (pos(1) - o(1)) * inv_d(1);
+            }
+        }
+        return t;
+    }
+};
+
+
 
 template <int NumDim=2>
 struct DeviceProbesToCompute {

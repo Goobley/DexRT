@@ -7,11 +7,6 @@
 #include "MortonCodes.hpp"
 #include <fmt/core.h>
 
-template <int NumDim=2>
-struct GridBbox {
-    yakl::SArray<i32, 1, NumDim> min;
-    yakl::SArray<i32, 1, NumDim> max;
-};
 // NOTE(cmo): Whether to assume that GridBbox.min is always 0 (in practice, yes).
 constexpr bool assume_lower_tile_bound_0 = true;
 
@@ -260,7 +255,12 @@ struct MultiLevelLookup {
 
     template <class BlockMap, int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
     void init(const BlockMap& block_map) {
-        static_assert(NumDim != 3, "3D");
+        num_x_tiles() = block_map.num_x_tiles();
+        num_y_tiles() = block_map.num_y_tiles();
+        num_z_tiles() = block_map.num_z_tiles();
+        const i32 num_entries = block_map.num_x_tiles() * block_map.num_y_tiles() * block_map.num_z_tiles();
+        const i32 storage_for_entries = (num_entries + packed_entries_per_u64 - 1) / packed_entries_per_u64;
+        entries = decltype(entries)("MultiLevel Entries", storage_for_entries);
     }
 
     // 2D
@@ -447,7 +447,7 @@ struct IndexGen {
     static constexpr i32 L2_BLOCK_SIZE = std::bit_width(u32(BLOCK_SIZE)) - 1;
 
     YAKL_INLINE
-    IndexGen(const BlockMap<BLOCK_SIZE>& block_map_) :
+    IndexGen(const BlockMap<BLOCK_SIZE, NumDim>& block_map_) :
         tile_key(), // Now auto initialises to -1
         tile_base_idx(),
         block_map(block_map_)
@@ -1003,145 +1003,6 @@ struct MultiLevelIndexGen {
     }
 };
 
-struct IntersectionResult {
-    /// i.e. at least partially inside.
-    bool intersects;
-    fp_t t0;
-    fp_t t1;
-};
-
-template <int NumDim=2>
-struct RaySegment {
-    vec<NumDim> o;
-    vec<NumDim> d;
-    vec<NumDim> inv_d;
-    fp_t t0;
-    fp_t t1;
-
-
-    YAKL_INLINE
-    RaySegment() :
-        o(),
-        d(),
-        inv_d(),
-        t0(),
-        t1()
-    {}
-
-    YAKL_INLINE
-    RaySegment(vec<NumDim> o_, vec<NumDim> d_, fp_t t0_=FP(0.0), fp_t t1_=FP(1e24)) :
-        o(o_),
-        d(d_),
-        t0(t0_),
-        t1(t1_)
-    {
-        for (int i = 0; i < NumDim; ++i) {
-            inv_d(i) = FP(1.0) / d(i);
-        }
-    }
-
-    YAKL_INLINE vec<NumDim> operator()(fp_t t) const {
-        vec<NumDim> result;
-        for (int i = 0; i < NumDim; ++i) {
-            result(i) = o(i) + t * d(i);
-        }
-        return result;
-    }
-
-    /// Check intersection in the sense of whether the ray is inside the bbox,
-    /// not whether it hits a boundary. Shrink bbox contours in that fraction of
-    /// a voxel to try and force ray positions in bounds.
-    YAKL_INLINE IntersectionResult intersects(const GridBbox<NumDim>& bbox, fp_t shrink_bbox=FP(1e-4)) const {
-        fp_t t0_ = t0;
-        fp_t t1_ = t1;
-
-        for (int ax = 0; ax < NumDim; ++ax) {
-            fp_t a = fp_t(bbox.min(ax)) + shrink_bbox;
-            fp_t b = fp_t(bbox.max(ax)) - shrink_bbox;
-            if (a >= b) {
-                return IntersectionResult{
-                    .intersects = false,
-                    .t0 = t0_,
-                    .t1 = t1_
-                };
-            }
-
-            a = (a - o(ax)) * inv_d(ax);
-            b = (b - o(ax)) * inv_d(ax);
-            if (a > b) {
-                fp_t temp = b;
-                b = a;
-                a = temp;
-            }
-
-            if (a > t0_) {
-                t0_ = a;
-            }
-            if (b < t1_) {
-                t1_ = b;
-            }
-            if (t0_ > t1_) {
-                return IntersectionResult{
-                    .intersects = false,
-                    .t0 = t0_,
-                    .t1 = t1_
-                };
-            }
-        }
-        return IntersectionResult{
-            .intersects = true,
-            .t0 = t0_,
-            .t1 = t1_
-        };
-    }
-
-    YAKL_INLINE bool clip(const GridBbox<NumDim>& bbox, bool* start_clipped=nullptr, fp_t shrink_bbox=FP(1e-4)) {
-        IntersectionResult result = intersects(bbox, shrink_bbox);
-        if (start_clipped) {
-            *start_clipped = false;
-        }
-
-        if (result.intersects) {
-            if (start_clipped && result.t0 > t0) {
-                *start_clipped = true;
-            }
-
-            t0 = result.t0;
-            t1 = result.t1;
-        }
-        return result.intersects;
-    }
-
-    /// Updates the origin to be ray(t) and the start/end t accordingly
-    YAKL_INLINE void update_origin(fp_t t) {
-        o = (*this)(t);
-        t0 -= t;
-        t1 -= t;
-    }
-
-    /// Computes t for a particular position. Does not verify if actually on the
-    /// line! Uses x unless dir(x) == 0, in which case it uses z (y in 3D and
-    /// then onto z if necessary)
-    YAKL_INLINE fp_t compute_t(vec2 pos) {
-        fp_t t;
-        if (d(0) != FP(0.0)) {
-            t = (pos(0) - o(0)) * inv_d(0);
-        } else {
-            if constexpr (NumDim == 3) {
-                if (d(1) != FP(0.0)) {
-                    t = (pos(1) - o(1)) * inv_d(1);
-                } else {
-                    t = (pos(2) - o(2)) * inv_d(2);
-                }
-            } else {
-                t = (pos(1) - o(1)) * inv_d(1);
-            }
-        }
-        return t;
-    }
-};
-
-
 template <int NumDim>
 YAKL_INLINE ivec<NumDim> round_down(vec<NumDim> pt) {
     ivec<NumDim> result;
@@ -1200,7 +1061,7 @@ struct MultiLevelDDA {
         }
         t = ray.t0;
 
-        vec2 inv_d = ray.inv_d;
+        vec<NumDim> inv_d = ray.inv_d;
         for (int ax = 0; ax < NumDim; ++ax) {
             if (ray.d(ax) == FP(0.0)) {
                 step(ax) = 0;
@@ -1237,7 +1098,7 @@ struct MultiLevelDDA {
         if constexpr (NumDim == 2) {
             mip_level = idx_gen.get_sample_level(Coord2{.x = curr_coord(0), .z = curr_coord(1)});
         } else {
-            mip_level = idx_gen.get_sample_level(Coord2{.x = curr_coord(0), .y = curr_coord(1), .z = curr_coord(2)});
+            mip_level = idx_gen.get_sample_level(Coord3{.x = curr_coord(0), .y = curr_coord(1), .z = curr_coord(2)});
         }
         return std::min(mip_level, i32(max_mip_level));
     }
@@ -1332,7 +1193,7 @@ struct MultiLevelDDA {
             curr_coord(ax) = curr_coord(ax) & (~uint32_t(step_size-1));
         }
 
-        vec2 inv_d = ray.inv_d;
+        vec<NumDim> inv_d = ray.inv_d;
         for (int ax = 0; ax < NumDim; ++ax) {
             if (step(ax) == 0) {
                 continue;
