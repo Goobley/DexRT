@@ -49,7 +49,7 @@ CascadeRays3d init_given_emis_opac(State3d* st, const DexrtConfig& config) {
     return c0_rays;
 }
 
-void save_results(const State3d& state) {
+void save_results(const State3d& state, const CascadeState3d& casc_state) {
     const auto& config = state.config;
 
     yakl::SimpleNetCDF nc;
@@ -62,6 +62,8 @@ void save_results(const State3d& state) {
         state.given_state.emis.extent(3)
     );
     nc.write(J4d, "J", {"wavelength", "z", "y", "x"});
+    // nc.write(casc_state.i_cascades[0], "C0", {"C0_dim"});
+    // nc.write(casc_state.i_cascades[1], "C1", {"C1_dim"});
 }
 
 int main(int argc, char** argv) {
@@ -85,6 +87,7 @@ int main(int argc, char** argv) {
             .set_pool_size_mb(config.mem_pool_gb * 1024)
     );
     {
+        yakl::timer_start("DexRT");
         State3d state;
         state.config = config;
         CascadeRays3d c0_rays = init_given_emis_opac(&state, config);
@@ -95,7 +98,8 @@ int main(int argc, char** argv) {
         casc_state.init(state, config.max_cascade);
 
         static_formal_sol_rc_given_3d(state, casc_state);
-        save_results(state);
+        save_results(state, casc_state);
+        yakl::timer_stop("DexRT");
     }
     yakl::finalize();
     Kokkos::finalize();

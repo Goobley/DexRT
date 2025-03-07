@@ -170,7 +170,9 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
             }
             RadianceInterval<Alo> merged = merge_intervals(ri, upper_interp);
             interp.I += weights(bilin) * merged.I;
-            interp.tau += weights(bilin) * merged.tau;
+            if constexpr (STORE_TAU_CASCADES) {
+                interp.tau += weights(bilin) * merged.tau;
+            }
         }
     } else {
         interp = multi_level_dda_raymarch_2d<RcMode, Bc>(

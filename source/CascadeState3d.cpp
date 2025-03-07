@@ -11,7 +11,7 @@ bool CascadeState3d::init(const State3d& state, int max_cascades) {
         auto dims = cascade_size(c0, i);
         auto rays = cascade_storage_to_rays<RC_flags_storage_3d()>(dims);
         IntervalLength length = cascade_interval_length_3d(max_cascades, i);
-        fmt::println("Cascade {}: {}x{}x{} {}x{} directions [{}->{}]", i, rays.num_probes(0), rays.num_probes(1), rays.num_probes(2), rays.num_az_rays, rays.num_polar_rays, length.from, length.to);
+        fmt::println("Cascade {}: {}x{}x{} {}x{} directions [{}->{}]", i, rays.num_probes(0), rays.num_probes(1), rays.num_probes(2), rays.num_polar_rays, rays.num_az_rays, length.from, length.to);
         max_entries = std::max(max_entries, cascade_entries(dims));
     }
 

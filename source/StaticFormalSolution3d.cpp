@@ -5,7 +5,7 @@
 struct Raymarch3dArgs {
     const ProbeIndex3d& this_probe;
     const DeviceCascadeState3d& casc_state;
-    const MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3> mr_block_map;
+    const MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>& mr_block_map;
     const RaySegment<3>& ray;
     const fp_t distance_scale;
     const Fp1d& eta;
@@ -93,6 +93,80 @@ YAKL_INLINE RadianceInterval<DexEmpty> march_and_merge_average_interval_3d(const
     return merge_intervals(ri, interp);
 }
 
+template <int RcMode=0>
+YAKL_INLINE RadianceInterval<DexEmpty> march_and_merge_trilinear_interval_3d(const Raymarch3dArgs& args) {
+    JasUnpack(args, this_probe, casc_state);
+
+    RadianceInterval<DexEmpty> interp;
+    if (casc_state.upper_I.initialized()) {
+        JasUnpack(casc_state, upper_I, upper_tau, casc_dims, upper_dims);
+        CascadeRays3d casc_rays = cascade_storage_to_rays<RcMode>(casc_dims);
+        CascadeRays3d upper_casc_rays = cascade_storage_to_rays<RcMode>(upper_dims);
+
+        TexelsPerRay3d upper_tex = upper_texels_per_ray_3d<RcMode>(casc_state.n);
+        int upper_polar_start_idx = this_probe.polar * upper_dims.num_polar_rays / casc_dims.num_polar_rays;
+        int upper_az_start_idx = this_probe.az * upper_dims.num_az_rays / casc_dims.num_az_rays;
+        const fp_t ray_weight = FP(1.0) / fp_t(upper_tex.az * upper_tex.polar);
+
+        TrilinearCorner base = trilinear_corner(this_probe.coord);
+        vec<8> weights = trilinear_weights(base);
+        for (int tri_idx = 0; tri_idx < 8; ++tri_idx) {
+            ivec3 upper_coord = trilinear_coord(base, upper_dims.num_probes, tri_idx);
+            RaySegment<3> tri_ray = trilinear_probe_ray(
+                casc_rays,
+                upper_casc_rays,
+                casc_state.num_cascades,
+                casc_state.n,
+                this_probe,
+                upper_coord
+            );
+            RadianceInterval<DexEmpty> ri = multi_level_dda_raymarch_3d(
+                Raymarch3dArgs {
+                    .this_probe = args.this_probe,
+                    .casc_state = args.casc_state,
+                    .mr_block_map = args.mr_block_map,
+                    .ray = tri_ray,
+                    .distance_scale = args.distance_scale,
+                    .eta = args.eta,
+                    .chi = args.chi
+                }
+            );
+
+            RadianceInterval<DexEmpty> upper_interp{};
+            for (
+                int upper_polar_idx = upper_polar_start_idx;
+                upper_polar_idx < upper_polar_start_idx + upper_tex.polar;
+                ++upper_polar_idx
+            ) {
+                for (
+                    int upper_az_idx = upper_az_start_idx;
+                    upper_az_idx < upper_az_start_idx + upper_tex.az;
+                    ++upper_az_idx
+                ) {
+                    ProbeIndex3d upper_probe {
+                        .coord = upper_coord,
+                        .polar = upper_polar_idx,
+                        .az = upper_az_idx
+                    };
+                    i64 lin_idx = probe_linear_index<RcMode>(upper_dims, upper_probe);
+                    upper_interp.I += ray_weight * upper_I(lin_idx);
+                    if constexpr (STORE_TAU_CASCADES) {
+                        upper_interp.tau += ray_weight * upper_tau(lin_idx);
+                    }
+                }
+            }
+            RadianceInterval<DexEmpty> merged = merge_intervals(ri, upper_interp);
+            interp.I += weights(tri_idx) * merged.I;
+            if constexpr (STORE_TAU_CASCADES) {
+                interp.tau += weights(tri_idx) * merged.tau;
+            }
+        }
+    } else {
+        interp = multi_level_dda_raymarch_3d(args);
+    }
+    return interp;
+}
+
 void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_state, int la) {
     constexpr int RcMode = RC_flags_storage_3d();
     const CascadeStorage3d& c0_size(state.c0_size);
@@ -119,7 +193,12 @@ void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_state, in
                 .az = phi_idx
             };
             const fp_t sample = probe_fetch<RcMode>(c0, c0_size, this_probe);
-            J(la, flat_probe_idx) += ray_weight * sample;
+            // JasUse(J, ray_weight);
+            // if constexpr (DIR_BY_DIR_3D) {
+            //     J(la, flat_probe_idx) += ray_weight * sample;
+            // } else {
+            // }
+            Kokkos::atomic_add(&J(la, flat_probe_idx), ray_weight * sample);
         }
     );
     Kokkos::fence();
@@ -157,8 +236,8 @@ void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& c
 
         constexpr int num_subsets = subset_tasks_per_cascade_3d<RcMode>();
         for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
+            fmt::println("Subset {} of {}...", subset_idx, num_subsets);
             for (int casc_idx = casc_state.num_cascades; casc_idx >= 0; --casc_idx) {
-                fmt::println("Cascade {}", casc_idx);
                 CascadeStorage3d dims = cascade_size(state.c0_size, casc_idx);
                 CascadeStorage3d upper_dims = cascade_size(state.c0_size, casc_idx+1);
                 CascadeRays3d ray_set = cascade_compute_size<RcMode>(state.c0_size, casc_idx);
@@ -190,6 +269,7 @@ void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& c
                 FlatLoop<3> probe_loop(ray_set.num_probes(2), ray_set.num_probes(1), ray_set.num_probes(0));
 
                 dex_parallel_for(
+                    "RC Loop 3D",
                     FlatLoop<3>(probe_loop.num_iter, ray_subset.num_polar_rays, ray_subset.num_az_rays),
                     KOKKOS_LAMBDA (i64 flat_probe_idx, int theta_idx, int phi_idx) {
                         auto rev_probe_coord = probe_loop.unpack(flat_probe_idx);
@@ -209,17 +289,26 @@ void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& c
                         RaySegment<3> ray = probe_ray(ray_set, dev_casc_state.num_cascades, casc_idx, probe_idx);
 
                         // compute_ri
-                        RadianceInterval ri = march_and_merge_average_interval_3d<RcMode>(
-                            Raymarch3dArgs {
-                                .this_probe = probe_idx,
-                                .casc_state = dev_casc_state,
-                                .mr_block_map = mr_block_map,
-                                .ray = ray,
-                                .distance_scale = distance_scale,
-                                .eta = eta,
-                                .chi = chi
-                            }
-                        );
+                        constexpr bool trilinear_fix = false;
+                        RadianceInterval ri;
+                        Raymarch3dArgs args {
+                            .this_probe = probe_idx,
+                            .casc_state = dev_casc_state,
+                            .mr_block_map = mr_block_map,
+                            .ray = ray,
+                            .distance_scale = distance_scale,
+                            .eta = eta,
+                            .chi = chi
+                        };
+                        if constexpr (trilinear_fix) {
+                            ri = march_and_merge_trilinear_interval_3d<RcMode>(
+                                args
+                            );
+                        } else {
+                            ri = march_and_merge_average_interval_3d<RcMode>(
+                                args
+                            );
+                        }
                         i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
                         dev_casc_state.cascade_I(lin_idx) = ri.I;
                         if constexpr (STORE_TAU_CASCADES) {

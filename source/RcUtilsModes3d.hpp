@@ -16,12 +16,12 @@ YAKL_INLINE constexpr int RC_flags_storage_3d() {
 namespace DexImpl {
     /// Simple x^exponent calculation for both being integers whilst
     /// remaining relatively efficient
-    KOKKOS_FORCEINLINE_FUNCTION int powi(int x, int exponent) {
+    KOKKOS_FORCEINLINE_FUNCTION constexpr int powi(int x, int exponent) {
         // We right-shift the exponent each iteration until there's no bits
         // left. If odd, we have to self-multiply twice (as (3 >> 1) == 1).
         int result = 1;
         while (exponent) {
-            if (!(exponent & 1)) {
+            if (exponent & 1) {
                 result *= x;
             }
             x *= x;
@@ -163,8 +163,8 @@ YAKL_INLINE constexpr CascadeRaysSubset3d nth_rays_subset(const CascadeRays3d& r
         const int polar_per_subset = rays.num_polar_rays / num_polar_sets;
 
         // NOTE(cmo): We run sets fast over az. i.e. nested [polar, az]
-        const int polar_index = n / num_polar_sets;
-        const int az_index = n - polar_index * num_polar_sets;
+        const int polar_index = n / num_az_sets;
+        const int az_index = n - polar_index * num_az_sets;
 
         return CascadeRaysSubset3d{
             .start_az_rays = az_index * az_per_subset,
@@ -439,10 +439,19 @@ YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeRays3d& dims, c
 }
 
 YAKL_INLINE IntervalLength cascade_interval_length_3d(int num_cascades, int n) {
-    IntervalLength length = {
-        .from = C0_LENGTH_3D * ((n == 0) ? FP(0.0) : (1 << ((n-1) * SPATIAL_SCALE_EXP_3D))),
-        .to = C0_LENGTH_3D * (1 << (n * SPATIAL_SCALE_EXP_3D))
-    };
+    IntervalLength length;
+
+    if constexpr (USE_SCALE_FACTOR_3D) {
+        length = {
+            .from = C0_LENGTH_3D * ((n == 0) ? FP(0.0) : DexImpl::powi(SPATIAL_SCALE_FACTOR_3D, n-1)),
+            .to = C0_LENGTH_3D * DexImpl::powi(SPATIAL_SCALE_FACTOR_3D, n)
+        };
+    } else {
+        length = {
+            .from = C0_LENGTH_3D * ((n == 0) ? FP(0.0) : (1 << ((n-1) * SPATIAL_SCALE_EXP_3D))),
+            .to = C0_LENGTH_3D * (1 << (n * SPATIAL_SCALE_EXP_3D))
+        };
+    }
     if (LAST_CASCADE_TO_INFTY && n == num_cascades) {
         length.to = LAST_CASCADE_MAX_DIST;
     }
@@ -479,6 +488,35 @@ YAKL_INLINE RaySegment<3> probe_ray(const CascadeRays3d& dims, int num_cascades,
     const fp_t t0 = -length.to;
     const fp_t t1 = -length.from;
     RaySegment<3> ray(o, dir, t0, t1);
+    return ray;
+}
+
+YAKL_INLINE RaySegment<3> trilinear_probe_ray(
+    const CascadeRays3d& dims,
+    const CascadeRays3d& upper_dims,
+    int num_cascades,
+    int n,
+    const ProbeIndex3d& probe,
+    const ivec3& upper_probe_coord
+) {
+    // NOTE(cmo): In 3D we invert directly so that we're tracing towards the
+    // probe. In this case we keep the direction the same but set t0 = -t1 and
+    // t1 = -t0 to offset the ray to the other side of the probe so it's tracing
+    // towards the probe.
+    vec3 o = probe_pos(probe.coord, n);
+    vec3 upper_o = probe_pos(upper_probe_coord, n+1);
+    vec3 dir = ray_dir(dims, probe.az, probe.polar);
+    IntervalLength length = cascade_interval_length_3d(num_cascades, n);
+
+    vec3 end_pos = o - dir * length.from;
+    // NOTE(cmo): The effective origin
+    vec3 start_pos = upper_o - dir * length.to;
+    const fp_t t0 = FP(0.0);
+    vec3 effective_dir = end_pos - start_pos;
+    const fp_t t1 = std::sqrt(square(effective_dir(0)) + square(effective_dir(1)) + square(effective_dir(2)));
+    effective_dir = effective_dir * (FP(1.0) / t1);
+
+    RaySegment<3> ray(start_pos, effective_dir, t0, t1);
     return ray;
 }
 
