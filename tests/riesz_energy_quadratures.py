@@ -7,8 +7,8 @@ except:
 
 QuadType = "BasicTrapezoidal"
 QuadType = "OctahedralPbrt"
-# QuadType = "ClassicOctahedral"
-# QuadType = "Healpix"
+QuadType = "ClassicOctahedral"
+QuadType = "Healpix"
 
 # TODO(cmo): Develop own version of nest2vec. See how efficient it can be. https://github.com/ntessore/healpix/blob/60af7fff259f4dcaebbb180f2f794e78ec4a9e41/src/healpix.c#L432
 # Also look into TOAST: https://iopscience.iop.org/article/10.3847/1538-4365/aaf79e/pdf
@@ -92,12 +92,13 @@ if __name__ == '__main__':
     elif QuadType == "ClassicOctahedral":
         dirs = classic_oct_dir(phis, thetas, Nphi, Ntheta)
     elif QuadType == "Healpix":
-        hp_order = 3
+        hp_order = 4
         hp_nside = healpix.order2nside(hp_order)
         hp_npix = healpix.nside2npix(hp_nside)
         pix = []
         for ipix in range(hp_npix):
-            pix.append(healpix.pix2vec(hp_nside, ipix))
+            pix.append(healpix.pix2vec(hp_nside, ipix, nest=True))
+        # dirs = np.array(pix[:4**hp_order])
         dirs = np.array(pix)
     print(f"{dirs.shape[0]} rays")
 

@@ -32,14 +32,18 @@ namespace DexImpl {
 }
 
 KOKKOS_FORCEINLINE_FUNCTION constexpr int az_rays_factor(int n) {
-    if constexpr (USE_BRANCHING_FACTOR_3D) {
+    if constexpr (ANGULAR_QUADRATURE_TYPE == AngularQuadratureType::Healpix) {
+        return 1 << (2 * HEALPIX_ORDER * n);
+    } else if constexpr (USE_BRANCHING_FACTOR_3D) {
         return DexImpl::powi(AZ_BRANCHING_FACTOR_3D, n);
     }
     return 1 << (AZ_BRANCHING_EXP_3D * n);
 }
 
 KOKKOS_FORCEINLINE_FUNCTION constexpr int polar_rays_factor(int n) {
-    if constexpr (USE_BRANCHING_FACTOR_3D) {
+    if constexpr (ANGULAR_QUADRATURE_TYPE == AngularQuadratureType::Healpix) {
+        return 1;
+    } else if constexpr (USE_BRANCHING_FACTOR_3D) {
         return DexImpl::powi(POLAR_BRANCHING_FACTOR_3D, n);
     }
     return 1 << (POLAR_BRANCHING_EXP_3D * n);
@@ -133,7 +137,10 @@ struct TexelsPerRay3d {
 template <int RcMode>
 YAKL_INLINE TexelsPerRay3d upper_texels_per_ray_3d(int n) {
     TexelsPerRay3d t;
-    if constexpr (USE_BRANCHING_FACTOR_3D) {
+    if constexpr (ANGULAR_QUADRATURE_TYPE == AngularQuadratureType::Healpix) {
+        t.az = 1 << (2 * HEALPIX_ORDER);
+        t.polar = 1;
+    } else if constexpr (USE_BRANCHING_FACTOR_3D) {
         t.az = AZ_BRANCHING_FACTOR_3D;
         t.polar = POLAR_BRANCHING_FACTOR_3D;
     } else {
@@ -463,14 +470,74 @@ YAKL_INLINE IntervalLength cascade_interval_length_3d(int num_cascades, int n) {
 /// below.
 YAKL_INLINE vec3 ray_dir(const CascadeRays3d& dims, int phi_idx, int theta_idx) {
     namespace Const = ConstantsFP;
-    fp_t phi = FP(2.0) * Const::pi / fp_t(dims.num_az_rays) * (phi_idx + FP(0.5)); // (0, 2pi)
-    fp_t cos_theta = FP(2.0) / fp_t(dims.num_polar_rays) * (theta_idx + FP(0.5)) - FP(1.0); // (-1, 1)
-    fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
-
     vec3 dir;
-    dir(0) = std::cos(phi) * sin_theta;
-    dir(1) = std::sin(phi) * sin_theta;
-    dir(2) = cos_theta;
+
+    if constexpr (ANGULAR_QUADRATURE_TYPE == AngularQuadratureType::TrapezoidalProduct) {
+        const fp_t phi = FP(2.0) * Const::pi / fp_t(dims.num_az_rays) * (phi_idx + FP(0.5)); // (0, 2pi)
+        const fp_t cos_theta = FP(2.0) / fp_t(dims.num_polar_rays) * (theta_idx + FP(0.5)) - FP(1.0); // (-1, 1)
+        const fp_t sin_theta = std::sqrt(FP(1.0) - square(cos_theta));
+
+        dir(0) = std::cos(phi) * sin_theta;
+        dir(1) = std::sin(phi) * sin_theta;
+        dir(2) = cos_theta;
+    } else if constexpr (ANGULAR_QUADRATURE_TYPE == AngularQuadratureType::ClarbergOctahedral) {
+        // https://www.pbr-book.org/4ed/Geometry_and_Transformations/Spherical_Geometry#x3-Equal-AreaMapping
+        const fp_t u = FP(2.0) / fp_t(dims.num_az_rays) * (phi_idx + FP(0.5)) - FP(1.0);
+        const fp_t v = FP(2.0) / fp_t(dims.num_polar_rays) * (theta_idx + FP(0.5)) - FP(1.0);
+        const fp_t up = std::abs(u);
+        const fp_t vp = std::abs(v);
+
+        const fp_t signed_distance = FP(1.0) - (up + vp);
+        const fp_t d = std::abs(signed_distance);
+        const fp_t r = FP(1.0) - d;
+        const fp_t phi = ((r == FP(0.0)) ? 1 : ((vp - up) / r + 1)) * FP(0.25) * Const::pi;
+        const fp_t z = std::copysign(FP(1.0) - square(r), signed_distance);
+        const fp_t cos_phi = std::copysign(std::cos(phi), u);
+        const fp_t sin_phi = std::copysign(std::sin(phi), v);
+
+        const fp_t  rr = r * std::sqrt(std::max(FP(2.0) - square(r), FP(0.0)));
+
+        dir(0) = cos_phi * rr;
+        dir(1) = sin_phi * rr;
+        dir(2) = z;
+    } else if constexpr (ANGULAR_QUADRATURE_TYPE == AngularQuadratureType::Healpix) {
+        // NOTE(cmo): Only uses phi. Written in healpix_bare (BSD-3) terminology
+        const i32 npix = dims.num_az_rays;
+        const i32 nside = i32(std::sqrt(fp_t(npix / 12)));
+        KOKKOS_ASSERT((square(nside) * 12) == npix);
+
+        // nest2hpd
+        const i32 npface = square(nside);
+        const i32 p2 = phi_idx & (npface-1);
+        const i32 px = compact_1_by_1(u32(p2));
+        const i32 py = compact_1_by_1(u32(p2) >> 1);
+        const i32 face = phi_idx / npface;
+
+        // hpd2loc
+        const f32 x = (px + FP(0.5)) / nside;
+        const f32 y = (py + FP(0.5)) / nside;
+        const i32 r = 1 - face / 4;
+        const fp_t h = r - 1 + (x + y);
+        const fp_t m = FP(2.0) - r * h;
+        fp_t z, s, phi;
+        constexpr int jpll[12] = { 1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7 };
+        if (m < FP(1.0)) {
+            // polar cap
+            const fp_t m23 = square(m) * (FP(1.0) / FP(3.0));
+            z = r * (FP(1.0) - m23);
+            s = std::sqrt(m23 * (FP(2.0) - m23));
+            phi = (FP(0.25) * Const::pi) * (jpll[face] + (x - y) / m);
+        } else {
+            // equatorial cylinder
+            z = h * (FP(2.0) / FP(3.0));
+            s = std::sqrt((FP(1.0) + z) * (FP(1.0) - z));
+            phi = (FP(0.25) * Const::pi) * (jpll[face] + (x - y));
+        }
+        // loc2vec
+        dir(0) = std::cos(phi) * s;
+        dir(1) = std::sin(phi) * s;
+        dir(2) = z;
+    }
     return dir;
 }
 

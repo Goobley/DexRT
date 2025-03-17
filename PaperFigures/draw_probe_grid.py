@@ -21,7 +21,7 @@ PROBE0_LENGTH = 8
 PROBE0_NUM_RAYS = 4
 PROBE0_SPACING = 32
 CASCADE_BRANCHING_FACTOR = 1
-MAX_LEVEL = 4
+MAX_LEVEL = 3
 
 
 if __name__ == "__main__":
@@ -34,10 +34,13 @@ if __name__ == "__main__":
     for l in range(MAX_LEVEL + 1):
         radius = PROBE0_LENGTH * 2**(l *  CASCADE_BRANCHING_FACTOR)
         num_rays = PROBE0_NUM_RAYS * 2**(l * CASCADE_BRANCHING_FACTOR)
-        spacing = PROBE0_SPACING * 2**l
+        # spacing = PROBE0_SPACING * 2**l
+        spacing = PROBE0_SPACING * np.sqrt(3)**l
 
-        for x in range(0, CANVAS_X, spacing):
-            for y in range(0, CANVAS_Y, spacing):
+        x = 0.0
+        while x < CANVAS_X:
+            y = 0.0
+            while y < CANVAS_Y:
                 centre_x = x + 0.5 * spacing
                 centre_y = y + 0.5 * spacing
                 for ray_idx in range(num_rays):
@@ -54,6 +57,8 @@ if __name__ == "__main__":
                         c=f'C{l}',
                         lw=0.7,
                     )
+                y += spacing
+            x += spacing
 
         prev_radius = radius
 
@@ -62,5 +67,5 @@ if __name__ == "__main__":
     plt.gca().set_xticks([])
     plt.gca().set_yticks([])
     plt.gca().set_frame_on(False)
-    plt.savefig("ProbeGrid.pdf")
-    plt.savefig("ProbeGrid.png", dpi=300)
+    # plt.savefig("ProbeGrid.pdf")
+    # plt.savefig("ProbeGrid.png", dpi=300)

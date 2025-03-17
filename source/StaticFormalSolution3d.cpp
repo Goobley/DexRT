@@ -24,6 +24,8 @@ YAKL_INLINE RadianceInterval<DexEmpty> multi_level_dda_raymarch_3d(
     if (!marcher) {
         return result;
     }
+    KView<fp_t*, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::RandomAccess>> eta_k(eta.data(), eta.extent(0));
+    KView<fp_t*, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::RandomAccess>> chi_k(chi.data(), chi.extent(0));
 
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20);
     do {
@@ -32,8 +34,8 @@ YAKL_INLINE RadianceInterval<DexEmpty> multi_level_dda_raymarch_3d(
                 s.current_mip_level,
                 Coord3{.x = s.curr_coord(0), .y = s.curr_coord(1), .z = s.curr_coord(2)}
             );
-            eta_s = eta(ks);
-            chi_s = chi(ks) + FP(1e-15);
+            eta_s = eta_k(ks);
+            chi_s = chi_k(ks) + FP(1e-15);
 
             fp_t tau = chi_s * s.dt * distance_scale;
             fp_t source_fn = eta_s / chi_s;
@@ -167,11 +169,13 @@ YAKL_INLINE RadianceInterval<DexEmpty> march_and_merge_trilinear_interval_3d(con
     return interp;
 }
 
-void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_state, int la) {
+void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_state, int la, fp_t ray_weight=FP(-1.0)) {
     constexpr int RcMode = RC_flags_storage_3d();
     const CascadeStorage3d& c0_size(state.c0_size);
     CascadeRays3d ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
-    const fp_t ray_weight = FP(1.0) / fp_t(ray_set.num_az_rays * ray_set.num_polar_rays);
+    if (ray_weight < FP(0.0)) {
+        ray_weight = FP(1.0) / fp_t(ray_set.num_az_rays * ray_set.num_polar_rays);
+    }
 
     const auto& c0 = casc_state.i_cascades[0];
     const auto& J = state.J;
@@ -204,11 +208,132 @@ void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_state, in
     Kokkos::fence();
 }
 
+void static_formal_sol_long_char_3d(const State3d& state, const CascadeState3d& casc_state) {
+    assert(state.config.mode == DexrtMode::GivenFs);
+    JasUnpack(state, mr_block_map, given_state);
+    const auto& block_map = mr_block_map.block_map;
+    const i32 num_wavelengths = state.J.extent(0);
+
+    const fp_t distance_scale = state.given_state.voxel_scale;
+    Fp1d eta("eta", mr_block_map.get_num_active_cells());
+    Fp1d chi("chi", mr_block_map.get_num_active_cells());
+    state.J = FP(0.0);
+    Kokkos::fence();
+    auto& eta_store = given_state.emis;
+    auto& chi_store = given_state.opac;
+    for (int la = 0; la < num_wavelengths; ++la) {
+        dex_parallel_for(
+            "Copy eta, chi",
+            block_map.loop_bounds(),
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
+                IdxGen3d idx_gen(block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord3 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                eta(ks) = eta_store(la, coord.z, coord.y, coord.x);
+                chi(ks) = chi_store(la, coord.z, coord.y, coord.x);
+            }
+        );
+        Kokkos::fence();
+
+        // TODO(cmo): Update this
+        constexpr int RcMode = RC_flags_storage_3d();
+
+        FpConst1d lc_qx = FpConst1dHost("lc_qx", (const fp_t*)LC_QUAD_X, NUM_LC_QUAD).createDeviceCopy();
+        FpConst1d lc_qy = FpConst1dHost("lc_qy", (const fp_t*)LC_QUAD_Y, NUM_LC_QUAD).createDeviceCopy();
+        FpConst1d lc_qz = FpConst1dHost("lc_qy", (const fp_t*)LC_QUAD_Z, NUM_LC_QUAD).createDeviceCopy();
+
+        constexpr int num_subsets = NUM_LC_QUAD;
+        for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
+            fmt::println("Subset {} of {}...", subset_idx, num_subsets);
+
+            CascadeStorage3d dims = cascade_size(state.c0_size, 0);
+            Fp1d i_cascade_i = casc_state.i_cascades[0];
+            Fp1d tau_cascade_i = casc_state.tau_cascades[0];
+            FpConst1d i_cascade_ip, tau_cascade_ip;
+
+            DeviceCascadeState3d dev_casc_state {
+                .num_cascades = casc_state.num_cascades,
+                .n = 0,
+                .casc_dims = dims,
+                .cascade_I = i_cascade_i,
+                .cascade_tau = tau_cascade_i,
+                .upper_I = i_cascade_ip,
+                .upper_tau = tau_cascade_ip
+            };
+
+            std::string name("long char");
+            yakl::timer_start(name);
+
+            FlatLoop<3> probe_loop(dims.num_probes(2), dims.num_probes(1), dims.num_probes(0));
+
+            dex_parallel_for(
+                "RC Loop 3D",
+                FlatLoop<1>(probe_loop.num_iter),
+                KOKKOS_LAMBDA (i64 flat_probe_idx) {
+                    auto rev_probe_coord = probe_loop.unpack(flat_probe_idx);
+                    ivec3 probe_coord;
+                    probe_coord(0) = rev_probe_coord[2];
+                    probe_coord(1) = rev_probe_coord[1];
+                    probe_coord(2) = rev_probe_coord[0];
+
+                    ProbeIndex3d probe_idx {
+                        .coord=probe_coord,
+                        .polar = 0,
+                        .az = 0
+                    };
+
+                    vec3 d;
+                    d(0) = lc_qx(subset_idx);
+                    d(1) = lc_qy(subset_idx);
+                    d(2) = lc_qz(subset_idx);
+                    vec3 o = probe_pos(probe_coord, 0);
+                    RaySegment<3> ray(o, d, -LAST_CASCADE_MAX_DIST_3D, FP(0.0));
+
+                    // compute_ri
+                    Raymarch3dArgs args {
+                        .this_probe = probe_idx,
+                        .casc_state = dev_casc_state,
+                        .mr_block_map = mr_block_map,
+                        .ray = ray,
+                        .distance_scale = distance_scale,
+                        .eta = eta,
+                        .chi = chi
+                    };
+                    RadianceInterval ri = multi_level_dda_raymarch_3d(
+                        args
+                    );
+                    i64 lin_idx = probe_linear_index<RcMode>(dims, probe_idx);
+                    dev_casc_state.cascade_I(lin_idx) = ri.I;
+                    if constexpr (STORE_TAU_CASCADES) {
+                        dev_casc_state.cascade_tau(lin_idx) = ri.tau;
+                    }
+
+                }
+            );
+            Kokkos::fence();
+
+            yakl::timer_stop(name);
+            merge_c0_to_J_3d(
+                state,
+                casc_state,
+                la,
+                LC_WEIGHT[subset_idx]
+            );
+            Kokkos::fence();
+        }
+    }
+}
+
 void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& casc_state) {
     assert(state.config.mode == DexrtMode::GivenFs);
     JasUnpack(state, mr_block_map, given_state);
     const auto& block_map = mr_block_map.block_map;
     const i32 num_wavelengths = state.J.extent(0);
+
+    if constexpr (FORCE_LC_QUADRATURE) {
+        static_formal_sol_long_char_3d(state, casc_state);
+        return;
+    }
 
     const fp_t distance_scale = state.given_state.voxel_scale;
     Fp1d eta("eta", mr_block_map.get_num_active_cells());
