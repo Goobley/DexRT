@@ -403,6 +403,7 @@ struct MultiLevelLookup {
 template <int BLOCK_SIZE, int ENTRY_SIZE=3, int NumDim=2, class Lookup=BlockMapLookup<NumDim>, class BlockMap=BlockMap<BLOCK_SIZE, NumDim, Lookup>>
 struct MultiResBlockMap {
     static constexpr i32 max_storable_entry = (1 << ENTRY_SIZE) - 1;
+    static constexpr i32 block_size = BLOCK_SIZE;
     i32 max_mip_level;
     yakl::SArray<i64, 1, max_storable_entry> mip_offsets;
     BlockMap block_map;

@@ -1,6 +1,7 @@
 #include "StaticFormalSolution3d.hpp"
 #include "CascadeState.hpp"
-#include "RayMarching.hpp"
+#include "Mipmaps3d.hpp"
+#include "RayMarching.hpp" // only for merge_intervals
 
 struct Raymarch3dArgs {
     const ProbeIndex3d& this_probe;
@@ -8,24 +9,30 @@ struct Raymarch3dArgs {
     const MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>& mr_block_map;
     const RaySegment<3>& ray;
     const fp_t distance_scale;
-    const Fp1d& eta;
-    const Fp1d& chi;
+    const MultiResMipChain3d& mip_chain;
+    const i32 max_mip_to_sample;
 };
 
 YAKL_INLINE RadianceInterval<DexEmpty> multi_level_dda_raymarch_3d(
     const Raymarch3dArgs& args
 ) {
-    JasUnpack(args, mr_block_map, ray, distance_scale, eta, chi);
+    JasUnpack(args, mr_block_map, ray, distance_scale, mip_chain);
     RadianceInterval<DexEmpty> result;
 
     MRIdxGen3d idx_gen(mr_block_map);
     auto s = MultiLevelDDA<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>(idx_gen);
-    const bool marcher = s.init(ray, 0, nullptr);
+    const bool marcher = s.init(ray, args.max_mip_to_sample, nullptr);
     if (!marcher) {
         return result;
     }
-    KView<fp_t*, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::RandomAccess>> eta_k(eta.data(), eta.extent(0));
-    KView<fp_t*, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::RandomAccess>> chi_k(chi.data(), chi.extent(0));
+    KView<fp_t*, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::RandomAccess>> eta_k(
+        mip_chain.emis.data(),
+        mip_chain.emis.extent(0)
+    );
+    KView<fp_t*, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::RandomAccess>> chi_k(
+        mip_chain.opac.data(),
+        mip_chain.opac.extent(0)
+    );
 
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20);
     do {
@@ -129,8 +136,8 @@ YAKL_INLINE RadianceInterval<DexEmpty> march_and_merge_trilinear_interval_3d(con
                     .mr_block_map = args.mr_block_map,
                     .ray = tri_ray,
                     .distance_scale = args.distance_scale,
-                    .eta = args.eta,
-                    .chi = args.chi
+                    .mip_chain = args.mip_chain,
+                    .max_mip_to_sample = args.max_mip_to_sample
                 }
             );
 
@@ -211,12 +218,11 @@ void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_state, in
 void static_formal_sol_long_char_3d(const State3d& state, const CascadeState3d& casc_state) {
     assert(state.config.mode == DexrtMode::GivenFs);
     JasUnpack(state, mr_block_map, given_state);
+    JasUnpack(casc_state, mip_chain);
     const auto& block_map = mr_block_map.block_map;
     const i32 num_wavelengths = state.J.extent(0);
 
     const fp_t distance_scale = state.given_state.voxel_scale;
-    Fp1d eta("eta", mr_block_map.get_num_active_cells());
-    Fp1d chi("chi", mr_block_map.get_num_active_cells());
     state.J = FP(0.0);
     Kokkos::fence();
     auto& eta_store = given_state.emis;
@@ -229,13 +235,12 @@ void static_formal_sol_long_char_3d(const State3d& state, const CascadeState3d& 
                 IdxGen3d idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord3 coord = idx_gen.loop_coord(tile_idx, block_idx);
-                eta(ks) = eta_store(la, coord.z, coord.y, coord.x);
-                chi(ks) = chi_store(la, coord.z, coord.y, coord.x);
+                mip_chain.emis(ks) = eta_store(la, coord.z, coord.y, coord.x);
+                mip_chain.opac(ks) = chi_store(la, coord.z, coord.y, coord.x);
             }
         );
         Kokkos::fence();
 
-        // TODO(cmo): Update this
         constexpr int RcMode = RC_flags_storage_3d();
 
         FpConst1d lc_qx = FpConst1dHost("lc_qx", (const fp_t*)LC_QUAD_X, NUM_LC_QUAD).createDeviceCopy();
@@ -296,8 +301,8 @@ void static_formal_sol_long_char_3d(const State3d& state, const CascadeState3d& 
                         .mr_block_map = mr_block_map,
                         .ray = ray,
                         .distance_scale = distance_scale,
-                        .eta = eta,
-                        .chi = chi
+                        .mip_chain = mip_chain,
+                        .max_mip_to_sample = 0
                     };
                     RadianceInterval ri = multi_level_dda_raymarch_3d(
                         args
@@ -327,6 +332,7 @@ void static_formal_sol_long_char_3d(const State3d& state, const CascadeState3d& 
 void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& casc_state) {
     assert(state.config.mode == DexrtMode::GivenFs);
     JasUnpack(state, mr_block_map, given_state);
+    JasUnpack(casc_state, mip_chain);
     const auto& block_map = mr_block_map.block_map;
     const i32 num_wavelengths = state.J.extent(0);
 
@@ -336,8 +342,6 @@ void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& c
     }
 
     const fp_t distance_scale = state.given_state.voxel_scale;
-    Fp1d eta("eta", mr_block_map.get_num_active_cells());
-    Fp1d chi("chi", mr_block_map.get_num_active_cells());
     state.J = FP(0.0);
     Kokkos::fence();
     auto& eta_store = given_state.emis;
@@ -350,11 +354,12 @@ void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& c
                 IdxGen3d idx_gen(block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord3 coord = idx_gen.loop_coord(tile_idx, block_idx);
-                eta(ks) = eta_store(la, coord.z, coord.y, coord.x);
-                chi(ks) = chi_store(la, coord.z, coord.y, coord.x);
+                mip_chain.emis(ks) = eta_store(la, coord.z, coord.y, coord.x);
+                mip_chain.opac(ks) = chi_store(la, coord.z, coord.y, coord.x);
             }
         );
         Kokkos::fence();
+        mip_chain.compute_mips(state, la);
 
         // TODO(cmo): Update this
         constexpr int RcMode = RC_flags_storage_3d();
@@ -376,6 +381,11 @@ void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& c
                     i_cascade_ip = casc_state.i_cascades[lookup.ip];
                     tau_cascade_ip = casc_state.tau_cascades[lookup.ip];
                 }
+
+                const int max_mip_to_sample = std::min(
+                    state.config.mip_config.mip_levels[casc_idx],
+                    mip_chain.max_mip_factor
+                );
 
                 DeviceCascadeState3d dev_casc_state {
                     .num_cascades = casc_state.num_cascades,
@@ -422,8 +432,8 @@ void static_formal_sol_rc_given_3d(const State3d& state, const CascadeState3d& c
                             .mr_block_map = mr_block_map,
                             .ray = ray,
                             .distance_scale = distance_scale,
-                            .eta = eta,
-                            .chi = chi
+                            .mip_chain = mip_chain,
+                            .max_mip_to_sample = max_mip_to_sample
                         };
                         if constexpr (trilinear_fix) {
                             ri = march_and_merge_trilinear_interval_3d<RcMode>(

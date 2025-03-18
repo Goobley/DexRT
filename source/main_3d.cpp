@@ -34,6 +34,9 @@ CascadeRays3d init_given_emis_opac(State3d* st, const DexrtConfig& config) {
     block_map.init(Dims<3>{.x = x_dim, .y = y_dim, .z = z_dim});
 
     i32 max_mip_level = 0;
+    for (int i = 0; i <= config.max_cascade; ++i) {
+        max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
+    }
     st->mr_block_map.init(block_map, max_mip_level);
 
     st->given_state.emis = eta;

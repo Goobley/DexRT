@@ -36,6 +36,7 @@ bool CascadeState3d::init(const State3d& state, int max_cascades) {
             tau_cascades.push_back(tau_entry);
         }
     }
+    mip_chain.init(state, state.mr_block_map.buffer_len());
 
     return true;
 }

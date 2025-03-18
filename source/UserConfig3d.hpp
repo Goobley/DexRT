@@ -17,9 +17,11 @@ constexpr int ENTRY_SIZE_3D = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t C0_LENGTH_3D = FP(18.0);
-constexpr int C0_AZ_RAYS_3D = 48;
-constexpr int C0_POLAR_RAYS_3D = 1;
+constexpr fp_t C0_LENGTH_3D = FP(6.0);
+// constexpr int C0_AZ_RAYS_3D = 48;
+// constexpr int C0_POLAR_RAYS_3D = 1;
+constexpr int C0_AZ_RAYS_3D = 4;
+constexpr int C0_POLAR_RAYS_3D = 4;
 
 // rays = C0 * 2 ** (BRANCHING_EXP * n)
 constexpr int AZ_BRANCHING_EXP_3D = 1;
@@ -31,7 +33,7 @@ constexpr int POLAR_BRANCHING_FACTOR_3D = 3;
 
 // Whether to use BRANCHING_FACTOR over BRANCHING_EXP. Requires more
 // calculation, but allows for e.g. 3.
-constexpr bool USE_BRANCHING_FACTOR_3D = false;
+constexpr bool USE_BRANCHING_FACTOR_3D = true;
 
 // NOTE(cmo): Should probably be interval_scale
 // Spatial scale exp: t_i = C0_LENGTH_3D * 2 ** (n * SPATIAL_SCALE_EXP_3D)
@@ -39,7 +41,7 @@ constexpr int SPATIAL_SCALE_EXP_3D = 1;
 // Spatial length scaling factor: t_i = C0_LENGTH_3D * SPATIAL_SCALE_FACTOR_3D ** n
 constexpr int SPATIAL_SCALE_FACTOR_3D = 3;
 // Whether to use SCALE_FACTOR over SCALE_EXP. Equivalent to USE_BRANCHING_FACTOR_3D
-constexpr bool USE_SCALE_FACTOR_3D = false;
+constexpr bool USE_SCALE_FACTOR_3D = true;
 
 // Whether to run the rays of the last cascade off the grid regardless of where
 // they start, to correctly sample the boundary conditions.
@@ -60,12 +62,13 @@ enum class AngularQuadratureType {
     Healpix
 };
 
-constexpr AngularQuadratureType ANGULAR_QUADRATURE_TYPE = AngularQuadratureType::Healpix;
+// constexpr AngularQuadratureType ANGULAR_QUADRATURE_TYPE = AngularQuadratureType::Healpix;
+constexpr AngularQuadratureType ANGULAR_QUADRATURE_TYPE = AngularQuadratureType::ClarbergOctahedral;
 constexpr int HEALPIX_ORDER = 1;
 
 constexpr LineCoeffCalc LINE_SCHEME_3D = LineCoeffCalc::CoreAndVoigt;
 
-constexpr bool FORCE_LC_QUADRATURE = true;
+constexpr bool FORCE_LC_QUADRATURE = false;
 
 #define LC_SET 3
 

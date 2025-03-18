@@ -28,12 +28,14 @@ if __name__ == "__main__":
     # ds = xr.open_dataset("build/sphere_test_out_2x_hp1_18.nc")
     # ds = xr.open_dataset("build/sphere_test_out_A2.nc")
     # ds = xr.open_dataset("build/sphere_test_out_A4.nc")
-    ds = xr.open_dataset("build/sphere_test_out_A8.nc")
+    # ds = xr.open_dataset("build/sphere_test_out_A8.nc")
+    # ds = xr.open_dataset("build/sphere_test_out_2x_hp1_18_mips.nc")
+    ds = xr.open_dataset("build/sphere_test_out_3x_oct_6_mips.nc")
 
     size = ds.J.shape[1]
 
     z_cut = size // 2
-    z_cut = 80
+    z_cut = 20
     J_slice = ds.J[2, :, z_cut, :].values
     XX, YY = np.mgrid[:size, :size].astype(np.float64)
     XX += 0.5
