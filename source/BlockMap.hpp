@@ -143,8 +143,8 @@ struct BlockMapInit {
     template <class BlockMap>
     static void setup_dense(BlockMap*, Dims<NumDim>);
 
-    template <class BlockMap>
-    static void setup_sparse(BlockMap*, const AtmosphereNd<NumDim>&, fp_t);
+    template <class BlockMap, int mem_space>
+    static void setup_sparse(BlockMap*, const AtmosphereNd<NumDim, mem_space>&, fp_t);
 };
 extern template struct BlockMapInit<2>;
 extern template struct BlockMapInit<3>;
@@ -157,10 +157,13 @@ struct BlockMap {
     GridBbox<NumDim> bbox;
 
     Lookup lookup;
+    /// All tiles in Morton traversal order
     yakl::Array<uint32_t, 1, yakl::memDevice> morton_traversal_order;
+    /// All active tiles in Morton traversal order
     yakl::Array<uint32_t, 1, yakl::memDevice> active_tiles;
 
-    void init(const AtmosphereNd<NumDim>& atmos, fp_t cutoff_temperature) {
+    template <int mem_space>
+    void init(const AtmosphereNd<NumDim, mem_space>& atmos, fp_t cutoff_temperature) {
         BlockMapInit<NumDim>::setup_sparse(this, atmos, cutoff_temperature);
     }
 

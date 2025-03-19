@@ -4,7 +4,13 @@
 #include "Types.hpp"
 #include "BlockMap.hpp"
 
+/// Sparisify 2d atmosphere (on GPU)
 SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLOCK_SIZE>& block_map);
+/// Sparsify 3d atmosphere on host and return sparse GPU atmosphere (copies one field to GPU at a time).
+SparseAtmosphere sparsify_atmosphere(
+    const AtmosphereNd<3, yakl::memHost>& atmos,
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map
+);
 yakl::Array<u8, 2, yakl::memDevice> reify_active_c0(const BlockMap<BLOCK_SIZE>& block_map);
 /// Creates the full array associated with a sparse quantity on the host (for
 /// output), input shape [n, ks], where n is arbitrary >= 1. Constructed by

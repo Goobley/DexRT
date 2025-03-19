@@ -122,7 +122,119 @@ inline Atmosphere load_atmos(const std::string& path) {
         },
         Kokkos::Max<fp_t>(max_vel_2)
     );
-    result.moving = max_vel_2 > FP(10.0);
+    result.moving = std::sqrt(max_vel_2) > FP(10.0);
+
+    return result;
+}
+
+inline AtmosphereNd<3, yakl::memHost> load_atmos_3d_host(const std::string& path) {
+    typedef yakl::Array<f32, 1, yakl::memHost> Fp1dLoad;
+    typedef yakl::Array<f32, 2, yakl::memHost> Fp2dLoad;
+    typedef yakl::Array<f32, 3, yakl::memHost> Fp3dLoad;
+
+    yakl::SimpleNetCDF nc;
+    nc.open(path, yakl::NETCDF_MODE_READ);
+    int x_dim = nc.getDimSize("x");
+    int y_dim = nc.getDimSize("y");
+    int z_dim = nc.getDimSize("z");
+
+    Fp3dLoad temperature("temperature", z_dim, y_dim, x_dim);
+    Fp3dLoad pressure("pressure", z_dim, y_dim, x_dim);
+    Fp3dLoad ne("ne", z_dim, y_dim, x_dim);
+    Fp3dLoad nh_tot("nh_tot", z_dim, y_dim, x_dim);
+    Fp3dLoad vturb("vturb", z_dim, y_dim, x_dim);
+    Fp3dLoad vx("vx", z_dim, y_dim, x_dim);
+    Fp3dLoad vy("vy", z_dim, y_dim, x_dim);
+    Fp3dLoad vz("vz", z_dim, y_dim, x_dim);
+
+    f32 voxel_scale;
+    nc.read(voxel_scale, "voxel_scale");
+    nc.read(temperature, "temperature");
+    nc.read(pressure, "pressure");
+    nc.read(ne, "ne");
+    nc.read(nh_tot, "nh_tot");
+    nc.read(vturb, "vturb");
+    nc.read(vx, "vx");
+    nc.read(vy, "vy");
+    nc.read(vz, "vz");
+
+    f32 offset_x = FP(0.0);
+    f32 offset_y = FP(0.0);
+    f32 offset_z = FP(0.0);
+
+    if (nc.varExists("offset_x")) {
+        nc.read(offset_x, "offset_x");
+    }
+    if (nc.varExists("offset_y")) {
+        nc.read(offset_y, "offset_y");
+    }
+    if (nc.varExists("offset_z")) {
+        nc.read(offset_z, "offset_z");
+    }
+    AtmosphereNd<3, yakl::memHost> result{
+        .voxel_scale = voxel_scale,
+        .offset_x = offset_x,
+        .offset_y = offset_y,
+        .offset_z = offset_z
+    };
+#ifdef DEXRT_SINGLE_PREC
+    result.temperature = temperature;
+    result.pressure = pressure;
+    result.ne = ne;
+    result.nh_tot = nh_tot;
+    result.vturb = vturb;
+    result.vx = vx;
+    result.vy = vy;
+    result.vz = vz;
+#else
+    result.temperature = Fp3dHost("temperature", z_dim, y_dim, x_dim);
+    result.pressure = Fp3dHost("pressure", z_dim, y_dim, x_dim);
+    result.ne = Fp3dHost("ne", z_dim, y_dim, x_dim);
+    result.nh_tot = Fp3dHost("nh_tot", z_dim, y_dim, x_dim);
+    result.vturb = Fp3dHost("vturb", z_dim, y_dim, x_dim);
+    result.vx = Fp3dHost("vx", z_dim, y_dim, x_dim);
+    result.vy = Fp3dHost("vy", z_dim, y_dim, x_dim);
+    result.vz = Fp3dHost("vz", z_dim, y_dim, x_dim);
+
+    FlatLoop<3> convert_loop(z_dim, y_dim, x_dim);
+    #define DEX_FLOAT_CONVERT(X) Kokkos::parallel_for( \
+        "convert", \
+        Kokkos::RangePolicy<Kokkos::DefaultHostExecutionSpace>(0, convert_loop.num_iter), \
+        KOKKOS_LAMBDA (i64 i) { \
+            auto idxs = convert_loop.unpack(i); \
+            result.X(idxs[0], idxs[1], idxs[2]) = JAS_EXPAND(X)(idxs[0], idxs[1], idxs[2]); \
+        } \
+    )
+
+    DEX_FLOAT_CONVERT(temperature);
+    DEX_FLOAT_CONVERT(pressure);
+    DEX_FLOAT_CONVERT(ne);
+    DEX_FLOAT_CONVERT(nh_tot);
+    DEX_FLOAT_CONVERT(vturb);
+    DEX_FLOAT_CONVERT(vx);
+    DEX_FLOAT_CONVERT(vy);
+    DEX_FLOAT_CONVERT(vz);
+    Kokkos::fence();
+
+    #undef DEX_FLOAT_CONVERT
+#endif
+
+    result.nh0 = Fp3dHost("nh0", z_dim, y_dim, x_dim);
+    result.nh0 = FP(0.0);
+
+    fp_t max_vel_2;
+    dex_parallel_reduce<Kokkos::DefaultHostExecutionSpace>(
+        "Atmosphere Max Vel",
+        FlatLoop<3>(vx.extent(0), vx.extent(1), vx.extent(2)),
+        KOKKOS_LAMBDA (int z, int y, int x, fp_t& running_max) {
+            fp_t vel2 = square(result.vz(z, y, x)) + square(result.vy(z, y, x)) + square(result.vx(z, y, x));
+            if (vel2 > running_max) {
+                running_max = vel2;
+            }
+        },
+        Kokkos::Max<fp_t>(max_vel_2)
+    );
+    result.moving = std::sqrt(max_vel_2) > FP(10.0);
 
     return result;
 }

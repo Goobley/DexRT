@@ -1,18 +1,50 @@
 #include "ProfileNormalisation.hpp"
 #include "CascadeState.hpp"
+#include "CascadeState3d.hpp"
+#include "RcUtilsModes3d.hpp"
 
+template <int NumDim>
+KOKKOS_INLINE_FUNCTION ivec<NumDim> coord_to_ivec(Coord<NumDim> c);
+
+template <>
+KOKKOS_INLINE_FUNCTION ivec<2> coord_to_ivec<2>(Coord<2> c) {
+    ivec2 probe_coord;
+    probe_coord(0) = c.x;
+    probe_coord(1) = c.z;
+    return probe_coord;
+}
+
+template <>
+KOKKOS_INLINE_FUNCTION ivec<3> coord_to_ivec<3>(Coord<3> c) {
+    ivec3 probe_coord;
+    probe_coord(0) = c.x;
+    probe_coord(1) = c.y;
+    probe_coord(2) = c.z;
+    return probe_coord;
+}
+
+template <int NumDim, class State, class CascadeState>
 void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi) {
     const auto flatmos = flatten(state.atmos);
-    JasUnpack(state, adata, wphi, mr_block_map, incl_quad);
+    JasUnpack(state, adata, wphi, mr_block_map);
     const auto& profile = state.phi;
     const auto& wavelength = adata.wavelength;
     const int num_cascades = casc_state.num_cascades;
     auto bounds = mr_block_map.block_map.loop_bounds();
 
-    constexpr int RcMode = RC_flags_storage_2d();
-    CascadeStorage dims = state.c0_size;
-    CascadeRays ray_set = cascade_compute_size<RcMode>(dims, 0);
-    // NOTE(cmo): This is pretty thrown-together
+    auto dims = state.c0_size;
+    InclQuadrature incl_quad{};
+    CascadeRays ray_set{};
+    CascadeRays3d ray_set_3d{};
+    if constexpr (NumDim == 2) {
+        ray_set = cascade_compute_size<RC_flags_storage_2d()>(dims, 0);
+        incl_quad = state.incl_quad;
+    } else {
+        ray_set_3d = cascade_compute_size<RC_flags_storage_3d()>(dims, 0);
+    }
+
+    using IdxGen_t = std::conditional_t<NumDim == 2, IdxGen, IdxGen3d>;
+
     dex_parallel_for(
         "Compute wphi",
         FlatLoop<3>(wphi.extent(0), bounds.dim(0), bounds.dim(1)),
@@ -20,12 +52,10 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
             using namespace ConstantsFP;
             fp_t entry = FP(0.0);
 
-            IdxGen idx_gen(mr_block_map);
+            IdxGen_t idx_gen(mr_block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-            Coord2 cell_coord = idx_gen.loop_coord(tile_idx, block_idx);
-            ivec2 probe_coord;
-            probe_coord(0) = cell_coord.x;
-            probe_coord(1) = cell_coord.z;
+            Coord<NumDim> cell_coord = idx_gen.loop_coord(tile_idx, block_idx);
+            ivec<NumDim> probe_coord = coord_to_ivec(cell_coord);
 
             const auto& line = adata.lines(kr);
 
@@ -39,10 +69,8 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
             const fp_t dop_width = doppler_width(line.lambda0, adata.mass(line.atom), local_atmos.temperature, local_atmos.vturb);
             const fp_t gamma = gamma_from_broadening(line, adata.broadening, local_atmos.temperature, local_atmos.ne, local_atmos.nh0);
 
-            for (int la = 0; la < wavelength.extent(0); ++la) {
-                if (!line.is_active(la)) {
-                    continue;
-                }
+            JasUse(ray_set, incl_quad, ray_set_3d, num_cascades);
+            for (int la = line.blue_idx; la < line.red_idx; ++la) {
                 const fp_t lambda = wavelength(la);
                 fp_t wl_weight = FP(1.0);
                 if (la == 0) {
@@ -55,30 +83,58 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
                     wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
                 }
 
-                for (int phi_idx = 0; phi_idx < ray_set.num_flat_dirs; ++phi_idx) {
-                    for (int theta_idx = 0; theta_idx < ray_set.num_incl; ++theta_idx) {
-                        const ProbeIndex probe_idx{
-                            .coord=probe_coord,
-                            .dir=phi_idx,
-                            .incl=theta_idx,
-                            .wave=0
-                        };
-                        RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
-                        vec3 mu = inverted_mu(ray, incl_quad.muy(theta_idx));
+                // NOTE(cmo): Evaluate the profile with the current value in
+                // local_atmos, and add it to entry with the provided ray_weight
+                auto add_profile_term = [&](const fp_t ray_weight) {
+                    const fp_t a = damping_from_gamma(gamma, lambda, dop_width);
+                    const fp_t v = ((lambda - line.lambda0) + (local_atmos.vel * line.lambda0) / c) / dop_width;
+                    // [nm-1]
+                    const fp_t p = profile(a, v) / (sqrt_pi * dop_width);
+                    entry += p * wl_weight * ray_weight;
+                };
 
-                        local_atmos.vel = (
-                                flatmos.vx(ks) * mu(0)
-                                + flatmos.vy(ks) * mu(1)
-                                + flatmos.vz(ks) * mu(2)
-                        );
+                if constexpr (NumDim == 2) {
+                    for (int phi_idx = 0; phi_idx < ray_set.num_flat_dirs; ++phi_idx) {
+                        for (int theta_idx = 0; theta_idx < ray_set.num_incl; ++theta_idx) {
+                            const ProbeIndex probe_idx{
+                                .coord=probe_coord,
+                                .dir=phi_idx,
+                                .incl=theta_idx,
+                                .wave=0
+                            };
+                            RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
+                            vec3 mu = inverted_mu(ray, incl_quad.muy(theta_idx));
 
-                        const fp_t ray_weight = FP(1.0) / fp_t(ray_set.num_flat_dirs) * incl_quad.wmuy(theta_idx);
+                            local_atmos.vel = (
+                                    flatmos.vx(ks) * mu(0)
+                                    + flatmos.vy(ks) * mu(1)
+                                    + flatmos.vz(ks) * mu(2)
+                            );
 
-                        const fp_t a = damping_from_gamma(gamma, lambda, dop_width);
-                        const fp_t v = ((lambda - line.lambda0) + (local_atmos.vel * line.lambda0) / c) / dop_width;
-                        // [nm-1]
-                        const fp_t p = profile(a, v) / (sqrt_pi * dop_width);
-                        entry += p * wl_weight * ray_weight;
+                            const fp_t ray_weight = FP(1.0) / fp_t(ray_set.num_flat_dirs) * incl_quad.wmuy(theta_idx);
+
+                            add_profile_term(ray_weight);
+                        }
+                    }
+                } else if constexpr (NumDim == 3) {
+                    const fp_t ray_weight = FP(1.0) / fp_t(ray_set_3d.num_az_rays * ray_set_3d.num_polar_rays);
+                    for (int phi_idx = 0; phi_idx < ray_set_3d.num_az_rays; ++phi_idx) {
+                        for (int theta_idx = 0; theta_idx < ray_set_3d.num_polar_rays; ++theta_idx) {
+                            const ProbeIndex3d probe_idx {
+                                .coord = probe_coord,
+                                .polar = theta_idx,
+                                .az = phi_idx
+                            };
+
+                            RaySegment<3> ray = probe_ray(ray_set_3d, num_cascades, 0, probe_idx);
+                            local_atmos.vel = (
+                                flatmos.vx(ks) * ray.d(0)
+                                + flatmos.vy(ks) * ray.d(1)
+                                + flatmos.vz(ks) * ray.d(2)
+                            );
+
+                            add_profile_term(ray_weight);
+                        }
                     }
                 }
             }
@@ -131,4 +187,14 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
         }
         state.println("{}", output);
     }
+}
+
+/// 2D
+void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi) {
+    compute_profile_normalisation<2>(state, casc_state, print_worst_wphi);
+}
+
+/// 3D
+void compute_profile_normalisation(const State3d& state, const CascadeState3d& casc_state, bool print_worst_wphi) {
+    compute_profile_normalisation<3>(state, casc_state, print_worst_wphi);
 }

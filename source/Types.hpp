@@ -405,22 +405,22 @@ struct CascadeCalcSubset {
     int subset_idx = 0;
 };
 
-template <int NumDim=2>
+template <int NumDim=2, int mem_space=yakl::memDevice>
 struct AtmosphereNd {
     fp_t voxel_scale;
     fp_t offset_x = FP(0.0);
     fp_t offset_y = FP(0.0);
     fp_t offset_z = FP(0.0);
     bool moving = false;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> temperature;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> pressure;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> ne;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> nh_tot;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> nh0;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> vturb;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> vx;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> vy;
-    yakl::Array<fp_t, NumDim, yakl::memDevice> vz;
+    yakl::Array<fp_t, NumDim, mem_space> temperature;
+    yakl::Array<fp_t, NumDim, mem_space> pressure;
+    yakl::Array<fp_t, NumDim, mem_space> ne;
+    yakl::Array<fp_t, NumDim, mem_space> nh_tot;
+    yakl::Array<fp_t, NumDim, mem_space> nh0;
+    yakl::Array<fp_t, NumDim, mem_space> vturb;
+    yakl::Array<fp_t, NumDim, mem_space> vx;
+    yakl::Array<fp_t, NumDim, mem_space> vy;
+    yakl::Array<fp_t, NumDim, mem_space> vz;
 };
 typedef AtmosphereNd<2> Atmosphere;
 
@@ -602,9 +602,9 @@ struct ModelAtom {
 template <typename T=fp_t>
 struct CompLine {
     /// Short wavelength index
-    int red_idx;
-    /// Long wavelength index
     int blue_idx;
+    /// Long wavelength index
+    int red_idx;
 
     /// atom index
     int atom = 0;

@@ -45,6 +45,58 @@ SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLO
     return result;
 }
 
+SparseAtmosphere sparsify_atmosphere(
+    const AtmosphereNd<3, yakl::memHost>& atmos,
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map
+) {
+    i64 num_active_cells = block_map.get_num_active_cells();
+    SparseAtmosphere result;
+    result.voxel_scale = atmos.voxel_scale;
+    result.offset_x = atmos.offset_x;
+    result.offset_y = atmos.offset_y;
+    result.offset_z = atmos.offset_z;
+    result.moving = atmos.moving;
+    result.num_x = atmos.temperature.extent(2);
+    result.num_y = atmos.temperature.extent(1);
+    result.num_z = atmos.temperature.extent(0);
+    result.temperature = Fp1d("sparse temperature", num_active_cells);
+    result.pressure = Fp1d("sparse pressure", num_active_cells);
+    result.ne = Fp1d("sparse ne", num_active_cells);
+    result.nh_tot = Fp1d("sparse nh_tot", num_active_cells);
+    result.nh0 = Fp1d("sparse nh0", num_active_cells);
+    result.vturb = Fp1d("sparse vturb", num_active_cells);
+    result.vx = Fp1d("sparse vx", num_active_cells);
+    result.vy = Fp1d("sparse vy", num_active_cells);
+    result.vz = Fp1d("sparse vz", num_active_cells);
+
+    auto copy_and_sparsify_field = [&](const Fp1d& dest, const Fp3dHost& source) {
+        Fp3d src = source.createDeviceCopy();
+        dex_parallel_for(
+            "Sparsify field",
+            block_map.loop_bounds(),
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
+                IdxGen3d idx_gen(block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord3 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                dest(ks) = src(coord.z, coord.y, coord.x);
+            }
+        );
+    };
+
+    copy_and_sparsify_field(result.temperature, atmos.temperature);
+    copy_and_sparsify_field(result.pressure, atmos.pressure);
+    copy_and_sparsify_field(result.ne, atmos.ne);
+    copy_and_sparsify_field(result.nh_tot, atmos.nh_tot);
+    copy_and_sparsify_field(result.nh0, atmos.nh0);
+    copy_and_sparsify_field(result.vturb, atmos.vturb);
+    copy_and_sparsify_field(result.vx, atmos.vx);
+    copy_and_sparsify_field(result.vy, atmos.vy);
+    copy_and_sparsify_field(result.vz, atmos.vz);
+
+    Kokkos::fence();
+    return result;
+}
+
 yakl::Array<u8, 2, yakl::memDevice> reify_active_c0(const BlockMap<BLOCK_SIZE>& block_map) {
     yakl::Array<u8, 2, yakl::memDevice> result(
         "active c0",
