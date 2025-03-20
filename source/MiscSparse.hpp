@@ -25,6 +25,7 @@ Fp2dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
 
 /// Compute the sets of active probes for each cascade
 std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(const State& state, int max_cascades);
+std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> compute_active_probe_lists(const State3d& state, int max_cascades);
 
 
 #else

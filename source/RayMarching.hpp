@@ -449,7 +449,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic = (RcMode & RC_DYNAMIC);
     constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>;
-    constexpr bool dynmaic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
+    constexpr bool dynamic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
     bool start_clipped;
@@ -503,7 +503,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
-            } else if constexpr (dynmaic_cav) {
+            } else if constexpr (dynamic_cav) {
                 JasUnpack(dyn_state, active_set, profile, adata);
                 i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
                 eta_s = mip_chain.emis.get_data()[ks_wave];
@@ -517,6 +517,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 CavEmisOpacState emis_opac_state {
                     .ks = ks,
                     .krl = 0,
+                    .wave = wave,
                     .lambda = lambda,
                     .vel = vel,
                     .phi = profile

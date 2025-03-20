@@ -67,6 +67,7 @@ constexpr AngularQuadratureType ANGULAR_QUADRATURE_TYPE = AngularQuadratureType:
 constexpr int HEALPIX_ORDER = 1;
 
 constexpr LineCoeffCalc LINE_SCHEME_3D = LineCoeffCalc::CoreAndVoigt;
+constexpr int CORE_AND_VOIGT_MAX_LINES_3D = 4;
 
 constexpr bool FORCE_LC_QUADRATURE = false;
 

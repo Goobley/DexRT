@@ -90,6 +90,7 @@ template <int N>
 using Dims = Coord<N>;
 
 struct State;
+struct State3d;
 
 enum class DexrtMode {
     Lte,
@@ -312,13 +313,18 @@ struct RaySegment {
     }
 };
 
-
+template <int NumDim>
+using ActiveProbeView = std::conditional_t<
+    NumDim == 2,
+    yakl::Array<i32, 2, yakl::memDevice>,
+    yakl::Array<Coord3, 1, yakl::memDevice>
+>;
 
 template <int NumDim=2>
 struct DeviceProbesToCompute {
     bool sparse;
     ivec<NumDim> num_probes;
-    yakl::Array<i32, 2, yakl::memDevice> active_probes; // [n, NumDim (u, v, (w))]
+    ActiveProbeView<NumDim> active_probes; // [n, NumDim (u, v, (w))]
 
     template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE ivec2 operator()(i64 ks) const {
@@ -356,9 +362,10 @@ struct DeviceProbesToCompute {
         }
 
         ivec3 probe_coord;
-        probe_coord(0) = active_probes(ks, 0);
-        probe_coord(1) = active_probes(ks, 1);
-        probe_coord(2) = active_probes(ks, 2);
+        Coord3 pc = active_probes(ks);
+        probe_coord(0) = pc.x;
+        probe_coord(1) = pc.y;
+        probe_coord(2) = pc.z;
         return probe_coord;
     }
 
@@ -377,13 +384,13 @@ struct DeviceProbesToCompute {
 struct ProbesToCompute2d {
     bool sparse;
     CascadeStorage c0_size;
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes; // [n, 2 (u, v)]
+    std::vector<ActiveProbeView<2>> active_probes; // [n, 2 (u, v)]
 
     /// Setup object, low-level
     void init(
         const CascadeStorage& c0,
         bool sparse,
-        std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes = decltype(active_probes)()
+        std::vector<ActiveProbeView<2>> active_probes = decltype(active_probes)()
     );
 
     /// Setup object, high-level, from state
@@ -394,6 +401,31 @@ struct ProbesToCompute2d {
 
     /// Bind cascade n to device type
     DeviceProbesToCompute<2> bind(int cascade_idx) const;
+
+    /// Number of probes to compute in cascade n
+    i64 num_active_probes(int cascade_idx) const;
+};
+
+struct ProbesToCompute3d {
+    bool sparse;
+    CascadeStorage3d c0_size;
+    std::vector<ActiveProbeView<3>> active_probes;
+
+    /// Setup object, low-level
+    void init(
+        const CascadeStorage3d& c0,
+        bool sparse,
+        std::vector<ActiveProbeView<3>> active_probes = decltype(active_probes)()
+    );
+
+    /// Setup object, high-level, from state
+    void init(
+        const State3d& state,
+        int max_cascade
+    );
+
+    /// Bind cascade n to device type
+    DeviceProbesToCompute<3> bind(int cascade_idx) const;
 
     /// Number of probes to compute in cascade n
     i64 num_active_probes(int cascade_idx) const;
@@ -774,6 +806,17 @@ struct MipmapComputeState {
     const yakl::Array<i32, 1, yakl::memDevice>& mippable_entries;
     const Fp2d& emis;
     const Fp2d& opac;
+    const Fp1d& vx;
+    const Fp1d& vy;
+    const Fp1d& vz;
+};
+
+struct MipmapComputeState3d {
+    i32 max_mip_factor;
+    i32 la;
+    const yakl::Array<i32, 1, yakl::memDevice>& mippable_entries;
+    const Fp1d& emis;
+    const Fp1d& opac;
     const Fp1d& vx;
     const Fp1d& vy;
     const Fp1d& vz;

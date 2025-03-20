@@ -176,7 +176,7 @@ YAKL_INLINE RadianceInterval<DexEmpty> march_and_merge_trilinear_interval_3d(con
     return interp;
 }
 
-void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_state, int la, fp_t ray_weight=FP(-1.0)) {
+static void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_state, int la, fp_t ray_weight=FP(-1.0)) {
     constexpr int RcMode = RC_flags_storage_3d();
     const CascadeStorage3d& c0_size(state.c0_size);
     CascadeRays3d ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);

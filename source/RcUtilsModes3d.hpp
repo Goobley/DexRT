@@ -429,7 +429,7 @@ YAKL_INLINE i64 probe_linear_index(const CascadeStorage3d& dims, const ProbeStor
 
 template <int RcMode>
 YAKL_INLINE i64 probe_linear_index(const CascadeRays3d& dims, const ProbeIndex3d& probe) {
-    CascadeStorage storage = cascade_rays_to_storage<RcMode>(dims);
+    CascadeStorage3d storage = cascade_rays_to_storage<RcMode>(dims);
     return probe_linear_index<RcMode>(storage, probe);
 }
 

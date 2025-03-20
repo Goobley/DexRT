@@ -1,11 +1,18 @@
 #include "State3d.hpp"
 #include "CascadeState3d.hpp"
 #include "RcUtilsModes3d.hpp"
+#include "MiscSparse.hpp"
 
 bool CascadeState3d::init(const State3d& state, int max_cascades) {
-    // TODO(cmo): Sparsity/active probes
     CascadeStorage3d c0 = state.c0_size;
+    const bool sparse_calc = state.config.sparse_calculation;
+    std::vector<ActiveProbeView<3>> active_probes;
+    if (sparse_calc) {
+        active_probes = compute_active_probe_lists(state, max_cascades);
+    }
+    probes_to_compute.init(c0, sparse_calc, active_probes);
     num_cascades = max_cascades;
+
     i64 max_entries = 0;
     for (int i = 0; i <= max_cascades; ++i) {
         auto dims = cascade_size(c0, i);
@@ -35,6 +42,9 @@ bool CascadeState3d::init(const State3d& state, int max_cascades) {
             }
             tau_cascades.push_back(tau_entry);
         }
+    }
+    if (state.config.mode == DexrtMode::NonLte) {
+        alo = Fp1d("ALO", i_cascades[0].extent(0));
     }
     mip_chain.init(state, state.mr_block_map.buffer_len());
 

@@ -64,6 +64,10 @@ constexpr BaseMipContents BASE_MIP_CONTAINS =
     (LINE_SCHEME == LineCoeffCalc::VelocityInterp) ? BaseMipContents::LinesAtRest
         : (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) ? BaseMipContents::Continua
         : BaseMipContents::VelocityDependent;
+constexpr BaseMipContents BASE_MIP_CONTAINS_3D =
+    (LINE_SCHEME_3D == LineCoeffCalc::VelocityInterp) ? BaseMipContents::LinesAtRest
+        : (LINE_SCHEME_3D == LineCoeffCalc::CoreAndVoigt) ? BaseMipContents::Continua
+        : BaseMipContents::VelocityDependent;
 
 
 static_assert(std::has_single_bit(u32(BLOCK_SIZE)), "BLOCK_SIZE must be a power of two (>= 2)");

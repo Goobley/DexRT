@@ -910,11 +910,13 @@ void compute_lte_pops_flat(
 /**
  * Computes the LTE populations in state. Assumes state->pops is already allocated.
 */
+template <typename State>
 void compute_lte_pops(State* state);
 
 /**
  * Computes the LTE populations in to a provided allocated array.
 */
+template <typename State>
 void compute_lte_pops(const State* state, const Fp2d& shared_pops);
 
 struct StatEqOptions {
@@ -923,12 +925,14 @@ struct StatEqOptions {
     fp_t ignore_change_below_ntot_frac = FP(0.0);
 };
 
+template <typename State>
 void compute_nh0(const State& state);
 
 /**
  * Computes the statistical equilibrium solution for the atoms in State.
  * Internal precision configured in Config.
  */
+template <typename State>
 fp_t stat_eq(State* state, const StatEqOptions& args = StatEqOptions());
 
 #else

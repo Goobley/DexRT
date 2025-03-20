@@ -206,6 +206,9 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                     fp_t vel_x = FP(0.0);
                     fp_t vel_y = FP(0.0);
                     fp_t vel_z = FP(0.0);
+                    // NOTE(cmo): We don't need to check that these indices
+                    // exist. They are guaranteed to because we're iterating
+                    // over valid coords in the current level
                     i64 idxs[mip_block] = {
                         idx_gen.idx(level_m_1, coord),
                         idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z}),

@@ -68,6 +68,14 @@ list(APPEND DEX_3D_SOURCE_FILES
     "source/CascadeState3d.cpp"
     "source/BlockMap.cpp"
     "source/Mipmaps3d.cpp"
+    "source/CoreAndVoigtEmisOpac.cpp"
+    "source/ProbesToCompute.cpp"
+    "source/DynamicFormalSolution3d.cpp"
+    "source/MiscSparse.cpp"
+    "source/Populations.cpp"
+    "source/PromweaverBoundary.cpp"
+    "source/ProfileNormalisation.cpp"
+    "source/Collisions.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"

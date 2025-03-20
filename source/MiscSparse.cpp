@@ -1,5 +1,8 @@
 #include "MiscSparse.hpp"
 #include "RcUtilsModes.hpp"
+#include "State.hpp"
+#include "RcUtilsModes3d.hpp"
+#include "State3d.hpp"
 
 SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLOCK_SIZE>& block_map) {
     i64 num_active_cells = block_map.get_num_active_cells();
@@ -319,6 +322,163 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
             num_active,
             prev_active.extent(0)*prev_active.extent(1),
             fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
+        );
+    }
+    return probes_to_compute;
+}
+
+std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> compute_active_probe_lists(const State3d& state, int max_cascades) {
+    // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if
+    // Really this function is backwards. We can loop over each probe of i+1 and
+    // check the dependents in i, in parallel. The merge process remains the
+    // same.
+    JasUnpack(state, mr_block_map, c0_size);
+    std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> probes_to_compute;
+    probes_to_compute.reserve(max_cascades + 1);
+
+    i64 num_active = mr_block_map.get_num_active_cells();
+    i64 total_num_probes = c0_size.num_probes(0) * c0_size.num_probes(1) * c0_size.num_probes(2);
+    yakl::Array<Coord3, 1, yakl::memDevice> probes_to_compute_c0("C0 to compute", num_active);
+    dex_parallel_for(
+        "Compute C0 active",
+        mr_block_map.block_map.loop_bounds(),
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
+            IdxGen3d idx_gen(mr_block_map);
+            Coord3 coord = idx_gen.loop_coord(tile_idx, block_idx);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            probes_to_compute_c0(ks) = coord;
+        }
+    );
+    Kokkos::fence();
+    probes_to_compute.emplace_back(probes_to_compute_c0);
+    state.println(
+        "C0 Active Probes {}/{} ({}%)",
+        num_active,
+        total_num_probes,
+        fp_t(num_active) / fp_t(total_num_probes) * FP(100.0)
+    );
+
+    // Hoist this, but will only be created for C1 onwards (not C0)
+    yakl::Array<i8, 3, yakl::memDevice> prev_active;
+
+    // NOTE(cmo): Repeat this process for the other cascades
+    for (int cascade_idx = 1; cascade_idx <= max_cascades; ++cascade_idx) {
+        CascadeStorage3d dims = cascade_size(state.c0_size, cascade_idx);
+        yakl::Array<i8, 3, yakl::memDevice> next_probes(
+            "cn active",
+            dims.num_probes(2),
+            dims.num_probes(1),
+            dims.num_probes(0)
+        );
+        yakl::Array<Coord3, 1, yakl::memDevice> next_probe_coords("Cn probes", next_probes.size());
+        next_probes = i8(0);
+        Kokkos::fence();
+        dex_parallel_for(
+            "Compute Cn active",
+            FlatLoop<3>(dims.num_probes(2), dims.num_probes(1), dims.num_probes(0)),
+            KOKKOS_LAMBDA (int zn, int yn, int xn) {
+                int zp = 2 * zn;
+                int yp = 2 * yn;
+                int xp = 2 * xn;
+                IdxGen3d idx_gen(mr_block_map);
+
+                auto check_lower_cascade = [&]() -> bool {
+                    // NOTE(cmo): On each axis, check in range [x0 - 1, x0 + 2]. If any
+                    // are active, this one is also active.
+                    for (int z = zp - 1; z < zp + 3; ++z) {
+                        for (int y = yp - 1; y < yp + 3; ++y) {
+                            for (int x = xp - 1; x < xp + 3; ++x) {
+                                // NOTE(cmo): clamp access
+                                Coord3 coord {
+                                    .x = std::min(std::max(x, 0), dims.num_probes(0) - 1),
+                                    .y = std::min(std::max(y, 0), dims.num_probes(1) - 1),
+                                    .z = std::min(std::max(z, 0), dims.num_probes(2) - 1)
+                                };
+
+                                // NOTE(cmo): Special handling for C1 to leverage the blockmap over C0
+                                if (cascade_idx == 1) {
+                                    if (idx_gen.has_leaves(coord)) {
+                                        return true;
+                                    }
+                                } else {
+                                    if (prev_active(coord.z, coord.y, coord.x)) {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                };
+
+                if (check_lower_cascade()) {
+                    next_probes(zn, yn, xn) = 1;
+                }
+
+                Coord3 cn_coord {
+                    .x = xn,
+                    .y = yn,
+                    .z = zn
+                };
+                // NOTE(cmo): This is the array we will stream compact
+                next_probe_coords((zn * dims.num_probes(1) + yn) * dims.num_probes(0) + xn) = cn_coord;
+            }
+        );
+        Kokkos::fence();
+
+        i64 num_active_cn;
+        dex_parallel_reduce(
+            "Compute number Cn active",
+            FlatLoop<3>(dims.num_probes(2), dims.num_probes(1), dims.num_probes(0)),
+            KOKKOS_LAMBDA (int zn, int yn, int xn, i64& num_active) {
+                if (next_probes(zn, yn, xn)) {
+                    num_active += 1;
+                }
+            },
+            Kokkos::Sum<i64>(num_active_cn)
+        );
+
+        yakl::Array<Coord3, 1, yakl::memDevice> probes_to_compute_cn("Cn to compute", num_active_cn);
+        Kokkos::Experimental::copy_if(
+            "Compact C1 coords",
+            DefaultExecutionSpace{},
+            KView<Coord3*>(next_probe_coords.data(), next_probe_coords.size()),
+            KView<Coord3*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),
+            KOKKOS_LAMBDA (const Coord3& c) {
+                return next_probes(c.z, c.y, c.z);
+            }
+        );
+        Kokkos::fence();
+        // NOTE(cmo): Kokkos sort is producing errors from thrust when included
+        // Kokkos::sort(
+        //     KView<Coord3*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),
+        //     KOKKOS_LAMBDA (const Coord3& l, const Coord3& r) {
+        //         // NOTE(cmo): This may overflow on very large models, but it's only an optimisation.
+        //         return encode_morton<3>(l) < encode_morton<3>(r);
+        //     }
+        // );
+        constexpr bool copy_to_host_and_sort = true;
+        if constexpr (copy_to_host_and_sort) {
+            auto probes_to_compute_host = probes_to_compute_cn.createHostCopy();
+            std::sort(
+                probes_to_compute_host.data(),
+                probes_to_compute_host.data() + probes_to_compute_host.size(),
+                [] (const Coord3& l, const Coord3& r) {
+                    // NOTE(cmo): This may overflow on very large models, but it's only an optimisation.
+                    return encode_morton<3>(l) < encode_morton<3>(r);
+                }
+            );
+            probes_to_compute_cn = probes_to_compute_host.createDeviceCopy();
+        }
+        Kokkos::fence();
+        probes_to_compute.emplace_back(probes_to_compute_cn);
+        prev_active = next_probes;
+        state.println(
+            "C{} Active Probes {}/{} ({}%)",
+            cascade_idx,
+            num_active_cn,
+            prev_active.size(),
+            fp_t(num_active_cn) / fp_t(prev_active.size()) * FP(100.0)
         );
     }
     return probes_to_compute;
