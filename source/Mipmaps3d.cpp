@@ -13,7 +13,6 @@ void MultiResMipChain3d::init(const State3d& state, i64 buffer_len) {
     max_mip_factor = state.mr_block_map.max_mip_level;
 
     if (state.config.mode != DexrtMode::GivenFs) {
-        throw std::runtime_error("Fixme");
         // NOTE(cmo): Classic doesn't use mips
         if constexpr (LINE_SCHEME_3D != LineCoeffCalc::Classic) {
             vx = Fp1d("vx_mips", buffer_len);

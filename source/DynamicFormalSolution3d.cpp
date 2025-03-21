@@ -320,7 +320,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
 ) {
     JasUnpack(args, mr_block_map, ray, distance_scale, mip_chain, la, bc, offset, dyn_state);
     constexpr bool dynamic = (RcMode & RC_DYNAMIC);
-    // constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>;
+    // constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch3dDynamicInterpState>;
     constexpr bool dynamic_cav = dynamic && std::is_same_v<DynamicState, Raymarch3dDynamicCavState>;
     RadianceInterval<Alo> result;
 
@@ -812,17 +812,26 @@ void dynamic_formal_sol_rc_3d_subset(const State3d& state, const CascadeState3d&
             casc_idx
         );
     }
-    compute_cascade_i_3d<RcModeAlo>(
-        state,
-        casc_state,
-        la,
-        subset_idx,
-        0
-    );
+    if (casc_state.alo.initialized()) {
+        compute_cascade_i_3d<RcModeAlo>(
+            state,
+            casc_state,
+            la,
+            subset_idx,
+            0
+        );
+    } else {
+        compute_cascade_i_3d<RcModeNoBc>(
+            state,
+            casc_state,
+            la,
+            subset_idx,
+            0
+        );
+    }
 }
 
 void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_state, int la) {
-    assert(state.config.mode == DexrtMode::GivenFs);
     JasUnpack(casc_state, mip_chain);
 
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
@@ -837,7 +846,6 @@ void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_s
 
     constexpr int num_subsets = subset_tasks_per_cascade_3d<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
-        fmt::println("Subset {} of {}...", subset_idx, num_subsets);
         if (casc_state.alo.initialized()) {
             casc_state.alo = FP(0.0);
         }

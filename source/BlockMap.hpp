@@ -781,22 +781,27 @@ struct MultiLevelIndexGen {
     template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE
     i32 compute_inner_offset(i32 mip_level, Coord<NumDim> inner) const {
+        Coord<NumDim> mip_coord {
+            .x = inner.x >> mip_level,
+            .z = inner.z >> mip_level
+        };
         if constexpr (INNER_MORTON_LOOKUP) {
-            Coord<NumDim> coord {
-                .x = inner.x >> mip_level,
-                .z = inner.z >> mip_level
-            };
-            return encode_morton<NumDim>(coord);
+            return encode_morton<NumDim>(mip_coord);
         } else {
-            return inner.z * (BLOCK_SIZE >> mip_level) + inner.x >> mip_level;
+            return mip_coord.z * (BLOCK_SIZE >> mip_level) + mip_coord.x;
         }
     }
 
     template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
     YAKL_INLINE
     i32 compute_inner_offset(i32 mip_level, Coord<NumDim> inner) const {
+        Coord<NumDim> mip_coord {
+            .x = inner.x >> mip_level,
+            .y = inner.y >> mip_level,
+            .z = inner.z >> mip_level
+        };
         const i32 reduced_block_size = BLOCK_SIZE >> mip_level;
-        return (inner.z * reduced_block_size + inner.y) * reduced_block_size + inner.x >> mip_level;
+        return (mip_coord.z * reduced_block_size + mip_coord.y) * reduced_block_size + mip_coord.x;
     }
 
     template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>

@@ -33,7 +33,7 @@ constexpr int POLAR_BRANCHING_FACTOR_3D = 3;
 
 // Whether to use BRANCHING_FACTOR over BRANCHING_EXP. Requires more
 // calculation, but allows for e.g. 3.
-constexpr bool USE_BRANCHING_FACTOR_3D = true;
+constexpr bool USE_BRANCHING_FACTOR_3D = false;
 
 // NOTE(cmo): Should probably be interval_scale
 // Spatial scale exp: t_i = C0_LENGTH_3D * 2 ** (n * SPATIAL_SCALE_EXP_3D)
@@ -41,7 +41,7 @@ constexpr int SPATIAL_SCALE_EXP_3D = 1;
 // Spatial length scaling factor: t_i = C0_LENGTH_3D * SPATIAL_SCALE_FACTOR_3D ** n
 constexpr int SPATIAL_SCALE_FACTOR_3D = 3;
 // Whether to use SCALE_FACTOR over SCALE_EXP. Equivalent to USE_BRANCHING_FACTOR_3D
-constexpr bool USE_SCALE_FACTOR_3D = true;
+constexpr bool USE_SCALE_FACTOR_3D = false;
 
 // Whether to run the rays of the last cascade off the grid regardless of where
 // they start, to correctly sample the boundary conditions.

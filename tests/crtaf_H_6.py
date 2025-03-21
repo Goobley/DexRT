@@ -189,10 +189,38 @@ def make_CaII():
                 coll.data = np.concatenate(([0.0 * coll.data.unit], coll.data))
     return model_simplified
 
+def make_CaII_3d():
+    conv = LightweaverAtomConverter()
+    model = conv.convert(CaII_atom())
+    for l in model.lines:
+        l.wavelength_grid.q_core *= 3
+        # l.wavelength_grid.q_wing *= 2
+        if l.transition[1] != "ii_1":
+            l.wavelength_grid.n_lambda //= 2
+    visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
+    model_simplified = model.simplify_visit(visitor)
+
+    # current_grid = model_simplified.lines[-1].wavelength_grid.wavelengths
+    # new_grid = np.sort(np.concatenate((current_grid, [-1.0 * u.nm])))
+    # model_simplified.lines[-1].wavelength_grid.wavelengths = new_grid
+
+    # NOTE(cmo): To prevent explosion due to rates in the Snow KHI model
+    # TODO(cmo): Grab the rates from source/RADYN
+    for trans in model_simplified.collisions:
+        for coll in trans.data:
+            if isinstance(coll, TemperatureInterpolationRateImpl) and coll.temperature[0] > (1000.0 * u.K):
+                coll.temperature = np.concatenate(([500.0 * u.K], coll.temperature))
+                coll.data = np.concatenate(([0.0 * coll.data.unit], coll.data))
+    return model_simplified
+
 
 if __name__ == "__main__":
     atom = make_CaII()
     with open("test_CaII.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_CaII_3d()
+    with open("CaII_3d.yaml", "w") as f:
         f.write(atom.yaml_dumps())
 
     atom = make_H_4()

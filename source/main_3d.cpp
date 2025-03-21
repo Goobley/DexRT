@@ -131,7 +131,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
     const int n_level_total = state.adata.energy.extent(0);
     state.pops = Fp2d("pops", n_level_total, num_active_cells);
 
-    if (config.mode == DexrtMode::NonLte) {
+    // if (config.mode == DexrtMode::NonLte) {
         for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
             const int n_level = state.adata_host.num_level(ia);
             state.Gamma.emplace_back(
@@ -139,7 +139,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
             );
         }
         state.wphi = Fp2d("wphi", state.adata.lines.extent(0), num_active_cells);
-    }
+    // }
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
     state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary);
@@ -185,15 +185,45 @@ void save_results(const State3d& state, const CascadeState3d& casc_state) {
     yakl::SimpleNetCDF nc;
     nc.create(config.output_path, yakl::NETCDF_MODE_REPLACE);
     fmt::println("Saving output to {}...", config.output_path);
-    Fp4d J4d = state.J.reshape(
-        state.given_state.emis.extent(0),
-        state.given_state.emis.extent(1),
-        state.given_state.emis.extent(2),
-        state.given_state.emis.extent(3)
-    );
-    nc.write(J4d, "J", {"wavelength", "z", "y", "x"});
+    if (state.config.mode == DexrtMode::GivenFs) {
+        Fp4d J4d = state.J.reshape(
+            state.given_state.emis.extent(0),
+            state.given_state.emis.extent(1),
+            state.given_state.emis.extent(2),
+            state.given_state.emis.extent(3)
+        );
+        nc.write(J4d, "J", {"wavelength", "z", "y", "x"});
+        return;
+    }
+
+    // nc.write(state.J_cpu, "J", {"wavelength", "ks"});
+    if (state.config.sparse_calculation) {
+        nc.write(rehydrate_sparse_quantity(state.mr_block_map.block_map, state.J_cpu), "J", {"wavelength", "z", "y", "x"});
+    } else {
+        nc.write(
+            state.J_cpu.reshape(
+                state.J_cpu.extent(0),
+                state.atmos.num_z,
+                state.atmos.num_y,
+                state.atmos.num_x
+            ),
+            "J",
+            {"wavelength", "z", "y", "x"}
+        );
+    }
+    nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
+    nc.write(state.mr_block_map.block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
+    nc.write(state.pops, "pops", {"level", "ks"});
     // nc.write(casc_state.i_cascades[0], "C0", {"C0_dim"});
     // nc.write(casc_state.i_cascades[1], "C1", {"C1_dim"});
+}
+
+void copy_J_plane_to_host(const State3d& state, int la) {
+    const Fp2dHost J_copy = state.J.createHostCopy();
+    // TODO(cmo): Replace with a memcpy?
+    for (i64 ks = 0; ks < J_copy.extent(1); ++ks) {
+        state.J_cpu(la, ks) = J_copy(0, ks);
+    }
 }
 
 int main(int argc, char** argv) {
@@ -235,14 +265,14 @@ int main(int argc, char** argv) {
             const int initial_lambda_iterations = config.initial_lambda_iterations;
             const int max_iters = config.max_iter;
 
-            if (non_lte) {
+            // if (non_lte) {
                 int i = 0;
                 state.println("-- Non-LTE Iterations --");
                 while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters)) {
                     state.println("==== FS {} ====", i);
                     compute_nh0(state);
                     compute_collisions_to_gamma(&state);
-                    compute_profile_normalisation(state, casc_state);
+                    compute_profile_normalisation(state, casc_state, true);
                     state.J = FP(0.0);
                     if (config.store_J_on_cpu) {
                         state.J_cpu = FP(0.0);
@@ -255,8 +285,11 @@ int main(int argc, char** argv) {
                         }
                         dynamic_formal_sol_rc_3d(state, casc_state, la);
                         if (config.store_J_on_cpu) {
-                            // copy J plane to host
+                            copy_J_plane_to_host(state, la);
                         }
+                    }
+                    if (!non_lte) {
+                        break;
                     }
                     state.println("  == Statistical equilibrium ==");
                     max_change = stat_eq(
@@ -265,8 +298,9 @@ int main(int argc, char** argv) {
                             .ignore_change_below_ntot_frac=std::min(FP(1e-6), non_lte_tol)
                         }
                     );
+                    i += 1;
                 }
-            }
+            // }
         }
         save_results(state, casc_state);
         yakl::timer_stop("DexRT");

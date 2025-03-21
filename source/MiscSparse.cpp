@@ -123,32 +123,40 @@ yakl::Array<u8, 2, yakl::memDevice> reify_active_c0(const BlockMap<BLOCK_SIZE>& 
 }
 
 // Rehydrates the page from page_idx into qty_page
+template <int BLOCK_SIZE, int NumDim>
 void rehydrate_page(
-    const BlockMap<BLOCK_SIZE>& block_map,
+    const BlockMap<BLOCK_SIZE, NumDim>& block_map,
     const Fp2d& quantity,
-    const Fp2d& qty_page,
+    const yakl::Array<fp_t, NumDim, yakl::memDevice>& qty_page,
     int page_idx
 ) {
     qty_page = FP(0.0);
     yakl::fence();
 
+    using IdxGen_t = std::conditional_t<NumDim == 2, IdxGen, IdxGen3d>;
+
     dex_parallel_for(
         "Rehydrate page",
         block_map.loop_bounds(),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
-            IdxGen idx_gen(block_map);
+            IdxGen_t idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+            Coord<NumDim> coord = idx_gen.loop_coord(tile_idx, block_idx);
 
-            qty_page(coord.z, coord.x) = quantity(page_idx, ks);
+            JasUse(qty_page, quantity, page_idx);
+            if constexpr (NumDim == 2) {
+                qty_page(coord.z, coord.x) = quantity(page_idx, ks);
+            } else {
+                qty_page(coord.z, coord.y, coord.x) = quantity(page_idx, ks);
+            }
         }
     );
     yakl::fence();
 }
 
 Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp2d& quantity) {
-    const int num_x = block_map.num_x_tiles() * BLOCK_SIZE;
-    const int num_z = block_map.num_z_tiles() * BLOCK_SIZE;
+    const int num_x = block_map.num_x_tiles() * block_map.BLOCK_SIZE;
+    const int num_z = block_map.num_z_tiles() * block_map.BLOCK_SIZE;
     Fp3dHost result(
         quantity.myname,
         quantity.extent(0),
@@ -170,11 +178,39 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
     return result;
 }
 
+Fp4dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, const Fp2d& quantity) {
+    const int num_x = block_map.num_x_tiles() * block_map.BLOCK_SIZE;
+    const int num_y = block_map.num_y_tiles() * block_map.BLOCK_SIZE;
+    const int num_z = block_map.num_z_tiles() * block_map.BLOCK_SIZE;
+    Fp4dHost result(
+        quantity.myname,
+        quantity.extent(0),
+        num_z,
+        num_y,
+        num_x
+    );
+    Fp3d qty_page("qty_page", num_z, num_y, num_x);
+
+    for (int n = 0; n < quantity.extent(0); ++n) {
+        rehydrate_page(block_map, quantity, qty_page, n);
+        Fp3dHost qty_page_host = qty_page.createHostCopy();
+
+        for (int z = 0; z < num_z; ++z) {
+            for (int y = 0; z < num_y; ++y) {
+                for (int x = 0; x < num_x; ++x) {
+                    result(n, z, y, x) = qty_page_host(z, y, x);
+                }
+            }
+        }
+    }
+    return result;
+}
+
 Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp2dHost& quantity) {
     // NOTE(cmo): This is not efficient, it just reuses the GPU machinery,
     // copying a page of CPU memory over at a time
-    const int num_x = block_map.num_x_tiles() * BLOCK_SIZE;
-    const int num_z = block_map.num_z_tiles() * BLOCK_SIZE;
+    const int num_x = block_map.num_x_tiles() * block_map.BLOCK_SIZE;
+    const int num_z = block_map.num_z_tiles() * block_map.BLOCK_SIZE;
     Fp3dHost result(
         quantity.myname,
         quantity.extent(0),
@@ -198,11 +234,60 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
     return result;
 }
 
+Fp4dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, const Fp2dHost& quantity) {
+    // NOTE(cmo): This is not efficient, it just reuses the GPU machinery,
+    // copying a page of CPU memory over at a time
+    const int num_x = block_map.num_x_tiles() * block_map.BLOCK_SIZE;
+    const int num_y = block_map.num_y_tiles() * block_map.BLOCK_SIZE;
+    const int num_z = block_map.num_z_tiles() * block_map.BLOCK_SIZE;
+    Fp4dHost result(
+        quantity.myname,
+        quantity.extent(0),
+        num_z,
+        num_y,
+        num_x
+    );
+    Fp3d qty_page("qty_page", num_z, num_y, num_x);
+    Fp2d qty_gpu("qty_gpu", 1, quantity.extent(1));
+
+    for (int n = 0; n < quantity.extent(0); ++n) {
+        qty_gpu = Fp2dHost("qty_slice", &quantity(n, 0), 1, quantity.extent(1)).createDeviceCopy();
+        rehydrate_page(block_map, qty_gpu, qty_page, 0);
+        Fp3dHost qty_page_host = qty_page.createHostCopy();
+
+        for (int z = 0; z < num_z; ++z) {
+            for (int y = 0; y < num_y; ++y) {
+                for (int x = 0; x < num_x; ++x) {
+                    result(n, z, y, x) = qty_page_host(z, y, x);
+                }
+            }
+        }
+    }
+    return result;
+}
+
 Fp2dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp1d& quantity) {
     Fp2d qtyx1("1 x qty", quantity.data(), 1, quantity.extent(0));
-    Fp2d qty_page("qty_page", block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
+    Fp2d qty_page(
+        "qty_page",
+        block_map.num_z_tiles() * block_map.BLOCK_SIZE,
+        block_map.num_x_tiles() * block_map.BLOCK_SIZE
+    );
     rehydrate_page(block_map, qtyx1, qty_page, 0);
     Fp2dHost result = qty_page.createHostCopy();
+    return result;
+}
+
+Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, const Fp1d& quantity) {
+    Fp2d qtyx1("1 x qty", quantity.data(), 1, quantity.extent(0));
+    Fp3d qty_page(
+        "qty_page",
+        block_map.num_z_tiles() * block_map.BLOCK_SIZE,
+        block_map.num_y_tiles() * block_map.BLOCK_SIZE,
+        block_map.num_x_tiles() * block_map.BLOCK_SIZE
+    );
+    rehydrate_page(block_map, qtyx1, qty_page, 0);
+    Fp3dHost result = qty_page.createHostCopy();
     return result;
 }
 
@@ -328,10 +413,8 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
 }
 
 std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> compute_active_probe_lists(const State3d& state, int max_cascades) {
-    // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if
-    // Really this function is backwards. We can loop over each probe of i+1 and
-    // check the dependents in i, in parallel. The merge process remains the
-    // same.
+    // NOTE(cmo): This is the strategy discussed in the 2D model. It makes a lot
+    // more sense, and 2D should be migrated.
     JasUnpack(state, mr_block_map, c0_size);
     std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> probes_to_compute;
     probes_to_compute.reserve(max_cascades + 1);
@@ -439,16 +522,31 @@ std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> compute_active_probe_lists(
         );
 
         yakl::Array<Coord3, 1, yakl::memDevice> probes_to_compute_cn("Cn to compute", num_active_cn);
-        Kokkos::Experimental::copy_if(
-            "Compact C1 coords",
-            DefaultExecutionSpace{},
-            KView<Coord3*>(next_probe_coords.data(), next_probe_coords.size()),
-            KView<Coord3*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),
-            KOKKOS_LAMBDA (const Coord3& c) {
-                return next_probes(c.z, c.y, c.z);
-            }
-        );
-        Kokkos::fence();
+        if constexpr (false) {
+            auto probes_to_compute_host = probes_to_compute_cn.createHostObject();
+            auto next_probe_coords_host = next_probe_coords.createHostCopy();
+            auto next_probes_host = next_probes.createHostCopy();
+            std::copy_if(
+                next_probe_coords_host.data(),
+                next_probe_coords_host.data() + next_probe_coords_host.size(),
+                probes_to_compute_host.data(),
+                [&] (const Coord3& c) {
+                    return next_probes_host(c.z, c.y, c.x);
+                }
+            );
+            probes_to_compute_cn = probes_to_compute_host.createDeviceCopy();
+        } else {
+            Kokkos::Experimental::copy_if(
+                "Compact C1 coords",
+                DefaultExecutionSpace{},
+                KView<Coord3*>(next_probe_coords.data(), next_probe_coords.size()),
+                KView<Coord3*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),
+                KOKKOS_LAMBDA (const Coord3& c) {
+                    return next_probes(c.z, c.y, c.x);
+                }
+            );
+            Kokkos::fence();
+        }
         // NOTE(cmo): Kokkos sort is producing errors from thrust when included
         // Kokkos::sort(
         //     KView<Coord3*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),

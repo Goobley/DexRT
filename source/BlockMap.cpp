@@ -219,7 +219,7 @@ void BlockMapInit<3>::setup_sparse<BlockMap>(BlockMap* map, const AtmosphereNd<3
     bool all_active = cutoff_temperature == FP(0.0);
     if (all_active) {
         active = true;
-        map->num_active_tiles = num_x_tiles * num_z_tiles;
+        map->num_active_tiles = num_total_tiles;
     } else {
         auto& temperature = atmos.temperature;
         // TODO(cmo): If this is brought to GPU, then look at doing a Reduction inside Teams
@@ -241,14 +241,12 @@ void BlockMapInit<3>::setup_sparse<BlockMap>(BlockMap* map, const AtmosphereNd<3
             }
         );
     }
-    yakl::fence();
     auto lookup_host = map->lookup.createHostCopy();
     i64 grid_idx = 0;
 
     for (i64 m_idx = 0; m_idx < morton_order.extent(0); ++m_idx) {
         Coord3 tile_index = decode_morton<3>(morton_order(m_idx));
         if (active(tile_index.z, tile_index.y, tile_index.x)) {
-            // TODO(cmo): This is awful that the order needs to be swapped!
             lookup_host(Coord3{.x = tile_index.x, .y = tile_index.y, .z = tile_index.z}) = grid_idx++;
         }
     }
