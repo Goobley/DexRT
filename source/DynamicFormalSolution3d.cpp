@@ -796,13 +796,15 @@ void dynamic_formal_sol_rc_3d_subset(const State3d& state, const CascadeState3d&
         .dir_by_dir = DIR_BY_DIR_3D
     });
 
-    compute_cascade_i_3d<RcModeBc>(
-        state,
-        casc_state,
-        la,
-        subset_idx,
-        casc_state.num_cascades
-    );
+    if (casc_state.num_cascades > 0) {
+        compute_cascade_i_3d<RcModeBc>(
+            state,
+            casc_state,
+            la,
+            subset_idx,
+            casc_state.num_cascades
+        );
+    }
     for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
         compute_cascade_i_3d<RcModeNoBc>(
             state,

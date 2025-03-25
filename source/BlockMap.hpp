@@ -1021,7 +1021,7 @@ YAKL_INLINE ivec<NumDim> round_down(vec<NumDim> pt) {
     return result;
 }
 
-template <i32 BLOCK_SIZE, u8 ENTRY_SIZE, i32 NumDim=2>
+template <i32 BlockSize, u8 EntrySize, i32 NumDim=2>
 struct MultiLevelDDA {
     u8 step_axis;
     i8 max_mip_level;
@@ -1035,9 +1035,9 @@ struct MultiLevelDDA {
     vec<NumDim> delta;
 
     RaySegment<NumDim> ray;
-    MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE, NumDim>& idx_gen;
+    MultiLevelIndexGen<BlockSize, EntrySize, NumDim>& idx_gen;
 
-    YAKL_INLINE MultiLevelDDA(MultiLevelIndexGen<BLOCK_SIZE, ENTRY_SIZE, NumDim>& idx_gen_) : idx_gen(idx_gen_) {};
+    YAKL_INLINE MultiLevelDDA(MultiLevelIndexGen<BlockSize, EntrySize, NumDim>& idx_gen_) : idx_gen(idx_gen_) {};
 
     YAKL_INLINE
     bool init(const RaySegment<NumDim>& ray_, i32 max_mip_level_, bool* start_clipped=nullptr) {
@@ -1063,7 +1063,7 @@ struct MultiLevelDDA {
         // and clamping was the wrong behaviour. If we're not in bounds, work on
         // a step size of 1.
         if (in_bounds() && get_sample_level() < 0) {
-            step_size = BLOCK_SIZE;
+            step_size = BlockSize;
         }
         for (int ax = 0; ax < NumDim; ++ax) {
             curr_coord(ax) = curr_coord(ax) & (~uint32_t(step_size-1));
@@ -1115,14 +1115,14 @@ struct MultiLevelDDA {
     YAKL_INLINE i32 get_step_size() const {
         i32 mip_level = get_sample_level();
         if (mip_level < 0) {
-            return BLOCK_SIZE;
+            return BlockSize;
         }
         return 1 << mip_level;
     }
 
     YAKL_INLINE i32 get_step_size(i32 mip_level) const {
         if (mip_level < 0) {
-            return BLOCK_SIZE;
+            return BlockSize;
         }
         return 1 << mip_level;
     }
@@ -1194,6 +1194,13 @@ struct MultiLevelDDA {
         current_mip_level = new_mip_level;
         step_size = new_step_size;
 
+        // NOTE(cmo): If we're not locking to block then push us slightly
+        // forward along the ray before checking where we are to minimise the
+        // effects of rounding into the previous box due to floating point
+        // issues.
+        if (!lock_to_block) {
+            t += FP(1e-3);
+        }
         vec<NumDim> curr_pos = ray(t);
         if (!lock_to_block) {
             curr_coord = round_down<NumDim>(curr_pos);
@@ -1273,7 +1280,7 @@ struct MultiLevelDDA {
                 return true;
             }
 
-            if (step_size != BLOCK_SIZE) {
+            if (step_size != BlockSize) {
                 // NOTE(cmo): Not in a refined region (no leaves), so go to big steps
 
                 // NOTE(cmo): Boop us away from the boundary to avoid getting

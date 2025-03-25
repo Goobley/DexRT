@@ -459,7 +459,7 @@ YAKL_INLINE IntervalLength cascade_interval_length_3d(int num_cascades, int n) {
             .to = C0_LENGTH_3D * (1 << (n * SPATIAL_SCALE_EXP_3D))
         };
     }
-    if (LAST_CASCADE_TO_INFTY && n == num_cascades) {
+    if (LAST_CASCADE_TO_INFTY_3D && n == num_cascades) {
         length.to = LAST_CASCADE_MAX_DIST;
     }
     return length;
