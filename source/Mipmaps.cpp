@@ -243,13 +243,13 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
             ),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
                 const i32 level = level_m_1 + 1;
-                const fp_t ds = vox_scale;
                 MRIdxGen idx_gen(mr_block_map);
                 const i64 ks = idx_gen.loop_idx(level, tile_idx, block_idx);
                 const Coord2 coord = idx_gen.loop_coord(level, tile_idx, block_idx);
                 const Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
 
                 const i32 upper_vox_size = vox_size / 2;
+                const fp_t ds = vox_scale * upper_vox_size;
                 fp_t emis_mip = FP(0.0);
                 fp_t opac_mip = FP(0.0);
                 i64 idxs[mip_block] = {

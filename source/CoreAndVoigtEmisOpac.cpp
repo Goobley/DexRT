@@ -169,7 +169,6 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
         "Compute mip n (CoreAndVoigt)",
         FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
         YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
-            const fp_t ds = vox_scale;
             const fp_t lambda = adata.wavelength(la_start + wave);
             MRIdxGen idx_gen(mr_block_map);
 
@@ -178,6 +177,7 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
             const Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
 
             const i32 upper_vox_size = vox_size / 2;
+            const fp_t ds = vox_scale * upper_vox_size;
             i64 idxs[mip_block] = {
                 idx_gen.idx(level_m_1, coord),
                 idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z}),
@@ -423,7 +423,6 @@ void CoreAndVoigtData3d::compute_mip_n(const State3d& state, const MipmapCompute
         "Compute mip n (CoreAndVoigt)",
         FlatLoop<2>(bounds.dim(0), bounds.dim(1)),
         YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx) {
-            const fp_t ds = vox_scale;
             const fp_t lambda = adata.wavelength(la);
             MRIdxGen3d idx_gen(mr_block_map);
             constexpr i32 CAV_MAX_LINES = CORE_AND_VOIGT_MAX_LINES_3D;
@@ -433,6 +432,7 @@ void CoreAndVoigtData3d::compute_mip_n(const State3d& state, const MipmapCompute
             const Coord3 tile_coord = idx_gen.compute_tile_coord(tile_idx);
 
             const i32 upper_vox_size = vox_size / 2;
+            const fp_t ds = vox_scale * upper_vox_size;
             i64 idxs[mip_block] = {
                 idx_gen.idx(
                     level_m_1,
