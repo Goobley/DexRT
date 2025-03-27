@@ -446,6 +446,7 @@ std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> compute_active_probe_lists(
 
     // NOTE(cmo): Repeat this process for the other cascades
     for (int cascade_idx = 1; cascade_idx <= max_cascades; ++cascade_idx) {
+        CascadeStorage3d prev_dims = cascade_size(state.c0_size, cascade_idx-1);
         CascadeStorage3d dims = cascade_size(state.c0_size, cascade_idx);
         yakl::Array<i8, 3, yakl::memDevice> next_probes(
             "cn active",
@@ -473,9 +474,9 @@ std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> compute_active_probe_lists(
                             for (int x = xp - 1; x < xp + 3; ++x) {
                                 // NOTE(cmo): clamp access
                                 Coord3 coord {
-                                    .x = std::min(std::max(x, 0), dims.num_probes(0) - 1),
-                                    .y = std::min(std::max(y, 0), dims.num_probes(1) - 1),
-                                    .z = std::min(std::max(z, 0), dims.num_probes(2) - 1)
+                                    .x = std::min(std::max(x, 0), prev_dims.num_probes(0) - 1),
+                                    .y = std::min(std::max(y, 0), prev_dims.num_probes(1) - 1),
+                                    .z = std::min(std::max(z, 0), prev_dims.num_probes(2) - 1)
                                 };
 
                                 // NOTE(cmo): Special handling for C1 to leverage the blockmap over C0

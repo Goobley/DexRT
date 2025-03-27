@@ -54,7 +54,7 @@ constexpr fp_t LAST_CASCADE_MAX_DIST_3D = FP(2e4);
 // Whether to treat the subset of each cascade associated with each ray of C0
 // separately. This is a good default with good memory savings, but is
 // incompatible with the parallax fixes.
-constexpr bool DIR_BY_DIR_3D = true;
+constexpr bool DIR_BY_DIR_3D = false;
 
 enum class AngularQuadratureType {
     TrapezoidalProduct,

@@ -193,7 +193,7 @@ def make_CaII_3d():
     conv = LightweaverAtomConverter()
     model = conv.convert(CaII_atom())
     for l in model.lines:
-        l.wavelength_grid.q_core *= 3
+        # l.wavelength_grid.q_core *= 3
         # l.wavelength_grid.q_wing *= 2
         if l.transition[1] != "ii_1":
             l.wavelength_grid.n_lambda //= 2

@@ -196,9 +196,9 @@ void save_results(const State3d& state, const CascadeState3d& casc_state) {
         return;
     }
 
-    // nc.write(state.J_cpu, "J", {"wavelength", "ks"});
     if (state.config.sparse_calculation) {
-        nc.write(rehydrate_sparse_quantity(state.mr_block_map.block_map, state.J_cpu), "J", {"wavelength", "z", "y", "x"});
+        // nc.write(rehydrate_sparse_quantity(state.mr_block_map.block_map, state.J_cpu), "J", {"wavelength", "z", "y", "x"});
+        nc.write(state.J_cpu, "J", {"wavelength", "ks"});
     } else {
         nc.write(
             state.J_cpu.reshape(
@@ -214,8 +214,6 @@ void save_results(const State3d& state, const CascadeState3d& casc_state) {
     nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
     nc.write(state.mr_block_map.block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
     nc.write(state.pops, "pops", {"level", "ks"});
-    // nc.write(casc_state.i_cascades[0], "C0", {"C0_dim"});
-    // nc.write(casc_state.i_cascades[1], "C1", {"C1_dim"});
 }
 
 void copy_J_plane_to_host(const State3d& state, int la) {

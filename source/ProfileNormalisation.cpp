@@ -176,9 +176,15 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
                 wphi_plane(kr) = wphi(kr, max_err_k);
             }
         );
+        Fp1d max_err_temp("temp_view", &flatmos.temperature(max_err_k), 1);
+        Fp1d max_err_nh("temp_view", &flatmos.nh_tot(max_err_k), 1);
+        Fp1d max_err_ne("temp_view", &flatmos.ne(max_err_k), 1);
         yakl::fence();
         auto wphi_plane_host = wphi_plane.createHostCopy();
-        std::string output = fmt::format("  Highest error normalisation factors (wphi) @ ks = {}: ", max_err_k);
+        auto max_err_temp_host = max_err_temp.createHostCopy();
+        auto max_err_nh_host = max_err_nh.createHostCopy();
+        auto max_err_ne_host = max_err_ne.createHostCopy();
+        std::string output = fmt::format("  Highest error normalisation factors (wphi) @ ks = {} (T={:.2e}, nh={:.2e}, ne={:.2e}): ", max_err_k, max_err_temp_host(0), max_err_nh_host(0), max_err_ne_host(0));
         for (int kr = 0; kr < wphi_plane_host.extent(0); ++kr) {
             output += fmt::format("{:e}", wphi_plane_host(kr));
             if (kr != wphi_plane_host.extent(0) - 1) {
