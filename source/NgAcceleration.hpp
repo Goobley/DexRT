@@ -39,6 +39,7 @@ struct NgAccelerator {
 
     /// Copies the populations into the Ng buffer and returns true if they were
     /// updated (i.e. accelerated)
+    template <typename State>
     bool accelerate(const State& state, fp_t change);
 };
 

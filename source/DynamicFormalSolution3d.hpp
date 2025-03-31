@@ -4,7 +4,7 @@
 #include "State3d.hpp"
 #include "CascadeState3d.hpp"
 
-void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_state, int la);
+void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_state, bool lambda_iterate, int la);
 
 #else
 #endif

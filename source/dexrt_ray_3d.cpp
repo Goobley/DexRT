@@ -389,6 +389,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
 
                         fp_t chi_s = eta_chi.chi + FP(1e-20);
                         fp_t tau = chi_s * s.dt * vox_scale;
+                        throw std::runtime_error("precompute sparse emis/opac to avoid lte pop issues");
                         fp_t source_fn = eta_chi.eta / chi_s;
                         fp_t one_m_edt = -std::expm1(-tau);
                         fp_t cumulative_trans = std::exp(-cumulative_tau);
@@ -442,6 +443,11 @@ yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg, c
     f64 voxel_scale = atmos.voxel_scale;
     ncwrap(
         nc_put_att_double(ncid, NC_GLOBAL, "voxel_scale", NC_DOUBLE, 1, &voxel_scale),
+        __LINE__
+    );
+    f64 pixel_scale = atmos.voxel_scale / f64(cfg.supersample);
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "pixel_scale", NC_DOUBLE, 1, &pixel_scale),
         __LINE__
     );
 

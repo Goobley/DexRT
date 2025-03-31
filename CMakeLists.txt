@@ -76,6 +76,8 @@ list(APPEND DEX_3D_SOURCE_FILES
     "source/PromweaverBoundary.cpp"
     "source/ProfileNormalisation.cpp"
     "source/Collisions.cpp"
+    "source/NgAcceleration.cpp"
+    "source/ChargeConservation.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"

@@ -773,7 +773,13 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
     yakl::timer_stop(name);
 }
 
-void dynamic_formal_sol_rc_3d_subset(const State3d& state, const CascadeState3d& casc_state, int la, int subset_idx) {
+void dynamic_formal_sol_rc_3d_subset(
+    const State3d& state,
+    const CascadeState3d& casc_state,
+    bool lambda_iterate,
+    int la,
+    int subset_idx
+) {
     constexpr int RcModeBc = RC_flags_pack(RcFlags{
         .dynamic = true,
         .preaverage = false,
@@ -814,7 +820,7 @@ void dynamic_formal_sol_rc_3d_subset(const State3d& state, const CascadeState3d&
             casc_idx
         );
     }
-    if (casc_state.alo.initialized()) {
+    if (casc_state.alo.initialized() && !lambda_iterate) {
         compute_cascade_i_3d<RcModeAlo>(
             state,
             casc_state,
@@ -833,7 +839,7 @@ void dynamic_formal_sol_rc_3d_subset(const State3d& state, const CascadeState3d&
     }
 }
 
-void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_state, int la) {
+void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_state, bool lambda_iterate, int la) {
     JasUnpack(casc_state, mip_chain);
 
     // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
@@ -851,7 +857,7 @@ void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_s
         if (casc_state.alo.initialized()) {
             casc_state.alo = FP(0.0);
         }
-        dynamic_formal_sol_rc_3d_subset(state, casc_state, la, subset_idx);
+        dynamic_formal_sol_rc_3d_subset(state, casc_state, lambda_iterate, la, subset_idx);
         if (casc_state.alo.initialized()) {
             dynamic_compute_gamma(
                 state,

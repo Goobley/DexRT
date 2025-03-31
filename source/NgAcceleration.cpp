@@ -1,9 +1,11 @@
 #include "NgAcceleration.hpp"
 #include "Utils.hpp"
 #include "State.hpp"
+#include "State3d.hpp"
 #include "KokkosBatched_LU_Decl.hpp"
 #include "KokkosBatched_SolveLU_Decl.hpp"
 
+template <typename State>
 bool NgAccelerator::accelerate(const State& state, fp_t change) {
     yakl::timer_start("Ng Acceleration");
     i32 storage_idx = step_count % num_steps;
@@ -99,3 +101,6 @@ bool NgAccelerator::accelerate(const State& state, fp_t change) {
     yakl::timer_stop("Ng Acceleration");
     return true;
 }
+
+template bool NgAccelerator::accelerate<State>(const State& state, fp_t change);
+template bool NgAccelerator::accelerate<State3d>(const State3d& state, fp_t change);

@@ -56,6 +56,11 @@ constexpr fp_t LAST_CASCADE_MAX_DIST_3D = FP(2e4);
 // incompatible with the parallax fixes.
 constexpr bool DIR_BY_DIR_3D = false;
 
+constexpr const char* AngularQuadratureNames[3] = {
+    "TrapezoidalProduct",
+    "ClarbergOctahedral",
+    "Healpix"
+};
 enum class AngularQuadratureType {
     TrapezoidalProduct,
     ClarbergOctahedral,

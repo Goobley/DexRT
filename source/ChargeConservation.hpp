@@ -18,6 +18,7 @@ struct NrPostUpdateOptions {
  * Computes the post statistical equilibrium charge conservation update for H (only, currently).
  * Internal precision configured in Config with StatEq.
  */
+template <typename State>
 fp_t nr_post_update(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions());
 
 #else
