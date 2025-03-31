@@ -23,6 +23,7 @@ struct RayConfig {
     std::string dexrt_config_path;
     std::string ray_output_path;
     vec2 image_size;
+    int supersample = 1;
     std::vector<vec3> view_ray;
     std::vector<vec3> up_ray;
     std::vector<vec3> right_ray;
@@ -164,6 +165,10 @@ RayConfig parse_ray_config(const std::string& path) {
     config.image_size(0) = file["image_size"][0].as<fp_t>();
     config.image_size(1) = file["image_size"][1].as<fp_t>();
 
+    if (file["supersample"]) {
+        config.supersample = file["supersample"].as<int>();
+    }
+
     return config;
 }
 
@@ -259,8 +264,9 @@ template <int mem_space=yakl::memDevice>
 RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const SparseAtmosphere& atmos, int mu_idx) {
     RaySet<mem_space> result;
 
-    int num_x = int(cfg.image_size(0));
-    int num_y = int(cfg.image_size(1));
+    i32 supersample = cfg.supersample;
+    int num_x = int(cfg.image_size(0) * supersample);
+    int num_y = int(cfg.image_size(1) * supersample);
     vec3 corner = cfg.image_corner[mu_idx];
     vec3 up = cfg.up_ray[mu_idx];
     vec3 right = cfg.right_ray[mu_idx];
@@ -275,7 +281,7 @@ RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const SparseAtmosphere& 
         FlatLoop<2>(num_y, num_x),
         KOKKOS_LAMBDA (int y, int x) {
             for (int i = 0; i < 3; ++i) {
-                result.start_coord(y, x, i) = corner(i) + up(i) * (y + FP(0.5)) + right(i) * (x + FP(0.5));
+                result.start_coord(y, x, i) = corner(i) + up(i) * (y + FP(0.5)) / fp_t(supersample) + right(i) * (x + FP(0.5)) / fp_t(supersample);
             }
         }
     );

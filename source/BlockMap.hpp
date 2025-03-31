@@ -1098,7 +1098,7 @@ struct MultiLevelDDA {
                 return false;
             }
         }
-        update_mip_level(get_sample_level(), true);
+        update_mip_level(true);
         return true;
     }
 
@@ -1159,9 +1159,9 @@ struct MultiLevelDDA {
                 } break;
             }
         } else {
-            if (next_hit(0) < next_hit(1) && next_hit(0) < next_hit(2)) {
+            if (next_hit(0) <= next_hit(1) && next_hit(0) <= next_hit(2)) {
                 step_axis = 0;
-            } else if (next_hit(1) < next_hit(2)) {
+            } else if (next_hit(1) <= next_hit(2)) {
                 step_axis = 1;
             } else {
                 step_axis = 2;
@@ -1186,14 +1186,8 @@ struct MultiLevelDDA {
     /// bounds... the ray can end up marginally (O(1e-6) * voxel_scale) larger
     /// than correct.  This is mostly important for the initial call to this
     /// from init.
-    YAKL_INLINE void update_mip_level(i32 new_mip_level, bool lock_to_block=false) {
-        if (new_mip_level == current_mip_level) {
-            return;
-        }
-        const i32 new_step_size = get_step_size(new_mip_level);
-        current_mip_level = new_mip_level;
-        step_size = new_step_size;
-
+    /// Now returns new mip level, computed from grid position
+    YAKL_INLINE i32 update_mip_level(bool lock_to_block=false) {
         // NOTE(cmo): If we're not locking to block then push us slightly
         // forward along the ray before checking where we are to minimise the
         // effects of rounding into the previous box due to floating point
@@ -1205,6 +1199,8 @@ struct MultiLevelDDA {
         if (!lock_to_block) {
             curr_coord = round_down<NumDim>(curr_pos);
         }
+        current_mip_level = get_sample_level();
+        step_size = get_step_size();
         for (int ax = 0; ax < NumDim; ++ax) {
             curr_coord(ax) = curr_coord(ax) & (~uint32_t(step_size-1));
         }
@@ -1221,6 +1217,7 @@ struct MultiLevelDDA {
             }
         }
         compute_axis_and_dt();
+        return current_mip_level;
     }
 
     template <int ax>
@@ -1261,33 +1258,26 @@ struct MultiLevelDDA {
         // NOTE(cmo): Designed to be used with a do-while, i.e. the first
         // intersection is set up before this has been called.
         while (next_intersection()) {
-            const i32 mip_level = get_sample_level();
-            const bool has_leaves = (mip_level >= 0);
-            if (mip_level == current_mip_level && has_leaves) {
+            i32 mip_level = get_sample_level();
+            auto has_leaves = [&mip_level]() {
+                return mip_level >= 0;
+            };
+            if (mip_level == current_mip_level && has_leaves()) {
                 // NOTE(cmo): Already marching at expected step size through region with data
                 return true;
             }
 
-            if (has_leaves) {
-                // NOTE(cmo): Refine, then return first intersection in refined region with data.
-                // TODO(cmo): Push t into the expected box so we can remove the check after?
-                update_mip_level(mip_level);
-                if (get_sample_level() != mip_level) {
-                    // NOTE(cmo): Sometimes we round to just outside the refined
-                    // region on resolution change, and may need to take a very small step
-                    continue;
-                }
-                return true;
-            }
-
-            if (step_size != BlockSize) {
-                // NOTE(cmo): Not in a refined region (no leaves), so go to big steps
-
+            // NOTE(cmo): DDA predicts we're moving into a derefined region.
+            if (mip_level == -1 && step_size != BlockSize) {
                 // NOTE(cmo): Boop us away from the boundary to avoid getting
                 // stuck. Occasionally this may cut very small corners.
                 // Shouldn't be important, but may need tuning.
                 t += FP(0.01);
-                update_mip_level(mip_level);
+            }
+
+            mip_level = update_mip_level();
+            if (has_leaves()) {
+                return true;
             }
         }
         return false;
