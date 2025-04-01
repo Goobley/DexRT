@@ -25,12 +25,12 @@ bool CascadeState::init(const State& state, int max_cascades) {
             i_cascades.push_back(
                 Fp1d(
                     "i_cascade",
-                    max_entries
+                    yakl::DimsT<i64>(max_entries)
                 )
             );
             Fp1d tau_entry;
             if constexpr (STORE_TAU_CASCADES) {
-                tau_entry = Fp1d("tau_cascade", max_entries);
+                tau_entry = Fp1d("tau_cascade", yakl::DimsT<i64>(max_entries));
             }
             tau_cascades.push_back(tau_entry);
         }
@@ -41,18 +41,18 @@ bool CascadeState::init(const State& state, int max_cascades) {
             i_cascades.push_back(
                 Fp1d(
                     "i_cascade",
-                    entries
+                    yakl::DimsT<i64>(entries)
                 )
             );
             Fp1d tau_entry;
             if constexpr (STORE_TAU_CASCADES) {
-                tau_entry = Fp1d("tau_cascade", entries);
+                tau_entry = Fp1d("tau_cascade", yakl::DimsT<i64>(entries));
             }
             tau_cascades.push_back(tau_entry);
         }
     }
     if (state.config.mode == DexrtMode::NonLte) {
-        alo = Fp1d("ALO", i_cascades[0].extent(0));
+        alo = Fp1d("ALO", yakl::DimsT<i64>(i_cascades[0].extent(0)));
     }
     mip_chain.init(state, state.mr_block_map.buffer_len(), c0.wave_batch);
 

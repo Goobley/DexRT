@@ -623,7 +623,7 @@ static void merge_c0_to_J_3d(const State3d& state, const CascadeState3d& casc_st
                 IdxGen3d idx_gen(mr_block_map);
                 ks = idx_gen.idx(Coord3{.x = probe_coord(0), .y = probe_coord(1), .z = probe_coord(2)});
             } else {
-                ks = (probe_coord(2) * c0_dims.num_probes(1) + probe_coord(1)) * c0_dims.num_probes(0) + probe_coord(0);
+                ks = i64(probe_coord(2) * c0_dims.num_probes(1) + probe_coord(1)) * c0_dims.num_probes(0) + probe_coord(0);
             }
 
             int inner_la = J_slice ? 0 : la;

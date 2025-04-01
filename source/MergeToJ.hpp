@@ -54,7 +54,7 @@ inline FpConst2d merge_c0_to_J(
                 IdxGen idx_gen(block_map);
                 ks = idx_gen.idx(Coord2{.x = coord(0), .z = coord(1)});
             } else {
-                ks = coord(1) * c0_dims.num_probes(0) + coord(0);
+                ks = i64(coord(1)) * c0_dims.num_probes(0) + coord(0);
             }
             const fp_t sample = probe_fetch<RcMode>(c0, c0_dims, idx);
             Kokkos::atomic_add(&J(la, ks), ray_weight * sample);

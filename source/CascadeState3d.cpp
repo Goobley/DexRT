@@ -24,10 +24,10 @@ bool CascadeState3d::init(const State3d& state, int max_cascades) {
 
     if constexpr (PINGPONG_BUFFERS) {
         for (int i = 0; i < 2; ++i) {
-            i_cascades.push_back(Fp1d("i_cascade", max_entries));
+            i_cascades.push_back(Fp1d("i_cascade", yakl::DimsT<i64>(max_entries)));
             Fp1d tau_entry;
             if constexpr (STORE_TAU_CASCADES) {
-                tau_entry = Fp1d("tau_cascade", max_entries);
+                tau_entry = Fp1d("tau_cascade", yakl::DimsT<i64>(max_entries));
             }
             tau_cascades.push_back(tau_entry);
         }
@@ -35,16 +35,16 @@ bool CascadeState3d::init(const State3d& state, int max_cascades) {
         for (int i = 0; i <= max_cascades; ++i) {
             auto dims = cascade_size(c0, i);
             i64 entries = cascade_entries(dims);
-            i_cascades.push_back(Fp1d("i_cascade", entries));
+            i_cascades.push_back(Fp1d("i_cascade", yakl::DimsT<i64>(entries)));
             Fp1d tau_entry;
             if constexpr (STORE_TAU_CASCADES) {
-                tau_entry = Fp1d("tau_cascade", entries);
+                tau_entry = Fp1d("tau_cascade", yakl::DimsT<i64>(entries));
             }
             tau_cascades.push_back(tau_entry);
         }
     }
     if (state.config.mode == DexrtMode::NonLte) {
-        alo = Fp1d("ALO", i_cascades[0].extent(0));
+        alo = Fp1d("ALO", yakl::DimsT<i64>(i_cascades[0].extent(0)));
     }
     mip_chain.init(state, state.mr_block_map.buffer_len());
 

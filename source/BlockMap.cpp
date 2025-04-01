@@ -19,6 +19,12 @@ void BlockMapInit<2>::setup_dense<BlockMap>(BlockMap* map, Dims<2> dims) {
 
     const i32 num_x_tiles = map->num_x_tiles();
     const i32 num_z_tiles = map->num_z_tiles();
+    const i64 num_entries = i64(num_x_tiles) * i64(num_z_tiles) * square(BLOCK_SIZE);
+    if (num_entries > std::numeric_limits<i32>::max()) {
+        throw std::runtime_error(
+            fmt::format("Setting up dense blockmap with more than int32_max entries for ks ({})", num_entries)
+        );
+    }
 
     yakl::Array<uint32_t, 1, yakl::memHost> morton_order("morton_traversal_order", num_x_tiles * num_z_tiles);
     for (int z = 0; z < num_z_tiles; ++z) {
@@ -123,6 +129,12 @@ void BlockMapInit<2>::setup_sparse<BlockMap>(BlockMap* map, const AtmosphereNd<2
         }
         map->active_tiles = active_tiles_host.createDeviceCopy();
     }
+    i64 num_entries = i64(map->num_active_tiles) * square(BLOCK_SIZE);
+    if (num_entries > std::numeric_limits<i32>::max()) {
+        throw std::runtime_error(
+            fmt::format("Setting up sparse blockmap with more than int32_max entries for ks ({})", num_entries)
+        );
+    }
 }
 
 template <>
@@ -170,6 +182,15 @@ void BlockMapInit<3>::setup_dense<BlockMap>(BlockMap* map, Dims<3> dims) {
         lookup_host(tile_index) = grid_idx++;
     }
     map->lookup = lookup_host.createDeviceCopy();
+    i64 num_entries = i64(num_x_tiles) * i64(num_y_tiles) * i64(num_z_tiles) * cube(BLOCK_SIZE_3D);
+    if (num_entries > std::numeric_limits<i32>::max()) {
+        throw std::runtime_error(
+            fmt::format(
+                "Setting up dense blockmap with more than int32_max entries for ks ({})",
+                num_entries
+            )
+        );
+    }
 }
 
 template <>
@@ -267,6 +288,16 @@ void BlockMapInit<3>::setup_sparse<BlockMap>(BlockMap* map, const AtmosphereNd<3
             }
         }
         map->active_tiles = active_tiles_host.createDeviceCopy();
+    }
+
+    i64 num_entries = i64(map->num_active_tiles) * cube(BLOCK_SIZE_3D);
+    if (num_entries > std::numeric_limits<i32>::max()) {
+        throw std::runtime_error(
+            fmt::format(
+                "Setting up sparse blockmap with more than int32_max entries for ks ({})",
+                num_entries
+            )
+        );
     }
 }
 

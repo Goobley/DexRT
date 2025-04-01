@@ -43,14 +43,14 @@ void allocate_J(State* state) {
     }
 
     if (!sparse) {
-        num_cells = block_map.num_x_tiles() * block_map.num_z_tiles() * square(BLOCK_SIZE);
+        num_cells = i64(block_map.num_x_tiles()) * block_map.num_z_tiles() * square(BLOCK_SIZE);
     }
 
     if (config.store_J_on_cpu) {
-        state->J = Fp2d("J", c0_size.wave_batch, num_cells);
-        state->J_cpu = Fp2dHost("JHost", wave_dim, num_cells);
+        state->J = Fp2d("J", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
+        state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
     } else {
-        state->J = Fp2d("J", wave_dim, num_cells);
+        state->J = Fp2d("J", yakl::DimsT<i64>(wave_dim, num_cells));
     }
     state->J = FP(0.0);
     // TODO(cmo): If we have scattering terms and are updating J, the old

@@ -28,14 +28,14 @@ void allocate_J(State3d* state) {
     }
 
     if (!sparse) {
-        num_cells = block_map.num_x_tiles() * block_map.num_y_tiles() * block_map.num_z_tiles() * cube(BLOCK_SIZE_3D);
+        num_cells = i64(block_map.num_x_tiles()) * i64(block_map.num_y_tiles()) * i64(block_map.num_z_tiles()) * cube(BLOCK_SIZE_3D);
     }
 
     if (config.store_J_on_cpu && config.mode != DexrtMode::GivenFs) {
-        state->J = Fp2d("J", 1, num_cells);
-        state->J_cpu = Fp2dHost("JHost", wave_dim, num_cells);
+        state->J = Fp2d("J", yakl::DimsT<i64>(1, num_cells));
+        state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
     } else {
-        state->J = Fp2d("J", wave_dim, num_cells);
+        state->J = Fp2d("J", yakl::DimsT<i64>(wave_dim, num_cells));
     }
     state->J = FP(0.0);
 }

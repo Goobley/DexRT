@@ -100,6 +100,9 @@ Features/ToDo
         - directly to rho
     - Paletou 1995 method?
 - [x] Support for linesweeping. Somewhat faster when treating non-sparse models, but surprisingly doesn't really win on dense models.
+- [x] Check ks <= int32 max
+- [x] Create BigFp1d for really large cascades in 3D
+    - Added explicit yakl::Array(label, yakl::DimsT<i64>) construcutor to force i64 sizes
 
 
 Ideas

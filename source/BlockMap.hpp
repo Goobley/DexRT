@@ -210,7 +210,7 @@ struct BlockMap {
 
     KOKKOS_FORCEINLINE_FUNCTION
     i64 get_num_active_cells() const {
-        return num_active_tiles * DexImpl::int_pow<NumDim>(BLOCK_SIZE);
+        return i64(num_active_tiles) * DexImpl::int_pow<NumDim>(BLOCK_SIZE);
     }
 
     KOKKOS_FORCEINLINE_FUNCTION
