@@ -305,9 +305,59 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
     JasUnpack(state.state, atmos, pops, ray_set, ray_I, ray_tau, adata, phi, nh_lte, mr_block_map);
     const auto& bc(state.bc);
 
-    Fp2d n_star = Fp2d("n_star", pops.extent(0), pops.extent(1));
+    Fp2d n_star("n_star", pops.extent(0), pops.extent(1));
+    Fp1d eta("eta", pops.extent(1));
+    Fp1d chi("chi", pops.extent(1));
 
     for (int la = 0; la < ray_set.wavelength.extent(0); ++la) {
+        dex_parallel_for(
+            "Compute emis/opac",
+            mr_block_map.block_map.loop_bounds(),
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
+                IdxGen3d idx_gen(mr_block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                const fp_t lambda = ray_set.wavelength(la);
+                vec3 ray_mu;
+                ray_mu(0) = -ray_set.view_ray(0);
+                ray_mu(1) = -ray_set.view_ray(1);
+                ray_mu(2) = -ray_set.view_ray(2);
+
+                const fp_t vel = (
+                    atmos.vx(ks) * ray_mu(0)
+                    + atmos.vy(ks) * ray_mu(1)
+                    + atmos.vz(ks) * ray_mu(2)
+                );
+                const bool have_h = (adata.Z(0) == 1);
+                fp_t nh0;
+                if (have_h) {
+                    nh0 = pops(0, ks);
+                } else {
+                    nh0 = nh_lte(atmos.temperature(ks), atmos.ne(ks), atmos.nh_tot(ks));
+                }
+                AtmosPointParams local_atmos{
+                    .temperature = atmos.temperature(ks),
+                    .ne = atmos.ne(ks),
+                    .vturb = atmos.vturb(ks),
+                    .nhtot = atmos.nh_tot(ks),
+                    .vel = vel,
+                    .nh0 = nh0
+                };
+                auto eta_chi = emis_opac(
+                    EmisOpacSpecState<>{
+                        .adata = adata,
+                        .profile = phi,
+                        .lambda = lambda,
+                        .n = pops,
+                        .n_star_scratch = n_star,
+                        .k = ks,
+                        .atmos = local_atmos
+                    }
+                );
+                eta(ks) = eta_chi.eta;
+                chi(ks) = eta_chi.chi;
+            }
+        );
+        Kokkos::fence();
         dex_parallel_for(
             "Trace Rays (front-to-back)",
             FlatLoop<2>(ray_set.start_coord.extent(0), ray_set.start_coord.extent(1)),
@@ -316,7 +366,6 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                 start_pos(0) = ray_set.start_coord(yi, xi, 0);
                 start_pos(1) = ray_set.start_coord(yi, xi, 1);
                 start_pos(2) = ray_set.start_coord(yi, xi, 2);
-                const fp_t lambda = ray_set.wavelength(la);
 
                 const fp_t vox_scale = atmos.voxel_scale;
                 RaySegment<3> ray_seg(start_pos, ray_set.view_ray, FP(0.0), FP(8192.0));
@@ -325,17 +374,16 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                 auto s = MultiLevelDDA<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>(idx_gen);
                 const bool have_marcher = s.init(ray_seg, 0, nullptr);
 
-                vec3 ray_mu;
-                ray_mu(0) = -ray_seg.d(0);
-                ray_mu(1) = -ray_seg.d(1);
-                ray_mu(2) = -ray_seg.d(2);
-
                 fp_t boundary_I = FP(0.0);
                 if (ray_seg.d(2) < FP(0.0)) {
                     vec3 pos;
                     pos(0) = ray_seg.o(0) * vox_scale + atmos.offset_x;
                     pos(1) = ray_seg.o(1) * vox_scale + atmos.offset_y;
                     pos(2) = ray_seg.o(2) * vox_scale + atmos.offset_z;
+                    vec3 ray_mu;
+                    ray_mu(0) = -ray_set.view_ray(0);
+                    ray_mu(1) = -ray_set.view_ray(1);
+                    ray_mu(2) = -ray_set.view_ray(2);
 
                     fp_t I_sample = sample_boundary(bc, la, pos, ray_mu);
                     boundary_I = I_sample;
@@ -355,42 +403,11 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                             0,
                             Coord3{.x = s.curr_coord(0), .y = s.curr_coord(1), .z = s.curr_coord(2)}
                         );
-                        const fp_t vel = (
-                            atmos.vx(ks) * ray_mu(0)
-                            + atmos.vy(ks) * ray_mu(1)
-                            + atmos.vz(ks) * ray_mu(2)
-                        );
-                        const bool have_h = (adata.Z(0) == 1);
-                        fp_t nh0;
-                        if (have_h) {
-                            nh0 = pops(0, ks);
-                        } else {
-                            nh0 = nh_lte(atmos.temperature(ks), atmos.ne(ks), atmos.nh_tot(ks));
-                        }
-                        AtmosPointParams local_atmos{
-                            .temperature = atmos.temperature(ks),
-                            .ne = atmos.ne(ks),
-                            .vturb = atmos.vturb(ks),
-                            .nhtot = atmos.nh_tot(ks),
-                            .vel = vel,
-                            .nh0 = nh0
-                        };
-                        auto eta_chi = emis_opac(
-                            EmisOpacSpecState<>{
-                                .adata = adata,
-                                .profile = phi,
-                                .lambda = lambda,
-                                .n = pops,
-                                .n_star_scratch = n_star,
-                                .k = ks,
-                                .atmos = local_atmos
-                            }
-                        );
 
-                        fp_t chi_s = eta_chi.chi + FP(1e-20);
+                        fp_t eta_s = eta(ks);
+                        fp_t chi_s = chi(ks) + FP(1e-20);
                         fp_t tau = chi_s * s.dt * vox_scale;
-                        throw std::runtime_error("precompute sparse emis/opac to avoid lte pop issues");
-                        fp_t source_fn = eta_chi.eta / chi_s;
+                        fp_t source_fn = eta_s / chi_s;
                         fp_t one_m_edt = -std::expm1(-tau);
                         fp_t cumulative_trans = std::exp(-cumulative_tau);
 
