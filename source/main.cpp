@@ -827,7 +827,7 @@ int main(int argc, char** argv) {
         .nargs(1)
         .help("Path to snapshot file")
         .metavar("FILE");
-    program.add_epilog("DexRT Radiance Cascade based non-LTE solver.");
+    program.add_epilog("DexRT Radiance Cascade based non-LTE solver (2d).");
 
     program.parse_args(argc, argv);
 

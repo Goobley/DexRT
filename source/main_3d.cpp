@@ -519,6 +519,145 @@ void save_results(const State3d& state, const CascadeState3d& casc_state, i32 nu
     nc.close();
 }
 
+/// Loads the populations, ne, and nh_tot from restart_path. Returns the current
+/// iteration number.  Will crash/throw exception if file can't be found or
+/// dimensions are wrong etc.
+int handle_restart(State3d* st, const std::string& restart_path) {
+    State3d& state(*st);
+    yakl::SimpleNetCDF nc;
+    nc.open(restart_path, yakl::NETCDF_MODE_READ);
+
+    i64 num_active = nc.getDimSize("ks");
+    i64 num_level = nc.getDimSize("level");
+    if (num_active != state.atmos.temperature.extent(0)) {
+        throw std::runtime_error("Restart atmosphere size does not match loaded size, have you changed a parameter (e.g. threshold_temperature)?");
+    }
+    if (num_level != state.pops.extent(0)) {
+        throw std::runtime_error("Restart number of levels does not match size set in config. Have the models changed?");
+    }
+
+    nc.read(state.pops, "pops");
+    if (nc.varExists("ne")) {
+        nc.read(state.atmos.ne, "ne");
+    }
+    if (nc.varExists("nh_tot")) {
+        nc.read(state.atmos.nh_tot, "nh_tot");
+    }
+
+    int ncid = nc.file.ncid;
+    int num_iter = 0;
+    int ierr = nc_get_att_int(ncid, NC_GLOBAL, "num_iter", &num_iter);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to get num_iter from restart file: {}", nc_strerror(ierr)));
+    }
+
+    return num_iter;
+}
+
+/// Dump a snapshot. File name determined automatically (e.g. main output
+/// dexrt_output.nc -> dexrt_output_snapshot.nc)
+void save_snapshot(const State3d& state, int num_iter) {
+    yakl::SimpleNetCDF nc;
+    std::string name(state.config.output_path);
+    std::string ext(".nc");
+    std::string new_ext("_snapshot.nc");
+    auto nc_pos = name.rfind(ext);
+    if (nc_pos == std::string::npos) {
+        // NOTE(cmo): Didn't find it, so just append
+        name += new_ext;
+    } else {
+        name.replace(nc_pos, ext.size(), new_ext);
+    }
+
+    nc.create(name, yakl::NETCDF_MODE_REPLACE);
+    state.println("Saving snapshot to {}...", name);
+
+    int ncid = nc.file.ncid;
+    int ierr = nc_put_att_int(ncid, NC_GLOBAL, "num_iter", NC_INT, 1, &num_iter);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to write num_iter to snapshot file: {}", nc_strerror(ierr)));
+    }
+
+    nc.write(state.pops, "pops", {"level", "ks"});
+    if (state.config.conserve_charge) {
+        nc.write(state.atmos.ne, "ne", {"ks"});
+    }
+    if (state.config.conserve_pressure) {
+        nc.write(state.atmos.nh_tot, "nh_tot", {"ks"});
+    }
+}
+
+/// Load populations from the specified path (variable name "pops"). Will be
+/// assumed to be sparse if the ks dimension exists (e.g. from a previous run),
+/// or dense otherwise.
+void load_initial_pops(State3d* st, const std::string& initial_pops_path) {
+    State3d& state(*st);
+    yakl::SimpleNetCDF nc;
+    nc.open(initial_pops_path, yakl::NETCDF_MODE_READ);
+
+    bool load_sparse = nc.dimExists("ks");
+    state.println(
+        "Loading populations from {}, appear to be {}.",
+        initial_pops_path,
+        load_sparse ? "sparse" : "dense"
+    );
+
+    i64 num_level = nc.getDimSize("level");
+    if (num_level != state.pops.extent(0)) {
+        throw std::runtime_error("Restart number of levels does not match size set in config. Have the models changed?");
+    }
+
+    if (load_sparse) {
+        i64 num_active = nc.getDimSize("ks");
+        if (num_active != state.pops.extent(1)) {
+            throw std::runtime_error("Initial pops spatial dimension (ks) does not match loaded size, have you changed a parameter (e.g. threshold_temperature)?");
+        }
+        nc.read(state.pops, "pops");
+    } else {
+        i64 nx = nc.getDimSize("x");
+        i64 ny = nc.getDimSize("y");
+        i64 nz = nc.getDimSize("z");
+
+        if (nx != state.atmos.num_x || ny != state.atmos.num_y || nz != state.atmos.num_z) {
+            throw std::runtime_error(
+                fmt::format(
+                    "Initial pops file dimensions [x: {}, y: {} z: {}] do not match atmos: [{}, {}, {}]",
+                    nx,
+                    ny,
+                    nz,
+                    state.atmos.num_x,
+                    state.atmos.num_y,
+                    state.atmos.num_z
+                )
+            );
+        }
+        Fp4dHost temp_pops("temp_pops", num_level, nz, ny, nx);
+        nc.read(temp_pops, "pops");
+
+        for (int level = 0; level < num_level; ++level) {
+            JasUnpack(state, mr_block_map, pops);
+            auto bounds = mr_block_map.block_map.loop_bounds();
+            Fp3d pops_l = Fp3dHost("pops_view", &temp_pops(level, 0, 0, 0), nz, ny, nx).createDeviceCopy();
+            dex_parallel_for(
+                "Sparsify new pops",
+                FlatLoop<2>(
+                    bounds.dim(0),
+                    bounds.dim(1)
+                ),
+                YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+                    IdxGen3d idx_gen(mr_block_map);
+
+                    i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                    Coord3 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                    pops(level, ks) = pops_l(coord.z, coord.y, coord.x);
+                }
+            );
+        }
+        Kokkos::fence();
+    }
+}
+
+
 void copy_J_plane_to_host(const State3d& state, int la) {
     const Fp2dHost J_copy = state.J.createHostCopy();
     // TODO(cmo): Replace with a memcpy?
@@ -537,10 +676,12 @@ int main(int argc, char** argv) {
         .nargs(1)
         .help("Path to snapshot file")
         .metavar("FILE");
-    program.add_epilog("DexRT 3D Radiance Cascade based non-LTE solver.");
+    program.add_epilog("DexRT 3D Radiance Cascade based non-LTE solver (3d).");
 
     program.parse_args(argc, argv);
     const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
+
+    std::optional<std::string> restart_path = program.present("--restart-from");
 
     Kokkos::initialize();
     yakl::init(
@@ -560,11 +701,14 @@ int main(int argc, char** argv) {
             static_formal_sol_rc_given_3d(state, casc_state);
         } else {
             compute_lte_pops(&state);
+            if (state.config.initial_pops_path.size() > 0) {
+                load_initial_pops(&state, state.config.initial_pops_path);
+            }
             const bool non_lte = config.mode == DexrtMode::NonLte;
             const fp_t non_lte_tol = config.pop_tol;
             fp_t max_change = FP(1.0);
 
-            const bool do_restart = false;
+            const bool do_restart = bool(restart_path);
             const bool conserve_charge = config.conserve_charge;
             const bool actually_conserve_charge = state.have_h && conserve_charge;
             if (!actually_conserve_charge && conserve_charge) {
@@ -602,20 +746,16 @@ int main(int argc, char** argv) {
                     // meaningfully better after the second iteration
                     fp_t nr_update = nr_post_update(&state, NrPostUpdateOptions{
                         .ignore_change_below_ntot_frac = FP(1e-7),
-                        .conserve_pressure = false
+                        .conserve_pressure = actually_conserve_pressure
                     });
                     lte_max_change = nr_update;
-                    if (actually_conserve_pressure) {
-                        fp_t nh_tot_update = simple_conserve_pressure(&state);
-                        lte_max_change = std::max(nh_tot_update, lte_max_change);
-                    }
                 }
                 state.println("Ran for {} iterations", lte_i);
             }
 
-            // if (do_restart) {
-            //     i = handle_restart(&state, *restart_path);
-            // }
+            if (do_restart) {
+                i = handle_restart(&state, *restart_path);
+            }
 
             NgAccelerator ng;
             if (config.ng.enable) {
@@ -684,6 +824,12 @@ int main(int argc, char** argv) {
                     }
                 }
                 i += 1;
+                if (
+                    (state.config.snapshot_frequency != 0) &&
+                    (i % state.config.snapshot_frequency == 0)
+                ) {
+                    save_snapshot(state, i);
+                }
             }
             if (state.config.mode == DexrtMode::NonLte && state.config.sparse_calculation && state.config.final_dense_fs) {
                 state.config.sparse_calculation = false;
