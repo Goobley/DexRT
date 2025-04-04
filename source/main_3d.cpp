@@ -17,6 +17,8 @@
 #include "NgAcceleration.hpp"
 #include "GitVersion.hpp"
 
+constexpr bool NO_J_3D = true;
+
 void allocate_J(State3d* state) {
     JasUnpack((*state), config, mr_block_map, adata);
     const auto& block_map = mr_block_map.block_map;
@@ -33,7 +35,9 @@ void allocate_J(State3d* state) {
 
     if (config.store_J_on_cpu && config.mode != DexrtMode::GivenFs) {
         state->J = Fp2d("J", yakl::DimsT<i64>(1, num_cells));
-        state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
+        if (!NO_J_3D) {
+            state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
+        }
     } else {
         state->J = Fp2d("J", yakl::DimsT<i64>(wave_dim, num_cells));
     }
@@ -449,7 +453,7 @@ void save_results(const State3d& state, const CascadeState3d& casc_state, i32 nu
         }
     };
 
-    if (out_cfg.J) {
+    if (out_cfg.J && !NO_J_3D) {
         if (config.store_J_on_cpu) {
             if (sparse_J) {
                 maybe_rehydrate_and_write(state.J_cpu, "J", {"wavelength"});
@@ -659,6 +663,9 @@ void load_initial_pops(State3d* st, const std::string& initial_pops_path) {
 
 
 void copy_J_plane_to_host(const State3d& state, int la) {
+    if (NO_J_3D) {
+        return;
+    }
     const Fp2dHost J_copy = state.J.createHostCopy();
     // TODO(cmo): Replace with a memcpy?
     for (i64 ks = 0; ks < J_copy.extent(1); ++ks) {
@@ -778,7 +785,7 @@ int main(int argc, char** argv) {
                 compute_collisions_to_gamma(&state);
                 compute_profile_normalisation(state, casc_state, true);
                 state.J = FP(0.0);
-                if (config.store_J_on_cpu) {
+                if (config.store_J_on_cpu && !NO_J_3D) {
                     state.J_cpu = FP(0.0);
                 }
                 Kokkos::fence();
@@ -839,7 +846,7 @@ int main(int argc, char** argv) {
                 state.println("Final FS (dense)");
                 compute_nh0(state);
                 state.J = FP(0.0);
-                if (config.store_J_on_cpu) {
+                if (config.store_J_on_cpu && !NO_J_3D) {
                     state.J_cpu = FP(0.0);
                 }
                 Kokkos::fence();

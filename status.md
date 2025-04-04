@@ -103,6 +103,7 @@ Features/ToDo
 - [x] Check ks <= int32 max
 - [x] Create BigFp1d for really large cascades in 3D
     - Added explicit yakl::Array(label, yakl::DimsT<i64>) construcutor to force i64 sizes
+- [ ] Add proper 64-bit 1d iterations to LoopUtils
 
 
 Ideas
