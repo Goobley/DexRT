@@ -17,7 +17,7 @@
 #include "NgAcceleration.hpp"
 #include "GitVersion.hpp"
 
-constexpr bool NO_J_3D = true;
+constexpr bool NO_J_3D = false;
 
 void allocate_J(State3d* state) {
     JasUnpack((*state), config, mr_block_map, adata);
@@ -374,7 +374,7 @@ void add_netcdf_attributes(const State3d& state, const yakl::SimpleNetCDF& file,
     );
     i32 ny_blocks = state.mr_block_map.block_map.num_y_tiles();
     ncwrap(
-        nc_put_att_int(ncid, NC_GLOBAL, "num_y_blocks", NC_INT, 1, &nx_blocks),
+        nc_put_att_int(ncid, NC_GLOBAL, "num_y_blocks", NC_INT, 1, &ny_blocks),
         __LINE__
     );
     i32 nz_blocks = state.mr_block_map.block_map.num_z_tiles();

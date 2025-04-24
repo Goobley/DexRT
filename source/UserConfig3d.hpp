@@ -18,10 +18,10 @@ constexpr int ENTRY_SIZE_3D = 3;
 
 // The raymarch length on cascade 0
 constexpr fp_t C0_LENGTH_3D = FP(6.0);
-// constexpr int C0_AZ_RAYS_3D = 48;
-// constexpr int C0_POLAR_RAYS_3D = 1;
-constexpr int C0_AZ_RAYS_3D = 4;
-constexpr int C0_POLAR_RAYS_3D = 4;
+constexpr int C0_AZ_RAYS_3D = 12;
+constexpr int C0_POLAR_RAYS_3D = 1;
+// constexpr int C0_AZ_RAYS_3D = 4;
+// constexpr int C0_POLAR_RAYS_3D = 4;
 
 // rays = C0 * 2 ** (BRANCHING_EXP * n)
 constexpr int AZ_BRANCHING_EXP_3D = 1;
@@ -67,8 +67,8 @@ enum class AngularQuadratureType {
     Healpix
 };
 
-// constexpr AngularQuadratureType ANGULAR_QUADRATURE_TYPE = AngularQuadratureType::Healpix;
-constexpr AngularQuadratureType ANGULAR_QUADRATURE_TYPE = AngularQuadratureType::ClarbergOctahedral;
+constexpr AngularQuadratureType ANGULAR_QUADRATURE_TYPE = AngularQuadratureType::Healpix;
+// constexpr AngularQuadratureType ANGULAR_QUADRATURE_TYPE = AngularQuadratureType::ClarbergOctahedral;
 constexpr int HEALPIX_ORDER = 1;
 
 constexpr LineCoeffCalc LINE_SCHEME_3D = LineCoeffCalc::CoreAndVoigt;

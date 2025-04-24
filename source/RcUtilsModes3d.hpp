@@ -520,22 +520,48 @@ YAKL_INLINE vec3 ray_dir(const CascadeRays3d& dims, int phi_idx, int theta_idx) 
         const fp_t h = r - 1 + (x + y);
         const fp_t m = FP(2.0) - r * h;
         fp_t z, s, phi;
-        constexpr int jpll[12] = { 1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7 };
+        auto jpll = [](int face) {
+            constexpr bool use_array = false;
+            constexpr bool branchless = true;
+            if constexpr (use_array) {
+                constexpr int jpll_term[12] = { 1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7 };
+                return jpll_term[face];
+            } else if constexpr (branchless) {
+                // NOTE(cmo): in the real-world case, this profiles ~1% faster
+                i32 i = face & 7;
+                i32 ge4 = (i & 4) >> 2;
+                return ge4 * 2 * (i & 3) + (1 - ge4) * (2 * i + 1);
+            } else {
+                if (face >= 8) {
+                    face -= 8;
+                }
+
+                if (face < 4) {
+                    return 2 * face + 1;
+                }
+                return (face - 4) * 2;
+            }
+        };
         if (m < FP(1.0)) {
             // polar cap
             const fp_t m23 = square(m) * (FP(1.0) / FP(3.0));
             z = r * (FP(1.0) - m23);
             s = std::sqrt(m23 * (FP(2.0) - m23));
-            phi = (FP(0.25) * Const::pi) * (jpll[face] + (x - y) / m);
+            phi = (FP(0.25) * Const::pi) * (jpll(face) + (x - y) / m);
         } else {
             // equatorial cylinder
             z = h * (FP(2.0) / FP(3.0));
             s = std::sqrt((FP(1.0) + z) * (FP(1.0) - z));
-            phi = (FP(0.25) * Const::pi) * (jpll[face] + (x - y));
+            phi = (FP(0.25) * Const::pi) * (jpll(face) + (x - y));
         }
         // loc2vec
-        dir(0) = std::cos(phi) * s;
-        dir(1) = std::sin(phi) * s;
+        // NOTE(cmo): On upper cascades the base healpix quadrature seems to hit
+        // pathological ray traversal slowdowns. Rotating the azimuthal angle by
+        // a small amount (0.57 degree) seems to fix this. This leads to an ~60x
+        // speed up for some cascades.
+        constexpr fp_t force_rotate = FP(0.01);
+        dir(0) = std::cos(phi + force_rotate) * s;
+        dir(1) = std::sin(phi + force_rotate) * s;
         dir(2) = z;
     }
     return dir;
