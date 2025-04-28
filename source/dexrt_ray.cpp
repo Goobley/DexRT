@@ -966,7 +966,8 @@ int main(int argc, char** argv) {
             PwBc<> pw_bc = load_bc(
                 config.dexrt.atmos_path,
                 state.ray_set.wavelength,
-                config.dexrt.boundary
+                config.dexrt.boundary,
+                PromweaverResampleType::Interpolation
             );
 
             if (

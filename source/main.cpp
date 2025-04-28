@@ -116,7 +116,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     }
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
-    state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary);
+    state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary, PromweaverResampleType::FluxConserving);
     state.boundary = config.boundary;
 
     // NOTE(cmo): This doesn't actually know that things will be allocated sparse
