@@ -29,8 +29,13 @@
 #include <sstream>
 #include "GitVersion.hpp"
 #include "WavelengthParallelisation.hpp"
+#include "InitialPops.hpp"
 
 #include <random>
+
+int get_dexrt_dimensionality() {
+    return 2;
+}
 
 void allocate_J(State* state) {
     JasUnpack((*state), config, mr_block_map, c0_size, adata);
@@ -67,8 +72,10 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     Atmosphere atmos = load_atmos(config.atmos_path);
     std::vector<ModelAtom<f64>> crtaf_models;
     crtaf_models.reserve(config.atom_paths.size());
-    for (auto p : config.atom_paths) {
-        crtaf_models.emplace_back(parse_crtaf_model<f64>(p));
+    for (int i = 0; i < config.atom_paths.size(); ++i) {
+        const auto& p = config.atom_paths[i];
+        const auto& model_config = config.atom_configs[i];
+        crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
     }
     AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
     state.adata = atomic_data.device;
@@ -937,11 +944,15 @@ int main(int argc, char** argv) {
                     state.println("Ran for {} iterations", lte_i);
                 }
 
+                if (!do_restart) {
+                    set_initial_pops_special(&state);
+                }
+
                 if (do_restart) {
                     i = handle_restart(&state, *restart_path);
                 }
 
-                state.println("-- Non-LTE Iterations --");
+                state.println("-- Non-LTE Iterations ({} wavelengths) --", state.adata_host.wavelength.extent(0));
                 NgAccelerator ng;
                 if (config.ng.enable) {
                     ng.init(
@@ -954,6 +965,7 @@ int main(int argc, char** argv) {
                     );
                     ng.accelerate(state, FP(1.0));
                 }
+                bool first_iter = true;
                 bool accelerated = false;
                 while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
                     state.println("==== FS {} ====", i);
@@ -968,7 +980,8 @@ int main(int argc, char** argv) {
                         yakl::fence();
                     }
 
-                    compute_profile_normalisation(state, casc_state);
+                    bool print_worst_wphi = first_iter;
+                    compute_profile_normalisation(state, casc_state, print_worst_wphi);
                     state.J = FP(0.0);
                     if (config.store_J_on_cpu) {
                         state.J_cpu = FP(0.0);
@@ -1032,6 +1045,7 @@ int main(int argc, char** argv) {
                     ) {
                         save_snapshot(state, i);
                     }
+                    first_iter = false;
                 }
                 if (state.config.sparse_calculation && state.config.final_dense_fs) {
                     state.config.sparse_calculation = false;

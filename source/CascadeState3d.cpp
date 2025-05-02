@@ -22,7 +22,7 @@ bool CascadeState3d::init(const State3d& state, int max_cascades) {
         max_entries = std::max(max_entries, cascade_entries(dims));
     }
 
-    if constexpr (PINGPONG_BUFFERS) {
+    if constexpr (PINGPONG_BUFFERS_3D) {
         for (int i = 0; i < 2; ++i) {
             i_cascades.push_back(Fp1d("i_cascade", yakl::DimsT<i64>(max_entries)));
             Fp1d tau_entry;

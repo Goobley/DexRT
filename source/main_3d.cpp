@@ -16,8 +16,13 @@
 #include "PressureConservation.hpp"
 #include "NgAcceleration.hpp"
 #include "GitVersion.hpp"
+#include "InitialPops.hpp"
 
 constexpr bool NO_J_3D = false;
+
+int get_dexrt_dimensionality() {
+    return 3;
+}
 
 void allocate_J(State3d* state) {
     JasUnpack((*state), config, mr_block_map, adata);
@@ -101,8 +106,10 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
     AtmosphereNd<3, yakl::memHost> atmos = load_atmos_3d_host(config.atmos_path);
     std::vector<ModelAtom<f64>> crtaf_models;
     crtaf_models.reserve(config.atom_paths.size());
-    for (auto p : config.atom_paths) {
-        crtaf_models.emplace_back(parse_crtaf_model<f64>(p));
+    for (int i = 0; i < config.atom_paths.size(); ++i) {
+        const auto& p = config.atom_paths[i];
+        const auto& model_config = config.atom_configs[i];
+        crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
     }
     AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
     state.adata = atomic_data.device;
@@ -282,7 +289,7 @@ void add_netcdf_attributes(const State3d& state, const yakl::SimpleNetCDF& file,
         nc_put_att_int(ncid, NC_GLOBAL, "dir_by_dir", NC_INT, 1, &dir_by_dir),
         __LINE__
     );
-    i32 pingpong = PINGPONG_BUFFERS;
+    i32 pingpong = PINGPONG_BUFFERS_3D;
     ncwrap(
         nc_put_att_int(ncid, NC_GLOBAL, "pingpong_buffers", NC_INT, 1, &pingpong),
         __LINE__
@@ -760,6 +767,10 @@ int main(int argc, char** argv) {
                 state.println("Ran for {} iterations", lte_i);
             }
 
+            if (non_lte && !do_restart) {
+                set_initial_pops_special(&state);
+            }
+
             if (do_restart) {
                 i = handle_restart(&state, *restart_path);
             }
@@ -777,13 +788,14 @@ int main(int argc, char** argv) {
                 ng.accelerate(state, FP(1.0));
             }
             bool accelerated = false;
+            bool first_iter = true;
 
-            state.println("-- Non-LTE Iterations --");
+            state.println("-- Non-LTE Iterations ({} wavelengths) --", state.adata_host.wavelength.extent(0));
             while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
                 state.println("==== FS {} ====", i);
                 compute_nh0(state);
                 compute_collisions_to_gamma(&state);
-                compute_profile_normalisation(state, casc_state, true);
+                compute_profile_normalisation(state, casc_state, first_iter);
                 state.J = FP(0.0);
                 if (config.store_J_on_cpu && !NO_J_3D) {
                     state.J_cpu = FP(0.0);
@@ -837,6 +849,7 @@ int main(int argc, char** argv) {
                 ) {
                     save_snapshot(state, i);
                 }
+                first_iter = false;
             }
             if (state.config.mode == DexrtMode::NonLte && state.config.sparse_calculation && state.config.final_dense_fs) {
                 state.config.sparse_calculation = false;
@@ -865,8 +878,8 @@ int main(int argc, char** argv) {
             }
             num_iter = i;
         }
-        save_results(state, casc_state, num_iter);
         yakl::timer_stop("DexRT");
+        save_results(state, casc_state, num_iter);
     }
     yakl::finalize();
     Kokkos::finalize();

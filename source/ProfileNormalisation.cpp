@@ -186,7 +186,7 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
         auto max_err_ne_host = max_err_ne.createHostCopy();
         std::string output = fmt::format("  Highest error normalisation factors (wphi) @ ks = {} (T={:.2e}, nh={:.2e}, ne={:.2e}): ", max_err_k, max_err_temp_host(0), max_err_nh_host(0), max_err_ne_host(0));
         for (int kr = 0; kr < wphi_plane_host.extent(0); ++kr) {
-            output += fmt::format("{:e}", wphi_plane_host(kr));
+            output += fmt::format("({:.3f} nm: {:e})", state.adata_host.lines(kr).lambda0, wphi_plane_host(kr));
             if (kr != wphi_plane_host.extent(0) - 1) {
                 output += ", ";
             }

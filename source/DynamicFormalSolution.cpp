@@ -208,17 +208,22 @@ void dynamic_compute_gamma_nonatomic(
     int wave_batch = la_end - la_start;
     wave_batch = std::min(wave_batch, ray_subset.wave_batch);
     Fp1dHost wl_ray_weights_h("wl_ray_weights", wave_batch);
-    constexpr bool include_hc_4pi = false;
+    // NOTE(cmo): We can drop 4pi/hc from the wavelength/angle integral weight
+    // if we divide U and V by hc/4pi. For lines, these terms normally cancel:
+    // for continua it's an extra operation. In both cases, to construct eta and
+    // chi, we need to multiply those terms by the populations (as usual), but
+    // _also_ hc/4pi .
+    constexpr bool include_4pi_hc = false;
     constexpr fp_t hc_4pi = hc_kJ_nm / four_pi;
     for (int wave = 0; wave < wave_batch; ++wave) {
         const int la = la_start + wave;
         const auto& wavelength_h= state.adata_host.wavelength;
         fp_t lambda = wavelength_h(la);
-        fp_t hnu_4pi = FP(1.0);
-        if (include_hc_4pi) {
-            hnu_4pi *= hc_4pi;
+        fp_t hc_4pi_eff = FP(1.0);
+        if (include_4pi_hc) {
+            hc_4pi_eff *= hc_4pi;
         }
-        fp_t wl_weight = lambda / hnu_4pi;
+        fp_t wl_weight = lambda / hc_4pi_eff;
         if (la == 0) {
             wl_weight *= FP(0.5) * (wavelength_h(1) - wavelength_h(0));
         } else if (la == wavelength_h.extent(0) - 1) {
@@ -317,13 +322,16 @@ void dynamic_compute_gamma_nonatomic(
                                     },
                                     kr,
                                     UvOptions{
-                                        .include_hc_4pi = false
+                                        .divide_by_hc_4pi = !include_4pi_hc
                                     }
                                 );
 
                                 fp_t eta = pops(offset + l.j, ks) * uv.Uji;
                                 fp_t chi = pops(offset + l.i, ks) * uv.Vij - pops(offset + l.j, ks) * uv.Vji;
-                                if (!include_hc_4pi) {
+                                if (!include_4pi_hc) {
+                                    // NOTE(cmo): If we have dropped the hc/4pi
+                                    // from U and V, these still need the
+                                    // dimensioning
                                     eta *= hc_4pi;
                                     chi *= hc_4pi;
                                 }
@@ -364,13 +372,16 @@ void dynamic_compute_gamma_nonatomic(
                                     },
                                     kr,
                                     UvOptions{
-                                        .include_hc_4pi = false
+                                        .divide_by_hc_4pi = !include_4pi_hc
                                     }
                                 );
 
                                 fp_t eta = pops(offset + cont.j, ks) * uv.Uji;
                                 fp_t chi = pops(offset + cont.i, ks) * uv.Vij - pops(offset + cont.j, ks) * uv.Vji;
-                                if (!include_hc_4pi) {
+                                if (!include_4pi_hc) {
+                                    // NOTE(cmo): If we have dropped the hc/4pi
+                                    // from U and V, these still need the
+                                    // dimensioning
                                     eta *= hc_4pi;
                                     chi *= hc_4pi;
                                 }

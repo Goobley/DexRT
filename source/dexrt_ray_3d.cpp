@@ -17,6 +17,10 @@
 #include "MiscSparse.hpp"
 #include "GitVersion.hpp"
 
+int get_dexrt_dimensionality() {
+    return 3;
+}
+
 struct RayConfig {
     fp_t mem_pool_gb = FP(4.0);
     std::string own_path;
@@ -520,8 +524,10 @@ int main(int argc, char** argv) {
         std::vector<ModelAtom<f64>> crtaf_models;
         // TODO(cmo): Override atoms in ray config
         crtaf_models.reserve(config.dexrt.atom_paths.size());
-        for (auto p : config.dexrt.atom_paths) {
-            crtaf_models.emplace_back(parse_crtaf_model<f64>(p));
+        for (int i = 0; i < config.dexrt.atom_paths.size(); ++i) {
+            const auto& p = config.dexrt.atom_paths[i];
+            const auto& model_config = config.dexrt.atom_configs[i];
+            crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
         }
         AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
         state.adata = atomic_data.device;

@@ -386,9 +386,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
     JasUnpack(args, ignore_change_below_ntot_frac);
     fp_t global_max_change = FP(0.0);
     for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
+        if (args.only_atom >= 0 && args.only_atom != ia) {
+            continue;
+        }
         JasUnpack((*state), pops);
         const auto& Gamma = state->Gamma[ia];
-        // GammaT has shape [ks, Nlevel, Nlevel]
         const fp_t abundance = state->adata_host.abundance(ia);
         const auto nh_tot = state->atmos.nh_tot;
 

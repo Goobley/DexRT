@@ -216,8 +216,16 @@ struct RayMarchState2d {
             );
         };
         // NOTE(cmo): Initialise to the first intersection so dt != 0
+        constexpr i32 max_steps = 32;
+        i32 steps = 0;
         while (!in_bounds() || (in_bounds() && this->dt < FP(1e-6))) {
             next_intersection(this);
+            if (++steps > max_steps) {
+#ifdef DEXRT_DEBUG
+                yakl::yakl_throw("Failed to walk into grid");
+#endif
+                return false;
+            }
         }
 
         return true;

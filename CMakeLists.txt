@@ -61,6 +61,7 @@ list(APPEND DEX_SOURCE_FILES
     "source/LineSweepSetup.cpp"
     "source/BlockMap.cpp"
     "source/ProbesToCompute.cpp"
+    "source/InitialPops.cpp"
 )
 list(APPEND DEX_3D_SOURCE_FILES
     "source/main_3d.cpp"
@@ -78,6 +79,7 @@ list(APPEND DEX_3D_SOURCE_FILES
     "source/Collisions.cpp"
     "source/NgAcceleration.cpp"
     "source/ChargeConservation.cpp"
+    "source/InitialPops.cpp"
 )
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"
@@ -205,6 +207,9 @@ target_include_directories(dexrt_ray SYSTEM PUBLIC
     "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
 )
+target_include_directories(dexrt_ray PUBLIC
+    "thirdparty"
+)
 target_link_libraries(dexrt_ray "${LDLIBS}")
 target_link_libraries(dexrt_ray fmt::fmt)
 target_link_libraries(dexrt_ray yaml-cpp::yaml-cpp)
@@ -226,6 +231,9 @@ target_include_directories(dexrt_ray_3d SYSTEM PUBLIC
     "${NETCDF_INCLUDE_PATH}"
     "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
+)
+target_include_directories(dexrt_ray PUBLIC
+    "thirdparty"
 )
 target_link_libraries(dexrt_ray_3d "${LDLIBS}")
 target_link_libraries(dexrt_ray_3d fmt::fmt)

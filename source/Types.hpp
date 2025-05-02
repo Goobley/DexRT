@@ -612,6 +612,16 @@ enum class AtomicTreatment {
     Active
 };
 
+enum class AtomInitialPops {
+    Lte,
+    ZeroRadiation
+};
+
+struct ModelAtomConfig {
+    AtomicTreatment treatment = AtomicTreatment::Active;
+    AtomInitialPops init_pops_scheme = AtomInitialPops::Lte;
+};
+
 template <typename T=fp_t>
 struct ModelAtom {
     Element<T> element;
@@ -619,8 +629,10 @@ struct ModelAtom {
     std::vector<AtomicLine<T>> lines;
     std::vector<AtomicContinuum<T>> continua;
     std::vector<InterpCollRate<T>> coll_rates;
-    // TODO(cmo): Only here temporarily
-    AtomicTreatment treatment = AtomicTreatment::Active;
+
+    // NOTE(cmo): This is to be passed in with the extra info -- not atomic
+    // data, but how it is to be used in a particular simulation
+    ModelAtomConfig config;
 
     /// Compute the wavelength [nm] (lambda0 for lines, lambda_edge for
     /// continua) for a transition between levels j and i (j > i)
@@ -669,9 +681,9 @@ struct CompLine {
 
 template <typename T=fp_t>
 struct CompCont {
-    /// Short wavelength index
-    int red_idx;
     /// Long wavelength index
+    int red_idx;
+    /// short wavelength index
     int blue_idx;
 
     /// atom index
@@ -759,6 +771,7 @@ struct TransitionIndex {
 template <typename T=fp_t, int mem_space=memDevice>
 struct AtomicData {
     yakl::Array<AtomicTreatment const, 1, mem_space> treatment; // num_atom
+    yakl::Array<AtomInitialPops const, 1, mem_space> init_pops_scheme; // num_atom
     yakl::Array<T const, 1, mem_space> mass; // num_atom
     yakl::Array<T const, 1, mem_space> abundance; // num_atom
     yakl::Array<int const, 1, mem_space> Z; // num_atom

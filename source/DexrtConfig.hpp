@@ -45,7 +45,7 @@ struct DexrtConfig {
     DexrtOutputConfig output;
     bool store_J_on_cpu = true;
     std::vector<std::string> atom_paths;
-    std::vector<AtomicTreatment> atom_modes;
+    std::vector<ModelAtomConfig> atom_configs;
     BoundaryType boundary = BoundaryType::Zero;
     bool sparse_calculation = false;
     bool final_dense_fs = true;
@@ -93,20 +93,33 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
                 config.atom_paths.push_back(table["path"].as<std::string>());
             }
 
+            ModelAtomConfig atom_config;
+
             if (table["treatment"]) {
                 std::string mode = table["treatment"].as<std::string>();
                 if (mode == "Detailed") {
-                    config.atom_modes.push_back(AtomicTreatment::Detailed);
+                    atom_config.treatment = AtomicTreatment::Detailed;
                 } else if (mode == "Golding") {
-                    config.atom_modes.push_back(AtomicTreatment::Golding);
+                    atom_config.treatment = AtomicTreatment::Golding;
                 } else if (mode == "Active") {
-                    config.atom_modes.push_back(AtomicTreatment::Active);
+                    atom_config.treatment = AtomicTreatment::Active;
                 } else {
                     throw std::runtime_error(fmt::format("Invalid atomic treatment for atom with key {}: {}", name, mode));
                 }
-            } else {
-                config.atom_modes.push_back(AtomicTreatment::Active);
             }
+
+            if (table["initial_populations"]) {
+                std::string pops = table["initial_populations"].as<std::string>();
+                if (pops == "Lte") {
+                    atom_config.init_pops_scheme = AtomInitialPops::Lte;
+                } else if (pops == "ZeroRadiation") {
+                    atom_config.init_pops_scheme = AtomInitialPops::ZeroRadiation;
+                } else {
+                    throw std::runtime_error(fmt::format("Invalid initial populations scheme for atom with key {}: {}", name, pops));
+                }
+            }
+
+            config.atom_configs.push_back(atom_config);
         }
     }
 
@@ -226,7 +239,10 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
             if (casc_to_output > config.max_cascade) {
                 throw std::runtime_error(fmt::format("Output of cascade {} requested, greater than max cascade {}.", casc_to_output, config.max_cascade));
             }
-            if constexpr (PINGPONG_BUFFERS) {
+            if (
+                (get_dexrt_dimensionality() == 2 && PINGPONG_BUFFERS) ||
+                (get_dexrt_dimensionality() == 3 && PINGPONG_BUFFERS_3D)
+            ) {
                 if (casc_to_output > 1) {
                     throw std::runtime_error(fmt::format("Output of cascade {} requested, which is > 1, and PINGPONG_BUFFERS is enabled, overwriting the other cascades to save memory", casc_to_output));
                 }

@@ -16,6 +16,12 @@
 #include "JasPP.hpp"
 #include "MiscSparse.hpp"
 #include "GitVersion.hpp"
+#include <sstream>
+#include "tqdm.hpp"
+
+int get_dexrt_dimensionality() {
+    return 2;
+}
 
 struct RayConfig {
     fp_t mem_pool_gb = FP(2.0);
@@ -814,6 +820,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
             }
         );
     }
+    Kokkos::fence();
 }
 
 yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg, const Atmosphere& atmos) {
@@ -905,11 +912,16 @@ int main(int argc, char** argv) {
         .default_value(std::string("dexrt_ray.yaml"))
         .help("Path to config file")
         .metavar("FILE");
+    program.add_argument("--quiet")
+        .default_value(false)
+        .implicit_value(true)
+        .help("Whether to print progress");
     program.add_epilog("Single-pass formal solver for post-processing Dex models.");
 
     program.parse_known_args(argc, argv);
 
     RayConfig config = parse_ray_config(program.get<std::string>("--config"));
+    bool quiet = program.get<bool>("--quiet");
     Kokkos::initialize(argc, argv);
     yakl::init(
         yakl::InitConfig()
@@ -928,8 +940,10 @@ int main(int argc, char** argv) {
         std::vector<ModelAtom<f64>> crtaf_models;
         // TODO(cmo): Override atoms in ray config
         crtaf_models.reserve(config.dexrt.atom_paths.size());
-        for (auto p : config.dexrt.atom_paths) {
-            crtaf_models.emplace_back(parse_crtaf_model<f64>(p));
+        for (int i = 0; i < config.dexrt.atom_paths.size(); ++i) {
+            const auto& p = config.dexrt.atom_paths[i];
+            const auto& model_config = config.dexrt.atom_configs[i];
+            crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
         }
         AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
         DexOutput model_output = load_dex_output(config.dexrt, atmos);
@@ -960,7 +974,12 @@ int main(int argc, char** argv) {
 
         auto out = setup_output(config.ray_output_path, config, atmos);
 
-        for (int mu = 0; mu < config.muz.size(); ++mu) {
+        auto mu_iterator = tq::trange(config.muz.size());
+        std::ostringstream ostream_redirect;
+        if (quiet) {
+            mu_iterator.set_ostream(ostream_redirect);
+        }
+        for (int mu : mu_iterator) {
             state.ray_set = compute_ray_set<yakl::memDevice>(config, atmos, mu);
             // TODO(cmo): Hoist this if possible
             PwBc<> pw_bc = load_bc(

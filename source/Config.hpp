@@ -29,6 +29,10 @@ namespace yakl {
     }
 }
 
+// NOTE(cmo): A function to define in main so functions that don't get state
+// passed to them can query dimensionality (either 2 or 3)
+extern int get_dexrt_dimensionality();
+
 // NOTE(cmo): The spacing between probes on cascade 0 -- this isn't actually configurable
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 

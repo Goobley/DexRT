@@ -13,7 +13,10 @@
 
 
 template <typename T=fp_t>
-inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
+inline ModelAtom<T> parse_crtaf_model(
+    const std::string& path,
+    ModelAtomConfig config = ModelAtomConfig()
+) {
     YAML::Node file = YAML::LoadFile(path);
 
     if (!file["crtaf_meta"]) {
@@ -30,6 +33,8 @@ inline ModelAtom<T> parse_crtaf_model(const std::string& path) {
     model.element.mass = elem["atomic_mass"].as<T>();
     model.element.abundance = elem["abundance"].as<T>();
     model.element.Z = elem["Z"].as<int>();
+
+    model.config = config;
 
     // NOTE(cmo): Parse levels
     assert(file["levels"].IsMap());

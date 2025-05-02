@@ -56,6 +56,11 @@ constexpr fp_t LAST_CASCADE_MAX_DIST_3D = FP(2e4);
 // incompatible with the parallax fixes.
 constexpr bool DIR_BY_DIR_3D = false;
 
+// Whether to store all cascades, e.g. for saving or debugging, or simply
+// "ping-pong" between two cascades, merging as we go between cascade i+1 and i.
+// Can be a significant memory saving
+constexpr bool PINGPONG_BUFFERS_3D = false;
+
 constexpr const char* AngularQuadratureNames[3] = {
     "TrapezoidalProduct",
     "ClarbergOctahedral",
