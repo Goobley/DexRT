@@ -87,10 +87,10 @@ struct CoreAndVoigtData3d {
     Fp2d chi_star; // [ks, krl]
     Fp2d a_damp; // [ks, krl]
     Fp2d inv_dop_width; // [ks, krl]
-    yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES> active_set_mapping; // maps from krl to kr
-    yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES> emis_opac_ratios; // [krl] lambda0 / lambda
-    yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES> a_damp_ratios; // [krl] (lambda / lambda0)**2
-    yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES> lambda0s; // [krl]
+    yakl::SArray<i32, 1, CORE_AND_VOIGT_MAX_LINES_3D> active_set_mapping; // maps from krl to kr
+    yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES_3D> emis_opac_ratios; // [krl] lambda0 / lambda
+    yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES_3D> a_damp_ratios; // [krl] (lambda / lambda0)**2
+    yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES_3D> lambda0s; // [krl]
 
     void init(i64 buffer_len, i32 max_kr);
     /// Fills mip0

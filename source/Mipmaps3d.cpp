@@ -23,7 +23,7 @@ void MultiResMipChain3d::init(const State3d& state, i64 buffer_len) {
         if constexpr (LINE_SCHEME_3D == LineCoeffCalc::VelocityInterp) {
             throw std::runtime_error("Not yet handling Velocity interp in 3D");
         } else if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {
-            cav_data.init(buffer_len, CORE_AND_VOIGT_MAX_LINES);
+            cav_data.init(buffer_len, CORE_AND_VOIGT_MAX_LINES_3D);
         } else if constexpr (LINE_SCHEME == LineCoeffCalc::Classic) {
             classic_data.init(buffer_len);
         } else {

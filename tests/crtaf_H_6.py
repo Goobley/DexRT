@@ -1,7 +1,7 @@
 import crtaf
 from crtaf.from_lightweaver import LightweaverAtomConverter
 from crtaf.core_types import TemperatureInterpolationRateImpl, CERate, CIRate
-from lightweaver.rh_atoms import H_6_atom, CaII_atom, H_4_atom, MgII_atom, H_10_atom
+from lightweaver.rh_atoms import H_6_atom, CaII_atom, H_4_atom, MgII_atom, H_10_atom, H_atom
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
@@ -195,6 +195,35 @@ def make_H_10():
     # model_simplified.lines = new_lines
     return model_simplified
 
+def make_H_9():
+    conv = LightweaverAtomConverter()
+    H_9 = H_atom()
+
+    model = conv.convert(H_9)
+    for l in model.lines:
+        l.wavelength_grid.q_core *= 4
+        l.wavelength_grid.q_wing *= 5
+    visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
+    model_simplified = model.simplify_visit(visitor)
+    for coll_trans in model_simplified.collisions:
+        for coll in coll_trans.data:
+            if isinstance(coll, (CERate, CIRate)):
+                coll.temperature = h_coll_temperature_grid << u.K
+                rate_unit = coll.data.unit
+                Eij = (model_simplified.levels[coll_trans.transition[0]].energy_eV - model_simplified.levels[coll_trans.transition[1]].energy_eV).to(u.J)
+                n = np.sqrt(model_simplified.levels[coll_trans.transition[1]].g / 2)
+                if isinstance(coll, CERate):
+                    nn = np.sqrt(model_simplified.levels[coll_trans.transition[0]].g / 2)
+                    coll.data = Johnson_CE(n, nn, Eij.value, h_coll_temperature_grid) << rate_unit
+                elif isinstance(coll, CIRate):
+                    coll.data = Johnson_CI(n, Eij.value, h_coll_temperature_grid) << rate_unit
+    # new_lines = []
+    # for l in model_simplified.lines:
+    #     if l.lambda0 < 1000.0 * u.nm:
+    #         new_lines.append(l)
+    # model_simplified.lines = new_lines
+    return model_simplified
+
 def make_H_4():
     conv = LightweaverAtomConverter()
     model = conv.convert(H_4_atom())
@@ -299,4 +328,8 @@ if __name__ == "__main__":
 
     atom = make_H_10()
     with open("H_10.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_H_9()
+    with open("H_9.yaml", "w") as f:
         f.write(atom.yaml_dumps())
