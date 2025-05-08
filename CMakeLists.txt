@@ -179,6 +179,9 @@ target_include_directories(dexrt_3d SYSTEM PUBLIC
     "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
 )
+target_include_directories(dexrt_3d PUBLIC
+    "thirdparty"
+)
 target_link_libraries(dexrt_3d "${LDLIBS}")
 target_link_libraries(dexrt_3d fmt::fmt)
 target_link_libraries(dexrt_3d yaml-cpp::yaml-cpp)

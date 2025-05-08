@@ -18,6 +18,8 @@
 #include "GitVersion.hpp"
 #include "InitialPops.hpp"
 
+#include <tqdm.hpp>
+
 constexpr bool NO_J_3D = false;
 
 int get_dexrt_dimensionality() {
@@ -690,12 +692,16 @@ int main(int argc, char** argv) {
         .nargs(1)
         .help("Path to snapshot file")
         .metavar("FILE");
+    program.add_argument("--intra-iteration-progress")
+        .flag()
+        .help("Show an approximate progress bar for the wavelength loop in each iteration (default: false).");
     program.add_epilog("DexRT 3D Radiance Cascade based non-LTE solver (3d).");
 
     program.parse_args(argc, argv);
     const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
 
     std::optional<std::string> restart_path = program.present("--restart-from");
+    const bool show_iteration_progress = program.get<bool>("--intra-iteration-progress");
 
     Kokkos::initialize();
     yakl::init(
@@ -793,6 +799,10 @@ int main(int argc, char** argv) {
             state.println("-- Non-LTE Iterations ({} wavelengths) --", state.adata_host.wavelength.extent(0));
             while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
                 state.println("==== FS {} ====", i);
+                tq::progress_bar pbar;
+                if (show_iteration_progress) {
+                    pbar.restart();
+                }
                 compute_nh0(state);
                 compute_collisions_to_gamma(&state);
                 compute_profile_normalisation(state, casc_state, first_iter);
@@ -810,6 +820,9 @@ int main(int argc, char** argv) {
                     dynamic_formal_sol_rc_3d(state, casc_state, lambda_iterate, la);
                     if (config.store_J_on_cpu) {
                         copy_J_plane_to_host(state, la);
+                    }
+                    if (show_iteration_progress) {
+                        pbar.update(f64(la + 1) / f64(state.adata_host.wavelength.extent(0)));
                     }
                 }
                 if (!non_lte) {
