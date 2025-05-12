@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 
+template <typename State>
 inline void setup_comm(State* state) {
 #ifdef HAVE_MPI
     MPI_Comm_dup(MPI_COMM_WORLD, &state->mpi_state.comm);

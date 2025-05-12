@@ -183,6 +183,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
 
 void init_state(State3d* state, const DexrtConfig& config) {
     state->config = config;
+    setup_comm(state);
     CascadeRays3d c0_rays;
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
         c0_rays = init_atmos_atoms(state, config);
@@ -438,6 +439,9 @@ void add_netcdf_attributes(const State3d& state, const yakl::SimpleNetCDF& file,
 void save_results(const State3d& state, const CascadeState3d& casc_state, i32 num_iter) {
     const auto& config = state.config;
     const auto& out_cfg = config.output;
+    if (state.mpi_state.rank != 0) {
+        return;
+    }
 
     yakl::SimpleNetCDF nc;
     nc.create(config.output_path, yakl::NETCDF_MODE_REPLACE);
