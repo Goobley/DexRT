@@ -184,6 +184,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
 void init_state(State3d* state, const DexrtConfig& config) {
     state->config = config;
     setup_comm(state);
+
     CascadeRays3d c0_rays;
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
         c0_rays = init_atmos_atoms(state, config);
@@ -849,7 +850,7 @@ int main(int argc, char** argv) {
                     if (config.store_J_on_cpu) {
                         copy_J_plane_to_host(state, la);
                     }
-                    if (show_iteration_progress) {
+                    if (show_iteration_progress && state.mpi_state.rank == 0) {
                         pbar.update(f64(la + 1) / f64(state.adata_host.wavelength.extent(0)));
                     }
                 }
