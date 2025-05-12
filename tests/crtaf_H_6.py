@@ -5,6 +5,11 @@ from lightweaver.rh_atoms import H_6_atom, CaII_atom, H_4_atom, MgII_atom, H_10_
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
+import lightweaver as lw
+
+lw_version_split = lw.__version__.split(".")
+lw_version_int = int(lw_version_split[0]) * 1000 + int(lw_version_split[1])
+OLD_LW = lw_version_int < 14
 
 h_coll_temperature_grid = np.array([3e3, 5e3, 7e3, 10e3, 20e3, 30e3, 50e3, 100e3, 1e6, 2e6])
 
@@ -132,9 +137,10 @@ def Johnson_CI(i, Eij, Te):
 def make_atom():
     conv = LightweaverAtomConverter()
     model = conv.convert(H_6_atom())
-    for l in model.lines:
-        l.wavelength_grid.q_core *= 4
-        l.wavelength_grid.q_wing *= 5
+    if OLD_LW:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 4
+            l.wavelength_grid.q_wing *= 5
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     for coll_trans in model_simplified.collisions:
@@ -171,9 +177,10 @@ def make_H_10():
     H_10.lines[14].quadrature.qWing = 30
     H_10.lines[14].quadrature.Nlambda = 20
     model = conv.convert(H_10)
-    for l in model.lines:
-        l.wavelength_grid.q_core *= 4
-        l.wavelength_grid.q_wing *= 5
+    if OLD_LW:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 4
+            l.wavelength_grid.q_wing *= 5
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     for coll_trans in model_simplified.collisions:
@@ -200,9 +207,10 @@ def make_H_9():
     H_9 = H_atom()
 
     model = conv.convert(H_9)
-    for l in model.lines:
-        l.wavelength_grid.q_core *= 4
-        l.wavelength_grid.q_wing *= 5
+    if OLD_LW:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 4
+            l.wavelength_grid.q_wing *= 5
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     for coll_trans in model_simplified.collisions:
@@ -227,9 +235,10 @@ def make_H_9():
 def make_H_4():
     conv = LightweaverAtomConverter()
     model = conv.convert(H_4_atom())
-    for l in model.lines:
-        l.wavelength_grid.q_core *= 3
-        l.wavelength_grid.q_wing *= 2
+    if OLD_LW:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 3
+            l.wavelength_grid.q_wing *= 2
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     return model_simplified

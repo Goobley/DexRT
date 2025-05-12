@@ -5,6 +5,7 @@
 #include "DexrtConfig.hpp"
 #include "RcUtilsModes3d.hpp"
 #include "BlockMap.hpp"
+#include "MpiWrapper.hpp"
 
 struct GivenEmisOpac3d {
     fp_t voxel_scale;
@@ -13,6 +14,7 @@ struct GivenEmisOpac3d {
 };
 
 struct State3d {
+    MpiState mpi_state;
     DexrtConfig config;
     CascadeStorage3d c0_size;
     MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3> mr_block_map;
@@ -37,9 +39,9 @@ struct State3d {
 
     template <typename ...T>
     void println(fmt::format_string<T...> fmt, T&&... args) const {
-        // if (mpi_state.rank == 0) {
+        if (mpi_state.rank == 0) {
             fmt::println(fmt, std::forward<T>(args)...);
-        // }
+        }
     }
 };
 

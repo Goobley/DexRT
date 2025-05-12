@@ -304,6 +304,10 @@ int handle_restart(State* st, const std::string& restart_path) {
 /// Dump a snapshot. File name determined automatically (e.g. main output
 /// dexrt_output.nc -> dexrt_output_snapshot.nc)
 void save_snapshot(const State& state, int num_iter) {
+    if (state.mpi_state.rank != 0) {
+        return;
+    }
+
     yakl::SimpleNetCDF nc;
     std::string name(state.config.output_path);
     std::string ext(".nc");
@@ -1102,8 +1106,8 @@ int main(int argc, char** argv) {
                 }
                 wave_dist.wait_for_all(state.mpi_state);
             }
-            yakl::timer_stop("DexRT");
             wave_dist.reduce_J(&state);
+            yakl::timer_stop("DexRT");
             save_results(state, casc_state, num_iter);
         }
         finalize_state(&state);

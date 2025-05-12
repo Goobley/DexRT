@@ -17,6 +17,7 @@
 #include "NgAcceleration.hpp"
 #include "GitVersion.hpp"
 #include "InitialPops.hpp"
+#include "WavelengthParallelisation.hpp"
 
 #include <tqdm.hpp>
 
@@ -570,6 +571,10 @@ int handle_restart(State3d* st, const std::string& restart_path) {
 /// Dump a snapshot. File name determined automatically (e.g. main output
 /// dexrt_output.nc -> dexrt_output_snapshot.nc)
 void save_snapshot(const State3d& state, int num_iter) {
+    if (state.mpi_state.rank != 0) {
+        return;
+    }
+
     yakl::SimpleNetCDF nc;
     std::string name(state.config.output_path);
     std::string ext(".nc");
@@ -683,6 +688,8 @@ void copy_J_plane_to_host(const State3d& state, int la) {
 }
 
 int main(int argc, char** argv) {
+    init_mpi(argc, argv);
+
     argparse::ArgumentParser program("DexRT 3D");
     program.add_argument("--config")
         .default_value(std::string("dexrt.yaml"))
@@ -720,6 +727,10 @@ int main(int argc, char** argv) {
         if (config.mode == DexrtMode::GivenFs) {
             static_formal_sol_rc_given_3d(state, casc_state);
         } else {
+            WavelengthDistributor wave_dist;
+            const auto& wavelength = state.adata_host.wavelength;
+            wave_dist.init(state.mpi_state, wavelength.extent(0), 1);
+
             compute_lte_pops(&state);
             if (state.config.initial_pops_path.size() > 0) {
                 load_initial_pops(&state, state.config.initial_pops_path);
@@ -781,6 +792,7 @@ int main(int argc, char** argv) {
                 i = handle_restart(&state, *restart_path);
             }
 
+            state.println("-- Non-LTE Iterations ({} wavelengths) --", wavelength.extent(0));
             NgAccelerator ng;
             if (config.ng.enable) {
                 ng.init(
@@ -796,7 +808,6 @@ int main(int argc, char** argv) {
             bool accelerated = false;
             bool first_iter = true;
 
-            state.println("-- Non-LTE Iterations ({} wavelengths) --", state.adata_host.wavelength.extent(0));
             while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
                 state.println("==== FS {} ====", i);
                 tq::progress_bar pbar;
@@ -804,18 +815,31 @@ int main(int argc, char** argv) {
                     pbar.restart();
                 }
                 compute_nh0(state);
-                compute_collisions_to_gamma(&state);
+                if (state.mpi_state.rank == 0) {
+                    compute_collisions_to_gamma(&state);
+                } else {
+                    for (int ia = 0; ia < state.Gamma.size(); ++ia) {
+                        state.Gamma[ia] = FP(0.0);
+                    }
+                    Kokkos::fence();
+                }
+
                 compute_profile_normalisation(state, casc_state, first_iter);
                 state.J = FP(0.0);
                 if (config.store_J_on_cpu && !NO_J_3D) {
                     state.J_cpu = FP(0.0);
                 }
                 Kokkos::fence();
-                for (int la = 0; la < state.adata_host.wavelength.extent(0); ++la) {
+                WavelengthBatch wave_batch;
+                wave_dist.wait_for_all(state.mpi_state);
+                wave_dist.reset();
+                while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
                     if (config.store_J_on_cpu) {
                         state.J = FP(0.0);
                         Kokkos::fence();
                     }
+                    KOKKOS_ASSERT(wave_batch.la_end - wave_batch.la_start == 1);
+                    const int la = wave_batch.la_start;
                     bool lambda_iterate = i < initial_lambda_iterations;
                     dynamic_formal_sol_rc_3d(state, casc_state, lambda_iterate, la);
                     if (config.store_J_on_cpu) {
@@ -825,10 +849,13 @@ int main(int argc, char** argv) {
                         pbar.update(f64(la + 1) / f64(state.adata_host.wavelength.extent(0)));
                     }
                 }
+                wave_dist.wait_for_all(state.mpi_state);
+
                 if (!non_lte) {
                     break;
                 }
-                state.println("  == Statistical equilibrium ==");
+                state.println("{}  == Statistical equilibrium ==", show_iteration_progress ? "\n" : "");
+                wave_dist.reduce_Gamma(&state);
                 max_change = stat_eq(
                     &state,
                     StatEqOptions{
@@ -843,11 +870,11 @@ int main(int argc, char** argv) {
                             .conserve_pressure = actually_conserve_pressure
                         }
                     );
-                    // wave_dist.update_ne(&state);
+                    wave_dist.update_ne(&state);
                     max_change = std::max(nr_update, max_change);
-                    // if (actually_conserve_pressure) {
-                    //     wave_dist.update_nh_tot(&state);
-                    // }
+                    if (actually_conserve_pressure) {
+                        wave_dist.update_nh_tot(&state);
+                    }
                 }
                 if (config.ng.enable) {
                     accelerated = ng.accelerate(state, max_change);
@@ -855,6 +882,7 @@ int main(int argc, char** argv) {
                         state.println("  ~~ Ng Acceleration! (📉 or 💣) ~~");
                     }
                 }
+                wave_dist.update_pops(&state);
                 i += 1;
                 if (
                     (state.config.snapshot_frequency != 0) &&
@@ -876,7 +904,11 @@ int main(int argc, char** argv) {
                     state.J_cpu = FP(0.0);
                 }
                 Kokkos::fence();
-                for (int la = 0; la < state.adata_host.wavelength.extent(0); ++la) {
+                WavelengthBatch wave_batch;
+                wave_dist.wait_for_all(state.mpi_state);
+                wave_dist.reset();
+                while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
+                    const int la = wave_batch.la_start;
                     if (config.store_J_on_cpu) {
                         state.J = FP(0.0);
                         Kokkos::fence();
@@ -890,11 +922,13 @@ int main(int argc, char** argv) {
                 state.config.sparse_calculation = true;
             }
             num_iter = i;
+            wave_dist.reduce_J(&state);
         }
         yakl::timer_stop("DexRT");
         save_results(state, casc_state, num_iter);
     }
     yakl::finalize();
+    finalise_mpi();
     Kokkos::finalize();
     return 0;
 }

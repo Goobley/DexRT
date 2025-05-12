@@ -16,20 +16,17 @@ module load nvhpc-openmpi3/24.5
       # -DYAKL_B4B="On"                  \
       # -DYAKL_VERBOSE="On" \
       # -DMPI_INCLUDE_PATH="${MPI_INCLUDE_PATH}" \
-cmake -DCMAKE_CXX_COMPILER=g++     \
-      -DCMAKE_CUDA_COMPILER=nvcc    \
-      -DCMAKE_C_COMPILER=gcc         \
-      -DCMAKE_Fortran_COMPILER=gfortran \
-      -DYAKL_ARCH="CUDA"              \
+cmake \
+      -DDEX_ARCH="CUDA"              \
       -DYAKL_AUTO_PROFILE="On"         \
-      -DYAKL_CUDA_FLAGS="-O0 -g --ptxas-options=-v --generate-line-info -ftz=true" \
-      -DYAKL_INT64_RESHAPE="On"       \
-      -DDEXRT_CUDA_ARCHITECTURES="86" \
+      -DDEX_CXX_FLAGS="-O3 --generate-line-info -ftz=true" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DDEXRT_USE_MPI="On" \
-      -DMAGMA_INCLUDE_PATH="${MAGMA_INCLUDE_PATH}" \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \
-      -DLDLIBS="$(nc-config --libs) -L${MAGMA_LIB_PATH} ${MAGMA_LIB}" \
+      -DLDLIBS="$(nc-config --libs)" \
+      -DKokkos_ROOT="$(pwd)/../kokkos/" \
+      -DCMAKE_PREFIX_PATH="$(pwd)/../kokkos/lib/cmake;$(pwd)/../kokkos-kernels/lib/cmake/" \
+      -DCMAKE_BUILD_TYPE="Release" \
       ..
 
 # run as
