@@ -10,9 +10,11 @@ NVJIT_PATH="/opt/software/nvidia/sdk/Linux_x86_64/24.5/cuda/12.4/targets/x86_64-
       # -DYAKL_B4B="On"                  \
       # -DYAKL_VERBOSE="On" \
 cmake  \
+      -DCMAKE_CXX_COMPILER="mpicxx" \
       -DDEX_ARCH="CUDA"              \
       -DYAKL_AUTO_PROFILE="On"         \
       -DDEX_CXX_FLAGS="-O3 --generate-line-info -ftz=true" \
+      -DDEXRT_USE_MPI="On" \
       -DGCC_INCLUDE_PATH="${GCC_INCLUDE_PATH}" \
       -DNETCDF_INCLUDE_PATH="$(nc-config --includedir)" \
       -DLDLIBS="$(nc-config --libs) -lnvJitLink" \
