@@ -11,7 +11,7 @@ Description
 -----------
 
 DexRT is a modern, in-development, non-LTE predominantly solar radiative transfer code intended for studying the formation of atomic spectral lines in multidimensional atmospheres with complex structure, such as solar prominences.
-Currently 2D (with additional third invariant axis) models are supported.
+Currently 2D (with additional third invariant axis) and 3D models are supported.
 The calculation of the radiation field through the atmosphere is performed by a novel technique known as [Radiance Cascades](https://github.com/Raikiri/RadianceCascadesPaper), avoiding the ray effects that plague short characteristics solvers on problems that have complex mixed optically-thin and thick structure.
 
 Atomic data is provided in the [CRTAF](https://github.com/Goobley/CommonRTAtomicFormat) format, a nascent potential-standard for interoperation between non-LTE codes.
@@ -22,12 +22,16 @@ Please forgive the current state of the repository, it will be tidied up soon™
 
 Non-exhaustive feature list:
 - GPU accelerated
-- Radiance cascades formal solution in 2D
+- Radiance cascades formal solution in 2D and 3D
 - Non-LTE solution via same-preconditioning MALI (Rybicki & Hummer 1992)
 - Electron density charge conservation (secondary Newton-Raphson, e.g. Heinzel 1995, Osborne & Milic 2021)
 - Pressure conservation a la [Promweaver](https://github.com/Goobley/Promweaver)
-- `dexrt_ray`: a single-pass final formal solver allowing for calculation of intensity and formation properties such as contribution function from arbitrary angles.
+- Sparse mode whereby cells above a certain coronal temperature are efficiently treated as transparent, dramatically reducing memory and compute requirements for many models of coronal condensations.
+- Efficient MPI wavelength parallelisation for systems with enough memory to
+store multiple copies of the same model.
+- `dexrt_ray(_3d)`: a single-pass final formal solver allowing for calculation of intensity and formation properties such as contribution function from arbitrary angles.
 - Docker container specifications provided in `.devcontainer` that have been tested (primarily nvhpc). These environments can be worked from directly with VSCode.
+- Simple Python data manipulation and postprocessing framework leveraging xarray accessors: [dexrt_py](https://github.com/Goobley/dexrt_py).
 
 📖 Documentation
 ----------------
