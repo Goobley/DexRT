@@ -1,10 +1,15 @@
 import crtaf
 from crtaf.from_lightweaver import LightweaverAtomConverter
 from crtaf.core_types import TemperatureInterpolationRateImpl, CERate, CIRate
-from lightweaver.rh_atoms import H_6_atom, CaII_atom, H_4_atom
+from lightweaver.rh_atoms import H_6_atom, CaII_atom, H_4_atom, MgII_atom, H_10_atom, H_atom
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
+import lightweaver as lw
+
+lw_version_split = lw.__version__.split(".")
+lw_version_int = int(lw_version_split[0]) * 1000 + int(lw_version_split[1])
+OLD_LW = lw_version_int < 14
 
 h_coll_temperature_grid = np.array([3e3, 5e3, 7e3, 10e3, 20e3, 30e3, 50e3, 100e3, 1e6, 2e6])
 
@@ -132,9 +137,80 @@ def Johnson_CI(i, Eij, Te):
 def make_atom():
     conv = LightweaverAtomConverter()
     model = conv.convert(H_6_atom())
-    for l in model.lines:
-        l.wavelength_grid.q_core *= 4
-        l.wavelength_grid.q_wing *= 5
+    if OLD_LW:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 4
+            l.wavelength_grid.q_wing *= 5
+    visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
+    model_simplified = model.simplify_visit(visitor)
+    for coll_trans in model_simplified.collisions:
+        for coll in coll_trans.data:
+            if isinstance(coll, (CERate, CIRate)):
+                coll.temperature = h_coll_temperature_grid << u.K
+                rate_unit = coll.data.unit
+                Eij = (model_simplified.levels[coll_trans.transition[0]].energy_eV - model_simplified.levels[coll_trans.transition[1]].energy_eV).to(u.J)
+                n = np.sqrt(model_simplified.levels[coll_trans.transition[1]].g / 2)
+                if isinstance(coll, CERate):
+                    nn = np.sqrt(model_simplified.levels[coll_trans.transition[0]].g / 2)
+                    coll.data = Johnson_CE(n, nn, Eij.value, h_coll_temperature_grid) << rate_unit
+                elif isinstance(coll, CIRate):
+                    coll.data = Johnson_CI(n, Eij.value, h_coll_temperature_grid) << rate_unit
+    # new_lines = []
+    # for l in model_simplified.lines:
+    #     if l.lambda0 < 1000.0 * u.nm:
+    #         new_lines.append(l)
+    # model_simplified.lines = new_lines
+    return model_simplified
+
+def make_H_10():
+    conv = LightweaverAtomConverter()
+    H_10 = H_10_atom()
+    H_6 = H_6_atom()
+    for l in H_10.lines:
+        for ll in H_6.lines:
+            if l.j == ll.j and l.i == ll.i:
+                l.quadrature = ll.quadrature
+    # H-eps
+    H_10.lines[13].quadrature.qWing = 50
+    H_10.lines[13].quadrature.Nlambda = 50
+    # H-zeta
+    H_10.lines[14].quadrature.qWing = 30
+    H_10.lines[14].quadrature.Nlambda = 20
+    model = conv.convert(H_10)
+    if OLD_LW:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 4
+            l.wavelength_grid.q_wing *= 5
+    visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
+    model_simplified = model.simplify_visit(visitor)
+    for coll_trans in model_simplified.collisions:
+        for coll in coll_trans.data:
+            if isinstance(coll, (CERate, CIRate)):
+                coll.temperature = h_coll_temperature_grid << u.K
+                rate_unit = coll.data.unit
+                Eij = (model_simplified.levels[coll_trans.transition[0]].energy_eV - model_simplified.levels[coll_trans.transition[1]].energy_eV).to(u.J)
+                n = np.sqrt(model_simplified.levels[coll_trans.transition[1]].g / 2)
+                if isinstance(coll, CERate):
+                    nn = np.sqrt(model_simplified.levels[coll_trans.transition[0]].g / 2)
+                    coll.data = Johnson_CE(n, nn, Eij.value, h_coll_temperature_grid) << rate_unit
+                elif isinstance(coll, CIRate):
+                    coll.data = Johnson_CI(n, Eij.value, h_coll_temperature_grid) << rate_unit
+    # new_lines = []
+    # for l in model_simplified.lines:
+    #     if l.lambda0 < 1000.0 * u.nm:
+    #         new_lines.append(l)
+    # model_simplified.lines = new_lines
+    return model_simplified
+
+def make_H_9():
+    conv = LightweaverAtomConverter()
+    H_9 = H_atom()
+
+    model = conv.convert(H_9)
+    if OLD_LW:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 4
+            l.wavelength_grid.q_wing *= 5
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     for coll_trans in model_simplified.collisions:
@@ -159,26 +235,29 @@ def make_atom():
 def make_H_4():
     conv = LightweaverAtomConverter()
     model = conv.convert(H_4_atom())
-    for l in model.lines:
-        l.wavelength_grid.q_core *= 3
-        l.wavelength_grid.q_wing *= 2
+    if OLD_LW:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 3
+            l.wavelength_grid.q_wing *= 2
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     return model_simplified
 
-def make_CaII():
+def make_CaII(add_test_term=True):
     conv = LightweaverAtomConverter()
     model = conv.convert(CaII_atom())
-    for l in model.lines:
-        l.wavelength_grid.q_core *= 3
-        l.wavelength_grid.q_wing *= 2
-        # l.wavelength_grid.n_lambda //= 2
+    if add_test_term:
+        for l in model.lines:
+            l.wavelength_grid.q_core *= 3
+            l.wavelength_grid.q_wing *= 2
+            # l.wavelength_grid.n_lambda //= 2
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
 
-    current_grid = model_simplified.lines[-1].wavelength_grid.wavelengths
-    new_grid = np.sort(np.concatenate((current_grid, [-1.0 * u.nm])))
-    model_simplified.lines[-1].wavelength_grid.wavelengths = new_grid
+    if add_test_term:
+        current_grid = model_simplified.lines[-1].wavelength_grid.wavelengths
+        new_grid = np.sort(np.concatenate((current_grid, [-1.0 * u.nm])))
+        model_simplified.lines[-1].wavelength_grid.wavelengths = new_grid
 
     # NOTE(cmo): To prevent explosion due to rates in the Snow KHI model
     # TODO(cmo): Grab the rates from source/RADYN
@@ -189,10 +268,63 @@ def make_CaII():
                 coll.data = np.concatenate(([0.0 * coll.data.unit], coll.data))
     return model_simplified
 
+def make_CaII_3d():
+    conv = LightweaverAtomConverter()
+    model = conv.convert(CaII_atom())
+    for l in model.lines:
+        # l.wavelength_grid.q_core *= 3
+        # l.wavelength_grid.q_wing *= 2
+        if l.transition[1] != "ii_1":
+            l.wavelength_grid.n_lambda //= 2
+    visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
+    model_simplified = model.simplify_visit(visitor)
+
+    # current_grid = model_simplified.lines[-1].wavelength_grid.wavelengths
+    # new_grid = np.sort(np.concatenate((current_grid, [-1.0 * u.nm])))
+    # model_simplified.lines[-1].wavelength_grid.wavelengths = new_grid
+
+    # NOTE(cmo): To prevent explosion due to rates in the Snow KHI model
+    # TODO(cmo): Grab the rates from source/RADYN
+    for trans in model_simplified.collisions:
+        for coll in trans.data:
+            if isinstance(coll, TemperatureInterpolationRateImpl) and coll.temperature[0] > (1000.0 * u.K):
+                coll.temperature = np.concatenate(([500.0 * u.K], coll.temperature))
+                coll.data = np.concatenate(([0.0 * coll.data.unit], coll.data))
+    return model_simplified
+
+def make_MgII():
+    conv = LightweaverAtomConverter()
+    model = conv.convert(MgII_atom())
+    for l in model.lines:
+        if l.transition[1] == "ii_1":
+            l.wavelength_grid.q_wing = 300
+            l.wavelength_grid.n_lambda //= 2
+    visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
+    model_simplified = model.simplify_visit(visitor)
+
+    # NOTE(cmo): To prevent explosion due to rates in the Snow KHI model
+    for trans in model_simplified.collisions:
+        for coll in trans.data:
+            if isinstance(coll, TemperatureInterpolationRateImpl) and coll.temperature[0] > (1000.0 * u.K):
+                coll.temperature = np.concatenate(([500.0 * u.K], coll.temperature))
+                coll.data = np.concatenate(([0.0 * coll.data.unit], coll.data))
+    return model_simplified
 
 if __name__ == "__main__":
     atom = make_CaII()
     with open("test_CaII.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_CaII(add_test_term=False)
+    with open("CaII.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_MgII()
+    with open("MgII.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_CaII_3d()
+    with open("CaII_3d.yaml", "w") as f:
         f.write(atom.yaml_dumps())
 
     atom = make_H_4()
@@ -201,4 +333,12 @@ if __name__ == "__main__":
 
     atom = make_atom()
     with open("H_6.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_H_10()
+    with open("H_10.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_H_9()
+    with open("H_9.yaml", "w") as f:
         f.write(atom.yaml_dumps())

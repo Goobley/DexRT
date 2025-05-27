@@ -1,4 +1,5 @@
 #include "ChargeConservation.hpp"
+#include "State3d.hpp"
 #include "KokkosBatched_Gesv.hpp"
 #include "KokkosBatched_LU_Decl.hpp"
 #include "KokkosBatched_SolveLU_Decl.hpp"
@@ -443,7 +444,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     return max_change;
 }
 #else
-template <typename T=fp_t>
+template <typename T=fp_t, typename State>
 fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions()) {
     yakl::timer_start("Charge conservation");
     JasUnpack(args, ignore_change_below_ntot_frac, conserve_pressure);
@@ -952,6 +953,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 }
 #endif
 
+template <typename State>
 fp_t nr_post_update(State* state, const NrPostUpdateOptions& args) {
 #ifdef HAVE_MPI
     fp_t max_rel_change;
@@ -964,3 +966,6 @@ fp_t nr_post_update(State* state, const NrPostUpdateOptions& args) {
     return nr_post_update_impl<StatEqPrecision>(state, args);
 #endif
 }
+
+template fp_t nr_post_update<State>(State* state, const NrPostUpdateOptions& args);
+template fp_t nr_post_update<State3d>(State3d* state, const NrPostUpdateOptions& args);

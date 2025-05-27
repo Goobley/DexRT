@@ -1,4 +1,5 @@
 #include "CoreAndVoigtEmisOpac.hpp"
+#include "State3d.hpp"
 
 namespace CoreAndVoigt {
     struct CoreAndVoigtState {
@@ -168,7 +169,6 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
         "Compute mip n (CoreAndVoigt)",
         FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
         YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx, i32 wave) {
-            const fp_t ds = vox_scale;
             const fp_t lambda = adata.wavelength(la_start + wave);
             MRIdxGen idx_gen(mr_block_map);
 
@@ -177,11 +177,12 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
             const Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
 
             const i32 upper_vox_size = vox_size / 2;
+            const fp_t ds = vox_scale * upper_vox_size;
             i64 idxs[mip_block] = {
-                idx_gen.idx(level_m_1, coord.x, coord.z),
-                idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z),
-                idx_gen.idx(level_m_1, coord.x, coord.z+upper_vox_size),
-                idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z+upper_vox_size)
+                idx_gen.idx(level_m_1, coord),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z}),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x, .z = coord.z+upper_vox_size}),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z+upper_vox_size})
             };
             yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES> eta_star_mip;
             yakl::SArray<fp_t, 1, CORE_AND_VOIGT_MAX_LINES> chi_star_mip;
@@ -311,6 +312,281 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
                     a_damp(ks, kri) = a_damp_mip(kri);
                     inv_dop_width(ks, kri) = inv_dop_width_mip(kri);
                 }
+            }
+        }
+    );
+    yakl::fence();
+}
+
+void CoreAndVoigtData3d::init(i64 buffer_len, i32 max_kr) {
+    eta_star = Fp2d("eta_star", buffer_len, max_kr);
+    chi_star = Fp2d("chi_star", buffer_len, max_kr);
+    a_damp = Fp2d("a_damp", buffer_len, max_kr);
+    inv_dop_width = Fp2d("1 / dop_width", buffer_len, max_kr);
+}
+
+/// Fills mip0
+void CoreAndVoigtData3d::fill(const State3d& state, i32 la) const {
+    JasUnpack(state, atmos, pops, adata, mr_block_map);
+    JasUnpack((*this), eta_star, chi_star, a_damp, inv_dop_width);
+    auto& block_map = mr_block_map.block_map;
+    const auto& flatmos = flatten<const fp_t>(atmos);
+    constexpr i32 CAV_MAX_LINES = CORE_AND_VOIGT_MAX_LINES_3D;
+
+    for (int i = 0; i < CAV_MAX_LINES; ++i) {
+        active_set_mapping(i) = -1;
+    }
+
+    // NOTE(cmo): Fill active_set_mapping
+    int fill_idx = 0;
+    auto a_set_la = slice_active_set(state.adata_host, la);
+    for (int kri = 0; kri < a_set_la.extent(0); ++kri) {
+        int kr = a_set_la(kri);
+
+        active_set_mapping(fill_idx++) = kr;
+
+        if (fill_idx > CAV_MAX_LINES) {
+            throw std::runtime_error(fmt::format("For wavelength [{}], more than {} lines appear active (CoreAndVoigt limitation). Consider increasing CORE_AND_VOIGT_MAX_LINES_3D", la, CAV_MAX_LINES));
+        }
+    }
+
+    for (int kri = 0; kri < CAV_MAX_LINES; ++kri) {
+        i32 kr = active_set_mapping(kri);
+        if (kr < 0) {
+            break;
+        }
+
+        const fp_t lambda0 = state.adata_host.lines(kr).lambda0;
+        lambda0s(kri) = lambda0;
+        const fp_t lambda = state.adata_host.wavelength(la);
+
+        a_damp_ratios(kri) = square(lambda / lambda0);
+        emis_opac_ratios(kri) = lambda0 / lambda;
+    }
+
+    const auto& active_set_mapping = this->active_set_mapping;
+    dex_parallel_for(
+        "fill core and voigt",
+        block_map.loop_bounds(),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+            IdxGen3d idx_gen(block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+
+            AtmosPointParams atmos_point {
+                .temperature = flatmos.temperature(ks),
+                .ne = flatmos.ne(ks),
+                .vturb = flatmos.vturb(ks),
+                .nhtot = flatmos.nh_tot(ks),
+                .nh0 = flatmos.nh0(ks)
+            };
+
+            CoreAndVoigt::CoreAndVoigtState line_state {
+                .k = ks,
+                .atmos = atmos_point,
+                .adata = adata,
+                .n = pops
+            };
+            for (int krl = 0; krl < active_set_mapping.size(); ++krl) {
+                if (active_set_mapping(krl) < 0) {
+                    break;
+                }
+                CoreAndVoigt::CoreAndVoigtResult line_data = CoreAndVoigt::compute_core_and_voigt(
+                    line_state,
+                    active_set_mapping(krl)
+                );
+                eta_star(ks, krl) = line_data.eta_star;
+                chi_star(ks, krl) = line_data.chi_star;
+                a_damp(ks, krl) = line_data.a_damp;
+                inv_dop_width(ks, krl) = FP(1.0) / line_data.dop_width;
+            }
+        }
+    );
+}
+
+void CoreAndVoigtData3d::compute_mip_n(const State3d& state, const MipmapComputeState3d& mm_state, i32 level) const {
+    JasUnpack(state, mr_block_map, adata, phi);
+    const auto& block_map = mr_block_map.block_map;
+    JasUnpack(mm_state, mippable_entries, emis, opac, vx, vy, vz, la);
+    constexpr i32 mip_block = 8;
+    const fp_t vox_scale = state.atmos.voxel_scale;
+
+    const MipmapTolerance mip_config = {
+        .opacity_threshold = state.config.mip_config.opacity_threshold,
+        .log_chi_mip_variance = state.config.mip_config.log_chi_mip_variance,
+        .log_eta_mip_variance = state.config.mip_config.log_eta_mip_variance,
+    };
+
+    const i32 level_m_1 = level - 1;
+    const i32 vox_size = (1 << level);
+    auto bounds = block_map.loop_bounds(vox_size);
+    dex_parallel_for(
+        "Compute mip n (CoreAndVoigt)",
+        FlatLoop<2>(bounds.dim(0), bounds.dim(1)),
+        YAKL_CLASS_LAMBDA (i64 tile_idx, i32 block_idx) {
+            const fp_t lambda = adata.wavelength(la);
+            MRIdxGen3d idx_gen(mr_block_map);
+            constexpr i32 CAV_MAX_LINES = CORE_AND_VOIGT_MAX_LINES_3D;
+
+            const i64 ks = idx_gen.loop_idx(level, tile_idx, block_idx);
+            const Coord3 coord = idx_gen.loop_coord(level, tile_idx, block_idx);
+            const Coord3 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+
+            const i32 upper_vox_size = vox_size / 2;
+            const fp_t ds = vox_scale * upper_vox_size;
+            i64 idxs[mip_block] = {
+                idx_gen.idx(
+                    level_m_1,
+                    coord // 0 0 0
+                ),
+                idx_gen.idx(
+                    level_m_1,
+                    Coord3{.x = coord.x+upper_vox_size, .y = coord.y, .z = coord.z} // 0 0 1
+                ),
+                idx_gen.idx(
+                    level_m_1,
+                    Coord3{.x = coord.x, .y = coord.y+upper_vox_size, .z = coord.z} // 0 1 0
+                ),
+                idx_gen.idx(
+                    level_m_1,
+                    Coord3{.x = coord.x+upper_vox_size, .y = coord.y+upper_vox_size, .z = coord.z} // 0 1 1
+                ),
+                idx_gen.idx(
+                    level_m_1,
+                    Coord3{.x = coord.x, .y = coord.y, .z = coord.z+upper_vox_size} // 1 0 0
+                ),
+                idx_gen.idx(
+                    level_m_1,
+                    Coord3{.x = coord.x+upper_vox_size, .y = coord.y, .z = coord.z+upper_vox_size} // 1 0 1
+                ),
+                idx_gen.idx(
+                    level_m_1,
+                    Coord3{.x = coord.x, .y = coord.y+upper_vox_size, .z = coord.z+upper_vox_size} // 1 1 0
+                ),
+                idx_gen.idx(
+                    level_m_1,
+                    Coord3{.x = coord.x+upper_vox_size, .y = coord.y+upper_vox_size, .z = coord.z+upper_vox_size} // 1, 1, 1
+                )
+            };
+            yakl::SArray<fp_t, 1, CAV_MAX_LINES> eta_star_mip;
+            yakl::SArray<fp_t, 1, CAV_MAX_LINES> chi_star_mip;
+            yakl::SArray<fp_t, 1, CAV_MAX_LINES> a_damp_mip;
+            yakl::SArray<fp_t, 1, CAV_MAX_LINES> inv_dop_width_mip;
+            for (int i = 0; i < CAV_MAX_LINES; ++i) {
+                eta_star_mip(i) = FP(0.0);
+                chi_star_mip(i) = FP(0.0);
+                a_damp_mip(i) = FP(0.0);
+                inv_dop_width_mip(i) = FP(0.0);
+            }
+
+            // E[log(chi ds)]
+            fp_t m1_chi = FP(0.0);
+            // E[log(chi ds)^2]
+            fp_t m2_chi = FP(0.0);
+            // E[log(eta ds)]
+            fp_t m1_eta = FP(0.0);
+            // E[log(eta ds)^2]
+            fp_t m2_eta = FP(0.0);
+
+            bool consider_variance = false;
+
+            for (int i = 0; i < mip_block; ++i) {
+                i64 idx = idxs[i];
+                fp_t tot_emis = emis(idx) + FP(1e-15);
+                fp_t tot_opac = opac(idx) + FP(1e-15);
+                const fp_t max_vel = std::sqrt(
+                    square(vx(idx))
+                    + square(vy(idx))
+                    + square(vz(idx))
+                );
+                const fp_t max_c_ratio = max_vel / ConstantsFP::c;
+
+                for (int kri = 0; kri < CAV_MAX_LINES; ++kri) {
+                    i32 kr = active_set_mapping(kri);
+                    if (kr < 0) {
+                        break;
+                    }
+                    // NOTE(cmo): Evaluate at closest possible wavelength to line centre
+                    const fp_t max_dop_shift = max_c_ratio * lambda0s(kri);
+                    fp_t lambda_sample = lambda0s(kri);
+                    const fp_t wl_dist_from_core = lambda - lambda0s(kri);
+                    if (std::abs(wl_dist_from_core) > max_dop_shift) {
+                        if (wl_dist_from_core < FP(0.0)) {
+                            lambda_sample = lambda + max_dop_shift;
+                        } else {
+                            lambda_sample = lambda - max_dop_shift;
+                        }
+                    }
+
+                    EmisOpac line = emis_opac(CavEmisOpacState{
+                        .ks = idx,
+                        .krl = kri,
+                        .wave = 0,
+                        .lambda = lambda_sample,
+                        .vel = FP(0.0),
+                        .phi = phi
+                    });
+                    tot_emis += line.eta;
+                    tot_opac += line.chi;
+
+                    eta_star_mip(kri) += eta_star(idx, kri);
+                    chi_star_mip(kri) += chi_star(idx, kri);
+                    a_damp_mip(kri) += a_damp(idx, kri);
+                    inv_dop_width_mip(kri) += inv_dop_width(idx, kri);
+                }
+
+                consider_variance = consider_variance || (tot_opac * ds) > mip_config.opacity_threshold;
+                m1_chi += std::log(tot_opac * ds);
+                m2_chi += square(std::log(tot_opac * ds));
+                m1_eta += std::log(tot_emis * ds);
+                m2_eta += square(std::log(tot_emis * ds));
+            }
+            m1_chi *= FP(0.125);
+            m2_chi *= FP(0.125);
+            m1_eta *= FP(0.125);
+            m2_eta *= FP(0.125);
+            for (int i = 0; i < CAV_MAX_LINES; ++i) {
+                eta_star_mip(i) *= FP(0.125);
+                chi_star_mip(i) *= FP(0.125);
+                a_damp_mip(i) *= FP(0.125);
+                inv_dop_width_mip(i) *= FP(0.125);
+            }
+
+            bool do_increment = true;
+            if (consider_variance) {
+                // index of dispersion D[x] = Var[x] / Mean[x] = (M_2[x] - M_1[x]^2) / M_1[x] = M_2[x] / M_1[x] - M_1[x]
+                fp_t D_chi = std::abs(m2_chi / m1_chi - m1_chi); // due to the log, this often negative.
+                if (m2_chi == FP(0.0)) {
+                    D_chi = FP(0.0);
+                }
+                fp_t D_eta = std::abs(m2_eta / m1_eta - m1_eta);
+                if (m2_eta == FP(0.0)) {
+                    D_eta = FP(0.0);
+                }
+                if (
+                    D_chi > mip_config.log_chi_mip_variance
+                    || D_eta > mip_config.log_eta_mip_variance
+                ) {
+                    do_increment = false;
+                }
+            }
+
+            // NOTE(cmo): This is coming from many threads of a warp
+            // simultaneously, which isn't great. If it's a bottleneck,
+            // ballot across threads, do a popcount, and increment from one
+            // thread.
+            if (do_increment) {
+                Kokkos::atomic_add(&mippable_entries(tile_idx), 1);
+            }
+
+            for (int kri = 0; kri < CAV_MAX_LINES; ++kri) {
+                i32 kr = active_set_mapping(kri);
+                if (kr < 0) {
+                    break;
+                }
+                eta_star(ks, kri) = eta_star_mip(kri);
+                chi_star(ks, kri) = chi_star_mip(kri);
+                a_damp(ks, kri) = a_damp_mip(kri);
+                inv_dop_width(ks, kri) = inv_dop_width_mip(kri);
             }
         }
     );

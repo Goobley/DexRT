@@ -53,7 +53,7 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         .compute_alo = false,
         .dir_by_dir = DIR_BY_DIR
     });
-    constexpr int RcStorage = RC_flags_storage();
+    constexpr int RcStorage = RC_flags_storage_2d();
 
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();

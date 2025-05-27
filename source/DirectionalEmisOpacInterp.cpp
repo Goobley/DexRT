@@ -13,7 +13,7 @@ void compute_min_max_vel(
     max_vel = -FP(1e8);
     yakl::fence();
 
-    constexpr i32 RcMode = RC_flags_storage();
+    constexpr i32 RcMode = RC_flags_storage_2d();
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, 0);
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset.subset_idx);
 
@@ -210,10 +210,10 @@ void DirectionalEmisOpacInterp::compute_subset_mip_n(
 
             const i32 upper_vox_size = vox_size / 2;
             i64 idxs[mip_block] = {
-                idx_gen.idx(level_m_1, coord.x, coord.z),
-                idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z),
-                idx_gen.idx(level_m_1, coord.x, coord.z+upper_vox_size),
-                idx_gen.idx(level_m_1, coord.x+upper_vox_size, coord.z+upper_vox_size)
+                idx_gen.idx(level_m_1, coord),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z}),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x, .z = coord.z+upper_vox_size}),
+                idx_gen.idx(level_m_1, Coord2{.x = coord.x+upper_vox_size, .z = coord.z+upper_vox_size})
             };
 
             fp_t min_vs[4];

@@ -255,6 +255,7 @@ KOKKOS_INLINE_FUNCTION void compute_C_ne_pert(
     );
 }
 
+template <typename State>
 void compute_collisions_to_gamma(State* state);
 
 #else

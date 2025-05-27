@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 
+template <typename State>
 inline void setup_comm(State* state) {
 #ifdef HAVE_MPI
     MPI_Comm_dup(MPI_COMM_WORLD, &state->mpi_state.comm);
@@ -134,6 +135,7 @@ struct WavelengthDistributor {
 #endif
     }
 
+    template <typename State>
     inline void reduce_Gamma(State* state) {
 #ifdef HAVE_MPI
         for (int ia = 0; ia < state->Gamma.size(); ++ia) {
@@ -162,6 +164,7 @@ struct WavelengthDistributor {
 #endif
     }
 
+    template <typename State>
     inline void reduce_J(State* state) {
 #ifdef HAVE_MPI
         fp_t* J_ptr = state->config.store_J_on_cpu ? state->J_cpu.data() : state->J.data();
@@ -190,24 +193,26 @@ struct WavelengthDistributor {
 #endif
     }
 
+    template <typename State>
     inline void update_pops(State* state) {
 #ifdef HAVE_MPI
         MPI_Bcast(state->pops.data(), state->pops.size(), get_FpMpi(), 0, state->mpi_state.comm);
 #endif
     }
 
+    template <typename State>
     inline void update_ne(State* state) {
 #ifdef HAVE_MPI
         MPI_Bcast(state->atmos.ne.data(), state->atmos.ne.size(), get_FpMpi(), 0, state->mpi_state.comm);
 #endif
     }
 
+    template <typename State>
     inline void update_nh_tot(State* state) {
 #ifdef HAVE_MPI
         MPI_Bcast(state->atmos.nh_tot.data(), state->atmos.nh_tot.size(), get_FpMpi(), 0, state->mpi_state.comm);
 #endif
     }
-
 
 };
 

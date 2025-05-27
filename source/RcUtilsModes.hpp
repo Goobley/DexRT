@@ -2,46 +2,10 @@
 #define DEXRT_UTILS_MODES_HPP
 #include "Types.hpp"
 #include "State.hpp"
-#include "CascadeState.hpp"
-
-constexpr int RC_DYNAMIC = 0x1;
-constexpr int RC_PREAVERAGE = 0x2;
-constexpr int RC_SAMPLE_BC = 0x4;
-constexpr int RC_COMPUTE_ALO = 0x8;
-constexpr int RC_DIR_BY_DIR = 0x10;
-constexpr int RC_LINE_SWEEP = 0x20; // NOTE(cmo) only added in one place to flag for BC handling
-
-struct RcFlags {
-    bool dynamic = false;
-    bool preaverage = PREAVERAGE;
-    bool sample_bc = false;
-    bool compute_alo = false;
-    bool dir_by_dir = DIR_BY_DIR;
-} ;
-
-
-YAKL_INLINE constexpr int RC_flags_pack(const RcFlags& flags) {
-    int flag = 0;
-    if (flags.dynamic) {
-        flag |= RC_DYNAMIC;
-    }
-    if (flags.preaverage) {
-        flag |= RC_PREAVERAGE;
-    }
-    if (flags.sample_bc) {
-        flag |= RC_SAMPLE_BC;
-    }
-    if (flags.compute_alo) {
-        flag |= RC_COMPUTE_ALO;
-    }
-    if (flags.dir_by_dir) {
-        flag |= RC_DIR_BY_DIR;
-    }
-    return flag;
-}
+#include "RcConstants.hpp"
 
 /// Returns the packed RC flags that affect cascade storage (i.e. known at compile time)
-YAKL_INLINE constexpr int RC_flags_storage() {
+YAKL_INLINE constexpr int RC_flags_storage_2d() {
     return RC_flags_pack(RcFlags{
         .preaverage=PREAVERAGE,
         .dir_by_dir=DIR_BY_DIR
@@ -497,33 +461,6 @@ template <int RcMode>
 YAKL_INLINE fp_t probe_fetch(const FpConst1d& casc, const CascadeRays& dims, const ProbeIndex& index) {
     i64 lin_idx = probe_linear_index<RcMode>(dims, index);
     return casc(lin_idx);
-}
-
-/// Index i for cascade n, ip for n+1. If no n+1, ip=-1
-struct CascadeIdxs {
-    int i;
-    int ip;
-};
-
-YAKL_INLINE CascadeIdxs cascade_indices(const CascadeState& casc, int n) {
-    CascadeIdxs idxs;
-    if constexpr (PINGPONG_BUFFERS) {
-        if (n & 1) {
-            idxs.i = 1;
-            idxs.ip = 0;
-        } else {
-            idxs.i = 0;
-            idxs.ip = 1;
-        }
-    } else {
-        idxs.i = n;
-        idxs.ip = n + 1;
-    }
-
-    if (n == casc.num_cascades) {
-        idxs.ip = -1;
-    }
-    return idxs;
 }
 
 struct IntervalLength {

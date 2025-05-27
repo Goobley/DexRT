@@ -6,6 +6,7 @@
 #include <bit>
 
 #include "UserConfig2d.hpp"
+#include "UserConfig3d.hpp"
 
 #ifdef KOKKOS_ENABLE_DEBUG
 #define DEXRT_DEBUG
@@ -27,6 +28,10 @@ namespace yakl {
         Kokkos::abort(in);
     }
 }
+
+// NOTE(cmo): A function to define in main so functions that don't get state
+// passed to them can query dimensionality (either 2 or 3)
+extern int get_dexrt_dimensionality();
 
 // NOTE(cmo): The spacing between probes on cascade 0 -- this isn't actually configurable
 constexpr fp_t PROBE0_SPACING = FP(1.0);
@@ -62,6 +67,10 @@ enum class BaseMipContents {
 constexpr BaseMipContents BASE_MIP_CONTAINS =
     (LINE_SCHEME == LineCoeffCalc::VelocityInterp) ? BaseMipContents::LinesAtRest
         : (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) ? BaseMipContents::Continua
+        : BaseMipContents::VelocityDependent;
+constexpr BaseMipContents BASE_MIP_CONTAINS_3D =
+    (LINE_SCHEME_3D == LineCoeffCalc::VelocityInterp) ? BaseMipContents::LinesAtRest
+        : (LINE_SCHEME_3D == LineCoeffCalc::CoreAndVoigt) ? BaseMipContents::Continua
         : BaseMipContents::VelocityDependent;
 
 

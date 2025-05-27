@@ -170,7 +170,9 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
             }
             RadianceInterval<Alo> merged = merge_intervals(ri, upper_interp);
             interp.I += weights(bilin) * merged.I;
-            interp.tau += weights(bilin) * merged.tau;
+            if constexpr (STORE_TAU_CASCADES) {
+                interp.tau += weights(bilin) * merged.tau;
+            }
         }
     } else {
         interp = multi_level_dda_raymarch_2d<RcMode, Bc>(
@@ -453,7 +455,7 @@ template <
 inline void parallax_fix_inner_merge(
     const State& state,
     const DeviceCascadeState& dev_casc_state,
-    const DeviceProbesToCompute& probe_coord_lookup,
+    const DeviceProbesToCompute<2>& probe_coord_lookup,
     const CascadeRays& rays,
     const CascadeCalcSubset& subset
 ) {
@@ -668,7 +670,7 @@ void cascade_i_25d(
 
     wave_batch = std::min(wave_batch, ray_subset.wave_batch);
     i64 spatial_bounds = casc_state.probes_to_compute.num_active_probes(cascade_idx);
-    DeviceProbesToCompute probe_coord_lookup = casc_state.probes_to_compute.bind(cascade_idx);
+    DeviceProbesToCompute<2> probe_coord_lookup = casc_state.probes_to_compute.bind(cascade_idx);
 
     JasUnpack(state, mr_block_map);
     const auto& block_map = mr_block_map.block_map;

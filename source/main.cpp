@@ -3,6 +3,7 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "State.hpp"
+#include "CascadeState.hpp"
 #include "Utils.hpp"
 #include "Atmosphere.hpp"
 #include "Populations.hpp"
@@ -28,8 +29,13 @@
 #include <sstream>
 #include "GitVersion.hpp"
 #include "WavelengthParallelisation.hpp"
+#include "InitialPops.hpp"
 
 #include <random>
+
+int get_dexrt_dimensionality() {
+    return 2;
+}
 
 void allocate_J(State* state) {
     JasUnpack((*state), config, mr_block_map, c0_size, adata);
@@ -42,14 +48,14 @@ void allocate_J(State* state) {
     }
 
     if (!sparse) {
-        num_cells = block_map.num_x_tiles * block_map.num_z_tiles * square(BLOCK_SIZE);
+        num_cells = i64(block_map.num_x_tiles()) * block_map.num_z_tiles() * square(BLOCK_SIZE);
     }
 
     if (config.store_J_on_cpu) {
-        state->J = Fp2d("J", c0_size.wave_batch, num_cells);
-        state->J_cpu = Fp2dHost("JHost", wave_dim, num_cells);
+        state->J = Fp2d("J", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
+        state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
     } else {
-        state->J = Fp2d("J", wave_dim, num_cells);
+        state->J = Fp2d("J", yakl::DimsT<i64>(wave_dim, num_cells));
     }
     state->J = FP(0.0);
     // TODO(cmo): If we have scattering terms and are updating J, the old
@@ -66,8 +72,10 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     Atmosphere atmos = load_atmos(config.atmos_path);
     std::vector<ModelAtom<f64>> crtaf_models;
     crtaf_models.reserve(config.atom_paths.size());
-    for (auto p : config.atom_paths) {
-        crtaf_models.emplace_back(parse_crtaf_model<f64>(p));
+    for (int i = 0; i < config.atom_paths.size(); ++i) {
+        const auto& p = config.atom_paths[i];
+        const auto& model_config = config.atom_configs[i];
+        crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
     }
     AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
     state.adata = atomic_data.device;
@@ -115,7 +123,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     }
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
-    state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary);
+    state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary, PromweaverResampleType::FluxConserving);
     state.boundary = config.boundary;
 
     // NOTE(cmo): This doesn't actually know that things will be allocated sparse
@@ -130,8 +138,8 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     state.max_block_mip = decltype(state.max_block_mip)(
         "max_block_mip",
         (state.adata.wavelength.extent(0) + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
-        block_map.num_z_tiles,
-        block_map.num_x_tiles
+        block_map.num_z_tiles(),
+        block_map.num_x_tiles()
     );
     return c0_rays;
 }
@@ -161,7 +169,7 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     st->given_state.voxel_scale = voxel_scale;
     st->println("Scale: {} m", st->atmos.voxel_scale);
     BlockMap<BLOCK_SIZE> block_map;
-    block_map.init(x_dim, z_dim);
+    block_map.init(Dims<2>{.x = x_dim, .z = z_dim});
     i32 max_mip_level = 0;
     for (int i = 0; i <= config.max_cascade; ++i) {
         max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
@@ -209,8 +217,8 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     st->max_block_mip = decltype(st->max_block_mip)(
         "max_block_mip",
         (wave_dim + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
-        block_map.num_z_tiles,
-        block_map.num_x_tiles
+        block_map.num_z_tiles(),
+        block_map.num_x_tiles()
     );
     yakl::fence();
     return c0_rays;
@@ -230,7 +238,7 @@ void init_state (State* state, const DexrtConfig& config) {
         c0_rays = init_given_emis_opac(state, config);
     }
 
-    constexpr int RcMode = RC_flags_storage();
+    constexpr int RcMode = RC_flags_storage_2d();
     state->c0_size = cascade_rays_to_storage<RcMode>(c0_rays);
 
     allocate_J(state);
@@ -296,6 +304,10 @@ int handle_restart(State* st, const std::string& restart_path) {
 /// Dump a snapshot. File name determined automatically (e.g. main output
 /// dexrt_output.nc -> dexrt_output_snapshot.nc)
 void save_snapshot(const State& state, int num_iter) {
+    if (state.mpi_state.rank != 0) {
+        return;
+    }
+
     yakl::SimpleNetCDF nc;
     std::string name(state.config.output_path);
     std::string ext(".nc");
@@ -424,7 +436,7 @@ void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
             MRIdxGen idx_gen(mr_block_map);
             Coord2 coord = idx_gen.loop_coord(0, tile_idx, 0);
             Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
-            i32 mip_level = idx_gen.get_sample_level(coord.x, coord.z);
+            i32 mip_level = idx_gen.get_sample_level(coord);
             max_block_mip(wave_batch_idx, tile_coord.z, tile_coord.x) = mip_level;
         }
     );
@@ -669,12 +681,12 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_int(ncid, NC_GLOBAL, "block_size", NC_INT, 1, &block_size),
         __LINE__
     );
-    i32 nx_blocks = state.mr_block_map.block_map.num_x_tiles;
+    i32 nx_blocks = state.mr_block_map.block_map.num_x_tiles();
     ncwrap(
         nc_put_att_int(ncid, NC_GLOBAL, "num_x_blocks", NC_INT, 1, &nx_blocks),
         __LINE__
     );
-    i32 nz_blocks = state.mr_block_map.block_map.num_z_tiles;
+    i32 nz_blocks = state.mr_block_map.block_map.num_z_tiles();
     ncwrap(
         nc_put_att_int(ncid, NC_GLOBAL, "num_z_blocks", NC_INT, 1, &nz_blocks),
         __LINE__
@@ -758,14 +770,14 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
             if (sparse_J) {
                 maybe_rehydrate_and_write(state.J_cpu, "J", {"wavelength"});
             } else {
-                Fp3dHost J_full = state.J_cpu.reshape(state.J_cpu.extent(0), block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
+                Fp3dHost J_full = state.J_cpu.reshape(state.J_cpu.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
                 nc.write(J_full, "J", {"wavelength", "z", "x"});
             }
         } else {
             if (sparse_J) {
                 maybe_rehydrate_and_write(state.J, "J", {"wavelength"});
             } else {
-                Fp3d J_full = state.J.reshape(state.J.extent(0), block_map.num_z_tiles * BLOCK_SIZE, block_map.num_x_tiles * BLOCK_SIZE);
+                Fp3d J_full = state.J.reshape(state.J.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
                 nc.write(J_full, "J", {"wavelength", "z", "x"});
             }
         }
@@ -826,7 +838,7 @@ int main(int argc, char** argv) {
         .nargs(1)
         .help("Path to snapshot file")
         .metavar("FILE");
-    program.add_epilog("DexRT Radiance Cascade based non-LTE solver.");
+    program.add_epilog("DexRT Radiance Cascade based non-LTE solver (2d).");
 
     program.parse_args(argc, argv);
 
@@ -936,11 +948,15 @@ int main(int argc, char** argv) {
                     state.println("Ran for {} iterations", lte_i);
                 }
 
+                if (!do_restart) {
+                    set_initial_pops_special(&state);
+                }
+
                 if (do_restart) {
                     i = handle_restart(&state, *restart_path);
                 }
 
-                state.println("-- Non-LTE Iterations --");
+                state.println("-- Non-LTE Iterations ({} wavelengths) --", state.adata_host.wavelength.extent(0));
                 NgAccelerator ng;
                 if (config.ng.enable) {
                     ng.init(
@@ -953,6 +969,7 @@ int main(int argc, char** argv) {
                     );
                     ng.accelerate(state, FP(1.0));
                 }
+                bool first_iter = true;
                 bool accelerated = false;
                 while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
                     state.println("==== FS {} ====", i);
@@ -967,7 +984,8 @@ int main(int argc, char** argv) {
                         yakl::fence();
                     }
 
-                    compute_profile_normalisation(state, casc_state);
+                    bool print_worst_wphi = first_iter;
+                    compute_profile_normalisation(state, casc_state, print_worst_wphi);
                     state.J = FP(0.0);
                     if (config.store_J_on_cpu) {
                         state.J_cpu = FP(0.0);
@@ -1031,6 +1049,7 @@ int main(int argc, char** argv) {
                     ) {
                         save_snapshot(state, i);
                     }
+                    first_iter = false;
                 }
                 if (state.config.sparse_calculation && state.config.final_dense_fs) {
                     state.config.sparse_calculation = false;
@@ -1087,8 +1106,8 @@ int main(int argc, char** argv) {
                 }
                 wave_dist.wait_for_all(state.mpi_state);
             }
-            yakl::timer_stop("DexRT");
             wave_dist.reduce_J(&state);
+            yakl::timer_stop("DexRT");
             save_results(state, casc_state, num_iter);
         }
         finalize_state(&state);

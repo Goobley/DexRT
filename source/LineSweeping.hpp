@@ -427,7 +427,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(ray_set, subset_idx);
 
     i64 spatial_bounds = casc_state.probes_to_compute.num_active_probes(cascade_idx);
-    DeviceProbesToCompute probe_coord_lookup = casc_state.probes_to_compute.bind(cascade_idx);
+    DeviceProbesToCompute<2> probe_coord_lookup = casc_state.probes_to_compute.bind(cascade_idx);
     const IntervalLength interval_length = cascade_interval_length(casc_state.num_cascades, cascade_idx);
     // NOTE(cmo): This ensures the boundary conditions get properly incorporated.
     constexpr bool clamp_inside = true;

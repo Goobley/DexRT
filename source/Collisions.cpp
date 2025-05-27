@@ -1,6 +1,8 @@
 #include "Collisions.hpp"
+#include "State3d.hpp"
 
-void compute_collisions_to_gamma(State* state) {
+template <typename State_t>
+void compute_collisions_to_gamma(State_t* state) {
     const auto& atmos = state->atmos;
     const auto& Gamma_store = state->Gamma;
     const auto& nh_lte = state->nh_lte;
@@ -25,11 +27,13 @@ void compute_collisions_to_gamma(State* state) {
             state->atoms_with_gamma_mapping[ia]
         );
 
+        using IdxGen_t = std::conditional_t<std::is_same_v<State_t, State>, IdxGen, IdxGen3d>;
+
         dex_parallel_for(
             "collisions",
             mr_block_map.block_map.loop_bounds(),
             YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
-                IdxGen idx_gen(mr_block_map);
+                IdxGen_t idx_gen(mr_block_map);
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
 
                 compute_collisions(
@@ -45,3 +49,6 @@ void compute_collisions_to_gamma(State* state) {
         yakl::fence();
     }
 }
+
+template void compute_collisions_to_gamma<State>(State* state);
+template void compute_collisions_to_gamma<State3d>(State3d* state);

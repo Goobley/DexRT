@@ -28,7 +28,7 @@ struct UV {
 };
 
 struct UvOptions {
-    bool include_hc_4pi = true;
+    bool divide_by_hc_4pi = false;
 };
 
 struct LineParams {
@@ -193,7 +193,7 @@ YAKL_INLINE UV compute_uv(
     using namespace ConstantsFP;
     // [kJ]
     fp_t hnu_4pi = FP(1.0) / lambda;
-    if (opts.include_hc_4pi) {
+    if (!opts.divide_by_hc_4pi) {
         hnu_4pi *= hc_kJ_nm / four_pi;
     }
     const fp_t a = damping_from_gamma(params.gamma, lambda, params.dop_width);
@@ -221,8 +221,8 @@ YAKL_INLINE UV compute_uv(
     UV result;
     // [m2]
     result.Vij = params.sigma_grid.sigma(params.la - cont.blue_idx);
-    if (!opts.include_hc_4pi) {
-        result.Vij /= (hc_kJ_nm / four_pi);
+    if (opts.divide_by_hc_4pi) {
+        result.Vij *= four_pi / hc_kJ_nm;
     }
     // [m2]
     result.Vji = params.thermal_ratio * result.Vij;

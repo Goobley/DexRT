@@ -1,4 +1,5 @@
 #include "Populations.hpp"
+#include "State3d.hpp"
 #include "KokkosBatched_Gesv.hpp"
 #include "KokkosBatched_LU_Decl.hpp"
 #include "KokkosBatched_SolveLU_Decl.hpp"
@@ -33,6 +34,7 @@ void compute_lte_pops_flat(
 /**
  * Computes the LTE populations in state. Assumes state->pops is already allocated.
 */
+template <typename State>
 void compute_lte_pops(State* state) {
     for (int ia = 0; ia < state->atoms.size(); ++ia) {
         const auto& atom = state->atoms[ia];
@@ -44,7 +46,10 @@ void compute_lte_pops(State* state) {
         compute_lte_pops_flat(atom, state->atmos, pops);
     }
 }
+template void compute_lte_pops<State>(State* state);
+template void compute_lte_pops<State3d>(State3d* state);
 
+template <typename State>
 void compute_lte_pops(const State* state, const Fp2d& shared_pops) {
     for (int ia = 0; ia < state->atoms.size(); ++ia) {
         const auto& atom = state->atoms[ia];
@@ -56,7 +61,10 @@ void compute_lte_pops(const State* state, const Fp2d& shared_pops) {
         compute_lte_pops_flat(atom, state->atmos, flat_pops);
     }
 }
+template void compute_lte_pops<State>(const State* state, const Fp2d& shared_pops);
+template void compute_lte_pops<State3d>(const State3d* state, const Fp2d& shared_pops);
 
+template <typename State>
 void compute_nh0(const State& state) {
     const auto& nh0 = state.atmos.nh0;
     const auto& nh_lte = state.nh_lte;
@@ -87,6 +95,9 @@ void compute_nh0(const State& state) {
 
     yakl::fence();
 }
+
+template void compute_nh0<State>(const State& state);
+template void compute_nh0<State3d>(const State3d& state);
 
 #ifdef DEXRT_USE_MAGMA
 
@@ -366,7 +377,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
     return global_max_change;
 }
 #else
-template <typename T=fp_t>
+template <typename T=fp_t, typename State>
 fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
     // NOTE(cmo): This implementation works, and uses less memory, however it's
     // not very computationally efficient, as we're processing a small matrix
@@ -375,9 +386,11 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
     JasUnpack(args, ignore_change_below_ntot_frac);
     fp_t global_max_change = FP(0.0);
     for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
+        if (args.only_atom >= 0 && args.only_atom != ia) {
+            continue;
+        }
         JasUnpack((*state), pops);
         const auto& Gamma = state->Gamma[ia];
-        // GammaT has shape [ks, Nlevel, Nlevel]
         const fp_t abundance = state->adata_host.abundance(ia);
         const auto nh_tot = state->atmos.nh_tot;
 
@@ -630,6 +643,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
 }
 #endif
 
+template <typename State>
 fp_t stat_eq(State* state, const StatEqOptions& args) {
 #ifdef HAVE_MPI
     fp_t max_rel_change;
@@ -642,3 +656,6 @@ fp_t stat_eq(State* state, const StatEqOptions& args) {
     return stat_eq_impl<StatEqPrecision>(state, args);
 #endif
 }
+
+template fp_t stat_eq<State>(State* state, const StatEqOptions& args);
+template fp_t stat_eq<State3d>(State3d* state, const StatEqOptions& args);

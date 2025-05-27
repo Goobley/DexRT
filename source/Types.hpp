@@ -33,9 +33,14 @@ typedef yakl::Array<fp_t const, 5, yakl::memHost> FpConst5dHost;
 typedef yakl::SArray<fp_t, 1, 2> vec2;
 typedef yakl::SArray<fp_t, 1, 3> vec3;
 typedef yakl::SArray<fp_t, 1, 4> vec4;
+template <int N>
+using vec = yakl::SArray<fp_t, 1, N>;
 typedef yakl::SArray<fp_t, 2, 2, 2> mat2x2;
 typedef yakl::SArray<int, 2, 2, 2> imat2x2;
 typedef yakl::SArray<int32_t, 1, 2> ivec2;
+typedef yakl::SArray<int32_t, 1, 3> ivec3;
+template <int N>
+using ivec = yakl::SArray<int32_t, 1, N>;
 
 typedef Kokkos::LayoutRight Layout;
 template <class T, typename... Args>
@@ -53,17 +58,39 @@ typedef DefaultExecutionSpace::scratch_memory_space ScratchSpace;
 template <class T>
 using ScratchView = KView<T, ScratchSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
 
-struct Coord2 {
-    i32 x;
-    i32 z;
+template <int N>
+struct Coord {
+};
 
-    YAKL_INLINE bool operator==(const Coord2& other) const {
+template <>
+struct Coord<2> {
+    i32 x = -1;
+    i32 z = -1;
+
+    YAKL_INLINE bool operator==(const Coord<2>& other) const {
         return (x == other.x) && (z == other.z);
     }
 };
 
-using yakl::Dims;
+template <>
+struct Coord<3> {
+    i32 x = -1;
+    i32 y = -1;
+    i32 z = -1;
+
+    YAKL_INLINE bool operator==(const Coord<3>& other) const {
+        return (x == other.x) && (y == other.y) && (z == other.z);
+    }
+};
+
+typedef Coord<2> Coord2;
+typedef Coord<3> Coord3;
+
+template <int N>
+using Dims = Coord<N>;
+
 struct State;
+struct State3d;
 
 enum class DexrtMode {
     Lte,
@@ -79,12 +106,24 @@ struct CascadeStorage {
     int num_incl;
 };
 
+struct CascadeStorage3d {
+    ivec3 num_probes;
+    int num_az_rays;
+    int num_polar_rays;
+};
+
 /// The rays to be computed in a cascade
 struct CascadeRays {
     ivec2 num_probes;
     int num_flat_dirs;
     int wave_batch;
     int num_incl;
+};
+
+struct CascadeRays3d {
+    ivec3 num_probes;
+    int num_az_rays;
+    int num_polar_rays;
 };
 
 /// The rays in the partition of a cascade we're computing. For all
@@ -98,6 +137,14 @@ struct CascadeRaysSubset {
     int wave_batch;
     int start_incl;
     int num_incl;
+};
+
+// NOTE(cmo): Don't allow splitting probes... directions only
+struct CascadeRaysSubset3d {
+    int start_az_rays;
+    int num_az_rays;
+    int start_polar_rays;
+    int num_polar_rays;
 };
 
 struct InclQuadrature {
@@ -114,6 +161,7 @@ struct RadianceInterval {
     Alo alo;
 };
 
+/// deprecated but needs removing from API
 struct RayProps {
     vec2 start;
     vec2 end;
@@ -121,11 +169,164 @@ struct RayProps {
     vec2 centre;
 };
 
+template <int NumDim=2>
+struct GridBbox {
+    yakl::SArray<i32, 1, NumDim> min;
+    yakl::SArray<i32, 1, NumDim> max;
+};
+
+struct IntersectionResult {
+    /// i.e. at least partially inside.
+    bool intersects;
+    fp_t t0;
+    fp_t t1;
+};
+
+template <int NumDim=2>
+struct RaySegment {
+    vec<NumDim> o;
+    vec<NumDim> d;
+    vec<NumDim> inv_d;
+    fp_t t0;
+    fp_t t1;
+
+
+    YAKL_INLINE
+    RaySegment() :
+        o(),
+        d(),
+        inv_d(),
+        t0(),
+        t1()
+    {}
+
+    YAKL_INLINE
+    RaySegment(vec<NumDim> o_, vec<NumDim> d_, fp_t t0_=FP(0.0), fp_t t1_=FP(1e24)) :
+        o(o_),
+        d(d_),
+        t0(t0_),
+        t1(t1_)
+    {
+        for (int i = 0; i < NumDim; ++i) {
+            inv_d(i) = FP(1.0) / d(i);
+        }
+    }
+
+    YAKL_INLINE vec<NumDim> operator()(fp_t t) const {
+        vec<NumDim> result;
+        for (int i = 0; i < NumDim; ++i) {
+            result(i) = o(i) + t * d(i);
+        }
+        return result;
+    }
+
+    /// Check intersection in the sense of whether the ray is inside the bbox,
+    /// not whether it hits a boundary. Shrink bbox contours in that fraction of
+    /// a voxel to try and force ray positions in bounds.
+    YAKL_INLINE IntersectionResult intersects(const GridBbox<NumDim>& bbox, fp_t shrink_bbox=FP(1e-4)) const {
+        fp_t t0_ = t0;
+        fp_t t1_ = t1;
+
+        for (int ax = 0; ax < NumDim; ++ax) {
+            fp_t a = fp_t(bbox.min(ax)) + shrink_bbox;
+            fp_t b = fp_t(bbox.max(ax)) - shrink_bbox;
+            if (a >= b) {
+                return IntersectionResult{
+                    .intersects = false,
+                    .t0 = t0_,
+                    .t1 = t1_
+                };
+            }
+
+            a = (a - o(ax)) * inv_d(ax);
+            b = (b - o(ax)) * inv_d(ax);
+            if (a > b) {
+                fp_t temp = b;
+                b = a;
+                a = temp;
+            }
+
+            if (a > t0_) {
+                t0_ = a;
+            }
+            if (b < t1_) {
+                t1_ = b;
+            }
+            if (t0_ > t1_) {
+                return IntersectionResult{
+                    .intersects = false,
+                    .t0 = t0_,
+                    .t1 = t1_
+                };
+            }
+        }
+        return IntersectionResult{
+            .intersects = true,
+            .t0 = t0_,
+            .t1 = t1_
+        };
+    }
+
+    YAKL_INLINE bool clip(const GridBbox<NumDim>& bbox, bool* start_clipped=nullptr, fp_t shrink_bbox=FP(1e-4)) {
+        IntersectionResult result = intersects(bbox, shrink_bbox);
+        if (start_clipped) {
+            *start_clipped = false;
+        }
+
+        if (result.intersects) {
+            if (start_clipped && result.t0 > t0) {
+                *start_clipped = true;
+            }
+
+            t0 = result.t0;
+            t1 = result.t1;
+        }
+        return result.intersects;
+    }
+
+    /// Updates the origin to be ray(t) and the start/end t accordingly
+    YAKL_INLINE void update_origin(fp_t t) {
+        o = (*this)(t);
+        t0 -= t;
+        t1 -= t;
+    }
+
+    /// Computes t for a particular position. Does not verify if actually on the
+    /// line! Uses x unless dir(x) == 0, in which case it uses z (y in 3D and
+    /// then onto z if necessary)
+    YAKL_INLINE fp_t compute_t(vec2 pos) {
+        fp_t t;
+        if (d(0) != FP(0.0)) {
+            t = (pos(0) - o(0)) * inv_d(0);
+        } else {
+            if constexpr (NumDim == 3) {
+                if (d(1) != FP(0.0)) {
+                    t = (pos(1) - o(1)) * inv_d(1);
+                } else {
+                    t = (pos(2) - o(2)) * inv_d(2);
+                }
+            } else {
+                t = (pos(1) - o(1)) * inv_d(1);
+            }
+        }
+        return t;
+    }
+};
+
+template <int NumDim>
+using ActiveProbeView = std::conditional_t<
+    NumDim == 2,
+    yakl::Array<i32, 2, yakl::memDevice>,
+    yakl::Array<Coord3, 1, yakl::memDevice>
+>;
+
+template <int NumDim=2>
 struct DeviceProbesToCompute {
     bool sparse;
-    ivec2 num_probes;
-    yakl::Array<i32, 2, yakl::memDevice> active_probes; // [n, 2 (u, v)]
+    ivec<NumDim> num_probes;
+    ActiveProbeView<NumDim> active_probes; // [n, NumDim (u, v, (w))]
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 2, int> = 0>
     YAKL_INLINE ivec2 operator()(i64 ks) const {
         if (!sparse) {
             // NOTE(cmo): As in the loop over probes we iterate as [v, u] (u
@@ -134,8 +335,9 @@ struct DeviceProbesToCompute {
             // loop index k = v * Nu + u where Nu = dims.num_probes(0). This
             // preserves our iteration ordering
             ivec2 probe_coord;
-            probe_coord(0) = ks % num_probes(0);
+            // probe_coord(0) = ks % num_probes(0);
             probe_coord(1) = ks / num_probes(0);
+            probe_coord(0) = ks - num_probes(0) * probe_coord(1);
             return probe_coord;
         }
 
@@ -145,24 +347,50 @@ struct DeviceProbesToCompute {
         return probe_coord;
     }
 
+    template <int num_dim = NumDim, std::enable_if_t<num_dim == 3, int> = 0>
+    YAKL_INLINE ivec3 operator()(i64 ks) const {
+        if (!sparse) {
+            ivec3 probe_coord;
+            i32 stride = num_probes(0) * num_probes(1);
+            probe_coord(2) = ks / stride;
+            i64 offset = probe_coord(2) * stride;
+            stride = num_probes(0);
+            probe_coord(1) = i32((ks - offset) / stride);
+            offset += probe_coord(1) * stride;
+            probe_coord(0) = i32(ks - offset);
+            return probe_coord;
+        }
+
+        ivec3 probe_coord;
+        Coord3 pc = active_probes(ks);
+        probe_coord(0) = pc.x;
+        probe_coord(1) = pc.y;
+        probe_coord(2) = pc.z;
+        return probe_coord;
+    }
+
     YAKL_INLINE i64 num_active_probes() const {
         if (sparse) {
             return active_probes.extent(0);
         }
-        return num_probes(0) * num_probes(1);
+        i64 total_probes = num_probes(0) * num_probes(1);
+        if constexpr (NumDim == 3) {
+            total_probes *= num_probes(2);
+        }
+        return total_probes;
     }
 };
 
-struct ProbesToCompute {
+struct ProbesToCompute2d {
     bool sparse;
     CascadeStorage c0_size;
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes; // [n, 2 (u, v)]
+    std::vector<ActiveProbeView<2>> active_probes; // [n, 2 (u, v)]
 
     /// Setup object, low-level
     void init(
         const CascadeStorage& c0,
         bool sparse,
-        std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes = decltype(active_probes)()
+        std::vector<ActiveProbeView<2>> active_probes = decltype(active_probes)()
     );
 
     /// Setup object, high-level, from state
@@ -172,7 +400,32 @@ struct ProbesToCompute {
     );
 
     /// Bind cascade n to device type
-    DeviceProbesToCompute bind(int cascade_idx) const;
+    DeviceProbesToCompute<2> bind(int cascade_idx) const;
+
+    /// Number of probes to compute in cascade n
+    i64 num_active_probes(int cascade_idx) const;
+};
+
+struct ProbesToCompute3d {
+    bool sparse;
+    CascadeStorage3d c0_size;
+    std::vector<ActiveProbeView<3>> active_probes;
+
+    /// Setup object, low-level
+    void init(
+        const CascadeStorage3d& c0,
+        bool sparse,
+        std::vector<ActiveProbeView<3>> active_probes = decltype(active_probes)()
+    );
+
+    /// Setup object, high-level, from state
+    void init(
+        const State3d& state,
+        int max_cascade
+    );
+
+    /// Bind cascade n to device type
+    DeviceProbesToCompute<3> bind(int cascade_idx) const;
 
     /// Number of probes to compute in cascade n
     i64 num_active_probes(int cascade_idx) const;
@@ -184,22 +437,24 @@ struct CascadeCalcSubset {
     int subset_idx = 0;
 };
 
-struct Atmosphere {
+template <int NumDim=2, int mem_space=yakl::memDevice>
+struct AtmosphereNd {
     fp_t voxel_scale;
     fp_t offset_x = FP(0.0);
     fp_t offset_y = FP(0.0);
     fp_t offset_z = FP(0.0);
     bool moving = false;
-    Fp2d temperature;
-    Fp2d pressure;
-    Fp2d ne;
-    Fp2d nh_tot;
-    Fp2d nh0;
-    Fp2d vturb;
-    Fp2d vx;
-    Fp2d vy;
-    Fp2d vz;
+    yakl::Array<fp_t, NumDim, mem_space> temperature;
+    yakl::Array<fp_t, NumDim, mem_space> pressure;
+    yakl::Array<fp_t, NumDim, mem_space> ne;
+    yakl::Array<fp_t, NumDim, mem_space> nh_tot;
+    yakl::Array<fp_t, NumDim, mem_space> nh0;
+    yakl::Array<fp_t, NumDim, mem_space> vturb;
+    yakl::Array<fp_t, NumDim, mem_space> vx;
+    yakl::Array<fp_t, NumDim, mem_space> vy;
+    yakl::Array<fp_t, NumDim, mem_space> vz;
 };
+typedef AtmosphereNd<2> Atmosphere;
 
 struct SparseAtmosphere {
     fp_t voxel_scale;
@@ -357,6 +612,16 @@ enum class AtomicTreatment {
     Active
 };
 
+enum class AtomInitialPops {
+    Lte,
+    ZeroRadiation
+};
+
+struct ModelAtomConfig {
+    AtomicTreatment treatment = AtomicTreatment::Active;
+    AtomInitialPops init_pops_scheme = AtomInitialPops::Lte;
+};
+
 template <typename T=fp_t>
 struct ModelAtom {
     Element<T> element;
@@ -364,8 +629,10 @@ struct ModelAtom {
     std::vector<AtomicLine<T>> lines;
     std::vector<AtomicContinuum<T>> continua;
     std::vector<InterpCollRate<T>> coll_rates;
-    // TODO(cmo): Only here temporarily
-    AtomicTreatment treatment = AtomicTreatment::Active;
+
+    // NOTE(cmo): This is to be passed in with the extra info -- not atomic
+    // data, but how it is to be used in a particular simulation
+    ModelAtomConfig config;
 
     /// Compute the wavelength [nm] (lambda0 for lines, lambda_edge for
     /// continua) for a transition between levels j and i (j > i)
@@ -379,9 +646,9 @@ struct ModelAtom {
 template <typename T=fp_t>
 struct CompLine {
     /// Short wavelength index
-    int red_idx;
-    /// Long wavelength index
     int blue_idx;
+    /// Long wavelength index
+    int red_idx;
 
     /// atom index
     int atom = 0;
@@ -414,9 +681,9 @@ struct CompLine {
 
 template <typename T=fp_t>
 struct CompCont {
-    /// Short wavelength index
-    int red_idx;
     /// Long wavelength index
+    int red_idx;
+    /// short wavelength index
     int blue_idx;
 
     /// atom index
@@ -504,6 +771,7 @@ struct TransitionIndex {
 template <typename T=fp_t, int mem_space=memDevice>
 struct AtomicData {
     yakl::Array<AtomicTreatment const, 1, mem_space> treatment; // num_atom
+    yakl::Array<AtomInitialPops const, 1, mem_space> init_pops_scheme; // num_atom
     yakl::Array<T const, 1, mem_space> mass; // num_atom
     yakl::Array<T const, 1, mem_space> abundance; // num_atom
     yakl::Array<int const, 1, mem_space> Z; // num_atom
@@ -551,6 +819,17 @@ struct MipmapComputeState {
     const yakl::Array<i32, 1, yakl::memDevice>& mippable_entries;
     const Fp2d& emis;
     const Fp2d& opac;
+    const Fp1d& vx;
+    const Fp1d& vy;
+    const Fp1d& vz;
+};
+
+struct MipmapComputeState3d {
+    i32 max_mip_factor;
+    i32 la;
+    const yakl::Array<i32, 1, yakl::memDevice>& mippable_entries;
+    const Fp1d& emis;
+    const Fp1d& opac;
     const Fp1d& vx;
     const Fp1d& vy;
     const Fp1d& vz;

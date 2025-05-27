@@ -100,6 +100,11 @@ Features/ToDo
         - directly to rho
     - Paletou 1995 method?
 - [x] Support for linesweeping. Somewhat faster when treating non-sparse models, but surprisingly doesn't really win on dense models.
+- [x] Check ks <= int32 max
+- [x] Create BigFp1d for really large cascades in 3D
+    - Added explicit yakl::Array(label, yakl::DimsT<i64>) construcutor to force i64 sizes
+- [x] Add proper 64-bit 1d iterations to LoopUtils
+    - Somewhat done.
 
 
 Ideas
@@ -121,6 +126,8 @@ Ideas
 - [ ] Sparse line quadratures that fit entirely inside a WAVE_BATCH (can be increased). Ensure whole line is done in one go, them use a higher order scheme to evaluate the wavelength integral over I?
 - [ ] If we stick with such a simple ALO, it can actually be computed in-situ when computing Gamma, saving the memory.
 - [ ] Refactor voxel coordinates to uints. Division etc is more efficient. If they end up negative, they wraparound, so we'd only need to check one > per axis rather than two to fully check bounds/
+- [x] Should really use a flux conserving rebinning for the PwBc, rather than simply interpolating (at least for the non-LTE solution). e.g. https://github.com/astropy/specutils/blob/6dcc1ade986854a8da9642821d7f7bcb32034bd2/specutils/manipulation/resample.py#L47
+- [ ] Try damping n_e correction, both during LTE and non-LTE steps
 
 
 Notes

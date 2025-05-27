@@ -5,6 +5,7 @@
 #include "RcUtilsModes.hpp"
 #include "JasPP.hpp"
 #include "State.hpp"
+#include "CascadeState.hpp"
 #include "EmisOpac.hpp"
 #include "BlockMap.hpp"
 #include "DirectionalEmisOpacInterp.hpp"
@@ -215,8 +216,16 @@ struct RayMarchState2d {
             );
         };
         // NOTE(cmo): Initialise to the first intersection so dt != 0
+        constexpr i32 max_steps = 32;
+        i32 steps = 0;
         while (!in_bounds() || (in_bounds() && this->dt < FP(1e-6))) {
             next_intersection(this);
+            if (++steps > max_steps) {
+#ifdef DEXRT_DEBUG
+                yakl::yakl_throw("Failed to walk into grid");
+#endif
+                return false;
+            }
         }
 
         return true;
@@ -428,10 +437,10 @@ struct Raymarch2dArgs {
     const DynamicState& dyn_state;
 };
 
-YAKL_INLINE RaySegment ray_seg_from_ray_props(const RayProps& ray) {
+YAKL_INLINE RaySegment<2> ray_seg_from_ray_props(const RayProps& ray) {
     fp_t t1 = (ray.end(0) - ray.start(0)) / ray.dir(0);
 
-    return RaySegment(ray.start, ray.dir, FP(0.0), t1);
+    return RaySegment<2>(ray.start, ray.dir, FP(0.0), t1);
 }
 
 template <
@@ -448,7 +457,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic = (RcMode & RC_DYNAMIC);
     constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>;
-    constexpr bool dynmaic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
+    constexpr bool dynamic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
     bool start_clipped;
@@ -491,7 +500,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         if (s.can_sample()) {
             i32 u = s.curr_coord(0);
             i32 v = s.curr_coord(1);
-            i64 ks = idx_gen.idx(s.current_mip_level, u, v);
+            i64 ks = idx_gen.idx(s.current_mip_level, Coord2{.x = u, .z = v});
 
             if constexpr (dynamic_interp) {
                 const fp_t vel = (
@@ -502,7 +511,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
                 eta_s = contrib.eta;
                 chi_s = contrib.chi + FP(1e-15);
-            } else if constexpr (dynmaic_cav) {
+            } else if constexpr (dynamic_cav) {
                 JasUnpack(dyn_state, active_set, profile, adata);
                 i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
                 eta_s = mip_chain.emis.get_data()[ks_wave];
@@ -516,6 +525,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 CavEmisOpacState emis_opac_state {
                     .ks = ks,
                     .krl = 0,
+                    .wave = wave,
                     .lambda = lambda,
                     .vel = vel,
                     .phi = profile

@@ -13,24 +13,25 @@ bool CascadeState::init(const State& state, int max_cascades) {
     probes_to_compute.init(c0, sparse_calc, active_probes);
     num_cascades = max_cascades;
 
+    i64 max_entries = 0;
+    for (int i = 0; i <= max_cascades; ++i) {
+        auto dims = cascade_size(c0, i);
+        auto rays = cascade_storage_to_rays<RC_flags_storage_2d()>(dims);
+        IntervalLength length = cascade_interval_length(max_cascades, i);
+        state.println("Cascade {}: {}x{} {}(x{}) directions [{}->{}]", i, dims.num_probes(0), dims.num_probes(1), rays.num_flat_dirs, rays.num_incl, length.from, length.to);
+        max_entries = std::max(max_entries, cascade_entries(dims));
+    }
     if constexpr (PINGPONG_BUFFERS) {
-        i64 max_entries = 0;
-        for (int i = 0; i <= max_cascades; ++i) {
-            auto dims = cascade_size(c0, i);
-            IntervalLength length = cascade_interval_length(max_cascades, i);
-            state.println("Cascade {}: {}x{} {} directions [{}->{}]", i, dims.num_probes(0), dims.num_probes(1), dims.num_flat_dirs * PROBE0_NUM_RAYS, length.from, length.to);
-            max_entries = std::max(max_entries, cascade_entries(dims));
-        }
         for (int i = 0; i < 2; ++i) {
             i_cascades.push_back(
                 Fp1d(
                     "i_cascade",
-                    max_entries
+                    yakl::DimsT<i64>(max_entries)
                 )
             );
             Fp1d tau_entry;
             if constexpr (STORE_TAU_CASCADES) {
-                tau_entry = Fp1d("tau_cascade", max_entries);
+                tau_entry = Fp1d("tau_cascade", yakl::DimsT<i64>(max_entries));
             }
             tau_cascades.push_back(tau_entry);
         }
@@ -41,18 +42,18 @@ bool CascadeState::init(const State& state, int max_cascades) {
             i_cascades.push_back(
                 Fp1d(
                     "i_cascade",
-                    entries
+                    yakl::DimsT<i64>(entries)
                 )
             );
             Fp1d tau_entry;
             if constexpr (STORE_TAU_CASCADES) {
-                tau_entry = Fp1d("tau_cascade", entries);
+                tau_entry = Fp1d("tau_cascade", yakl::DimsT<i64>(entries));
             }
             tau_cascades.push_back(tau_entry);
         }
     }
     if (state.config.mode == DexrtMode::NonLte) {
-        alo = Fp1d("ALO", i_cascades[0].extent(0));
+        alo = Fp1d("ALO", yakl::DimsT<i64>(i_cascades[0].extent(0)));
     }
     mip_chain.init(state, state.mr_block_map.buffer_len(), c0.wave_batch);
 

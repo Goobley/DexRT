@@ -318,20 +318,21 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
             return a.element.mass < b.element.mass;
         }
     );
-    // TODO(cmo): Currently just set all atoms active
     AtomicData<T, yakl::memHost> host_data;
     const int n_atom = models.size();
     yakl::Array<T, 1, yakl::memHost> mass("mass", n_atom);
     yakl::Array<T, 1, yakl::memHost> abundance("abundance", n_atom);
     yakl::Array<int, 1, yakl::memHost> Z("Z", n_atom);
     yakl::Array<AtomicTreatment, 1, yakl::memHost> treatment("treatment", n_atom);
+    yakl::Array<AtomInitialPops, 1, yakl::memHost> init_pops_scheme("init_pops_scheme", n_atom);
     for (int i = 0; i < n_atom; ++i) {
         mass(i) = models[i].element.mass;
         Z(i) = models[i].element.Z;
         abundance(i) = std::pow(DFPU(10.0), models[i].element.abundance - DFPU(12.0));
-        treatment(i) = models[i].treatment;
+        treatment(i) = models[i].config.treatment;
+        init_pops_scheme(i) = models[i].config.init_pops_scheme;
     }
-    JasPack(host_data, mass, abundance, Z, treatment);
+    JasPack(host_data, mass, abundance, Z, treatment, init_pops_scheme);
 
     int total_n_level = 0;
     int total_n_line = 0;
@@ -713,6 +714,7 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
 
     AtomicData<T, yakl::memDevice> dev_data{
         .treatment = host_data.treatment.createDeviceCopy(),
+        .init_pops_scheme = host_data.init_pops_scheme.createDeviceCopy(),
         .mass = host_data.mass.createDeviceCopy(),
         .abundance = host_data.abundance.createDeviceCopy(),
         .Z = host_data.Z.createDeviceCopy(),
@@ -910,25 +912,31 @@ void compute_lte_pops_flat(
 /**
  * Computes the LTE populations in state. Assumes state->pops is already allocated.
 */
+template <typename State>
 void compute_lte_pops(State* state);
 
 /**
  * Computes the LTE populations in to a provided allocated array.
 */
+template <typename State>
 void compute_lte_pops(const State* state, const Fp2d& shared_pops);
 
 struct StatEqOptions {
     /// When computing relative change, ignore the change in populations with a
     /// starting fraction lower than this
     fp_t ignore_change_below_ntot_frac = FP(0.0);
+    /// If only solving one atom, its index in adata. A negative number implies all atoms.
+    int only_atom = -1;
 };
 
+template <typename State>
 void compute_nh0(const State& state);
 
 /**
  * Computes the statistical equilibrium solution for the atoms in State.
  * Internal precision configured in Config.
  */
+template <typename State>
 fp_t stat_eq(State* state, const StatEqOptions& args = StatEqOptions());
 
 #else

@@ -6,6 +6,11 @@
 #include "Utils.hpp"
 #include "YAKL_netcdf.h"
 
+enum class PromweaverResampleType {
+    FluxConserving,
+    Interpolation
+};
+
 template <int mem_space=yakl::memDevice>
 struct PwBc {
     fp_t mu_min;
@@ -13,7 +18,12 @@ struct PwBc {
     fp_t mu_step;
     yakl::Array<fp_t, 2, mem_space> I; // [wl, mu]
 };
-PwBc<> load_bc(const std::string& path, const FpConst1d& wavelength, BoundaryType type);
+PwBc<> load_bc(
+    const std::string& path,
+    const FpConst1d& wavelength,
+    BoundaryType type,
+    PromweaverResampleType resample = PromweaverResampleType::FluxConserving
+);
 
 /** Computes the outgoing mu (relative to the surface normal at the location of
  * the ray hit). Assumes the Sun is a sphere with radius 695,700 km. Looks both

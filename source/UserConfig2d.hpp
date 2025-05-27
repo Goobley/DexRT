@@ -47,7 +47,7 @@ typedef fp_t GammaFp;
 #ifdef FLATLAND
 constexpr int NUM_INCL = 1;
 #else
-constexpr int NUM_INCL = 8;
+constexpr int NUM_INCL = 4;
 #endif
 
 /*== Memory/Warp size ========================================================*/
@@ -65,7 +65,7 @@ constexpr bool STORE_TAU_CASCADES = false;
 // Whether to store all cascades, e.g. for saving or debugging, or simply
 // "ping-pong" between two cascades, merging as we go between cascade i+1 and i.
 // Can be a significant memory saving
-constexpr bool PINGPONG_BUFFERS = false;
+constexpr bool PINGPONG_BUFFERS = true;
 
 // The wavelength batch is typically set based on the warp size and number of
 // inclinations, but can be overridden here. Override not well tested.
@@ -99,7 +99,7 @@ constexpr int CASCADE_BRANCHING_FACTOR = 2;
 constexpr int UPPER_BRANCHING_FACTOR = 1;
 // The cascade at which to transition to UPPER_BRANCHING_FACTOR (set to 0 to
 // disable).
-constexpr int BRANCHING_FACTOR_SWITCH = 0;
+constexpr int BRANCHING_FACTOR_SWITCH = 3;
 
 // Whether to run the rays of the last cascade off the grid regardless of where
 // they start, to correctly sample the boundary conditions.
