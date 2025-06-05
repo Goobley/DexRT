@@ -134,13 +134,19 @@ def Johnson_CI(i, Eij, Te):
     return ci
 
 
-def make_atom():
+def make_atom(extend_long_lines=False):
     conv = LightweaverAtomConverter()
     model = conv.convert(H_6_atom())
     if OLD_LW:
         for l in model.lines:
             l.wavelength_grid.q_core *= 4
             l.wavelength_grid.q_wing *= 5
+    if extend_long_lines:
+        for l in model.lines:
+            if crtaf.compute_lambda0(model, l) > 1e3 * u.nm:
+                # l.wavelength_grid.n_lambda *= 2
+                l.wavelength_grid.q_core *= 3
+                l.wavelength_grid.q_wing *= 7
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     for coll_trans in model_simplified.collisions:
@@ -202,7 +208,7 @@ def make_H_10():
     # model_simplified.lines = new_lines
     return model_simplified
 
-def make_H_9():
+def make_H_9(extend_long_lines=False):
     conv = LightweaverAtomConverter()
     H_9 = H_atom()
 
@@ -211,6 +217,12 @@ def make_H_9():
         for l in model.lines:
             l.wavelength_grid.q_core *= 4
             l.wavelength_grid.q_wing *= 5
+    if extend_long_lines:
+        for l in model.lines:
+            if crtaf.compute_lambda0(model, l) > 1e3 * u.nm:
+                # l.wavelength_grid.n_lambda *= 2
+                l.wavelength_grid.q_core *= 3
+                l.wavelength_grid.q_wing *= 7
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     for coll_trans in model_simplified.collisions:
@@ -225,6 +237,8 @@ def make_H_9():
                     coll.data = Johnson_CE(n, nn, Eij.value, h_coll_temperature_grid) << rate_unit
                 elif isinstance(coll, CIRate):
                     coll.data = Johnson_CI(n, Eij.value, h_coll_temperature_grid) << rate_unit
+
+
     # new_lines = []
     # for l in model_simplified.lines:
     #     if l.lambda0 < 1000.0 * u.nm:
@@ -335,10 +349,18 @@ if __name__ == "__main__":
     with open("H_6.yaml", "w") as f:
         f.write(atom.yaml_dumps())
 
+    atom = make_atom(extend_long_lines=True)
+    with open("H_6_dense_long.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
     atom = make_H_10()
     with open("H_10.yaml", "w") as f:
         f.write(atom.yaml_dumps())
 
     atom = make_H_9()
     with open("H_9.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_H_9(extend_long_lines=True)
+    with open("H_9_dense_long.yaml", "w") as f:
         f.write(atom.yaml_dumps())

@@ -587,6 +587,17 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
         nc_put_att_int(ncid, NC_GLOBAL, "conserve_pressure_nr", NC_INT, 1, &conserve_pressure_nr),
         __LINE__
     );
+    i32 extra_safe_source_fn = EXTRA_SAFE_SOURCE_FN;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "extra_safe_source_fn", NC_INT, 1, &extra_safe_source_fn),
+        __LINE__
+    );
+    i32 report_nan_intensity = REPORT_NAN_INTENSITY;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "report_nan_intensity", NC_INT, 1, &report_nan_intensity),
+        __LINE__
+    );
+
 
     i32 warp_size = DEXRT_WARP_SIZE;
     ncwrap(
@@ -747,7 +758,7 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     add_netcdf_attributes(state, nc, num_iter);
     const auto& block_map = state.mr_block_map.block_map;
 
-    bool sparse_J = (state.J.extent(1) == state.atmos.temperature.extent(0));
+    bool sparse_J = state.config.sparse_calculation && (state.J.extent(1) == state.atmos.temperature.extent(0));
 
     auto maybe_rehydrate_and_write = [&](
         auto arr,

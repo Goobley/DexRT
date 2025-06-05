@@ -99,7 +99,7 @@ constexpr int CASCADE_BRANCHING_FACTOR = 2;
 constexpr int UPPER_BRANCHING_FACTOR = 1;
 // The cascade at which to transition to UPPER_BRANCHING_FACTOR (set to 0 to
 // disable).
-constexpr int BRANCHING_FACTOR_SWITCH = 3;
+constexpr int BRANCHING_FACTOR_SWITCH = 0;
 
 // Whether to run the rays of the last cascade off the grid regardless of where
 // they start, to correctly sample the boundary conditions.
@@ -205,6 +205,14 @@ constexpr int CORE_AND_VOIGT_MAX_LINES = 4;
 // Whether to conserve pressure in the charge conservation Newton-Raphson, or in
 // the separate secondary iteration.
 constexpr bool CONSERVE_PRESSURE_NR = true;
+
+// Whether to potentially branch on the denominator of the source function to
+// prevent division by zero.
+constexpr bool EXTRA_SAFE_SOURCE_FN = true;
+
+// Whether to validate that the intensity is not nan before merging to J (and
+// report the wavelength if it is).
+constexpr bool REPORT_NAN_INTENSITY = false;
 
 #else
 #endif

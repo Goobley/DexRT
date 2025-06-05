@@ -314,6 +314,11 @@ void add_netcdf_attributes(const State3d& state, const yakl::SimpleNetCDF& file,
         nc_put_att_int(ncid, NC_GLOBAL, "conserve_pressure_nr", NC_INT, 1, &conserve_pressure_nr),
         __LINE__
     );
+    i32 extra_safe_source_fn = EXTRA_SAFE_SOURCE_FN;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "extra_safe_source_fn", NC_INT, 1, &extra_safe_source_fn),
+        __LINE__
+    );
 
     i32 num_atom = state.adata_host.num_level.extent(0);
     ncwrap(

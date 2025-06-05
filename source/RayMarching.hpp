@@ -588,6 +588,9 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                 }
             }
 
+            if constexpr (EXTRA_SAFE_SOURCE_FN) {
+                chi_s += (std::abs(chi_s) < FP(1e-15)) * FP(1e-15);
+            }
             fp_t tau = chi_s * s.dt * distance_scale;
             fp_t source_fn = eta_s / chi_s;
 

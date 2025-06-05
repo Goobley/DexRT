@@ -23,6 +23,7 @@ inline FpConst2d merge_c0_to_J(
     const fp_t phi_weight = FP(1.0) / fp_t(c0_dirs_to_average<RcMode>());
     int wave_batch = la_end - la_start;
 
+    const int full_la_start = la_start;
     // NOTE(cmo): Handle case of J on the GPU only being a single plane (config.store_J_on_cpu)
     if (c0_dims.wave_batch == J.extent(0)) {
         la_start = 0;
@@ -48,7 +49,6 @@ inline FpConst2d merge_c0_to_J(
                 .incl=theta_idx,
                 .wave=wave
             };
-            // NOTE(cmo): Can't use this when sparse
             i64 ks;
             if (sparse) {
                 IdxGen idx_gen(block_map);
@@ -57,6 +57,11 @@ inline FpConst2d merge_c0_to_J(
                 ks = i64(coord(1)) * c0_dims.num_probes(0) + coord(0);
             }
             const fp_t sample = probe_fetch<RcMode>(c0, c0_dims, idx);
+            if (REPORT_NAN_INTENSITY) {
+                if (std::isnan(sample) || sample < FP(0.0)) {
+                    printf("nan intensity at ks=%" PRId64 ", dir=%d, incl=%d, la=%d ", ks, phi_idx, theta_idx, full_la_start + wave);
+                }
+            }
             Kokkos::atomic_add(&J(la, ks), ray_weight * sample);
         }
     );

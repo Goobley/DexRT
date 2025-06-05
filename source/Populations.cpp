@@ -604,6 +604,10 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                     new_pop_scaled *= n_total_k;
                 }
 
+                // if (new_pop_scaled < FP(1e-3) || std::isnan(new_pop_scaled)) {
+                //     new_pop_scaled = FP(1e-3);
+                // }
+
                 // compute change
                 if (pops(pops_start + i, ks) < ignore_change_below_ntot_frac * n_total_k) {
                     change = FP(0.0);

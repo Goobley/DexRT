@@ -896,6 +896,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                     change = std::abs(update / (pops(i, ks)));
                 }
                 pops(i, ks) += update;
+                // if (pops(i, ks) < FP(1e-3) || std::isnan(pops(i, ks))) {
+                //     pops(i, ks) = FP(1e-3);
+                // }
             } else {
                 fp_t ne_update = F(ks, num_eqn-1);
                 fp_t updated = ne(ks) + ne_update;
@@ -905,6 +908,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                 }
                 change = std::abs(ne_update / ne(ks));
                 ne(ks) += ne_update;
+                // if (ne(ks) < FP(1e-3) || std::isnan(ne(ks))) {
+                //     ne(ks) = FP(1e-3);
+                // }
             }
 
             // reduce update
