@@ -209,7 +209,7 @@ namespace DexImpl {
 
     template <class ExecutionSpace, template <typename...> class Reducer, typename... RedArgs>
     struct reducer_type_in_space {
-        typedef reducer_type_impl<sizeof...(RedArgs), ExecutionSpace, Reducer, RedArgs...>::type type;
+        typedef typename reducer_type_impl<sizeof...(RedArgs), ExecutionSpace, Reducer, RedArgs...>::type type;
     };
 };
 
