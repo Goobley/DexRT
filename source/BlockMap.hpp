@@ -725,7 +725,7 @@ struct MultiLevelIndexGen {
     MultiLevelIndexGen(
         const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim>& mip_block_map_
     ) :
-        tile_key({.mip_level = -1}),
+        tile_key(MultiLevelTileKey<NumDim>{.mip_level = -1, .coord=Coord<NumDim>{}}),
         tile_base_idx(),
         block_map(mip_block_map_.block_map),
         mip_block_map(mip_block_map_)

@@ -24,8 +24,8 @@ inline auto get_GammaFpMpi() {
 inline void init_mpi(int argc, char* argv[]) {
 #ifdef HAVE_MPI
     int provided;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &provided);
-    if (provided < MPI_THREAD_SERIALIZED) {
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+    if (provided < MPI_THREAD_MULTIPLE) {
         fmt::println("Insufficient MPI threading support, got {}", provided);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
     }

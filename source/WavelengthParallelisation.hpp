@@ -13,6 +13,8 @@ inline void setup_comm(State* state) {
     MPI_Comm_dup(MPI_COMM_WORLD, &state->mpi_state.comm);
     MPI_Comm_size(state->mpi_state.comm, &state->mpi_state.num_ranks);
     MPI_Comm_rank(state->mpi_state.comm, &state->mpi_state.rank);
+    MPI_Barrier(state->mpi_state.comm);
+    state->println("Running on {} ranks", state->mpi_state.num_ranks);
 #endif
 }
 
