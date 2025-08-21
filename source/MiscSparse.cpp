@@ -123,14 +123,14 @@ yakl::Array<u8, 2, yakl::memDevice> reify_active_c0(const BlockMap<BLOCK_SIZE>& 
 }
 
 // Rehydrates the page from page_idx into qty_page
-template <int BLOCK_SIZE, int NumDim>
+template <int BLOCK_SIZE, int NumDim, typename T>
 void rehydrate_page(
     const BlockMap<BLOCK_SIZE, NumDim>& block_map,
-    const Fp2d& quantity,
-    const yakl::Array<fp_t, NumDim, yakl::memDevice>& qty_page,
+    const yakl::Array<T, 2, yakl::memDevice>& quantity,
+    const yakl::Array<T, NumDim, yakl::memDevice>& qty_page,
     int page_idx
 ) {
-    qty_page = FP(0.0);
+    qty_page = T(0.0);
     yakl::fence();
 
     using IdxGen_t = std::conditional_t<NumDim == 2, IdxGen, IdxGen3d>;
@@ -154,20 +154,24 @@ void rehydrate_page(
     yakl::fence();
 }
 
-Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp2d& quantity) {
+template <typename T>
+yakl::Array<T, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<T, 2, yakl::memDevice>& quantity
+) {
     const int num_x = block_map.num_x_tiles() * block_map.BLOCK_SIZE;
     const int num_z = block_map.num_z_tiles() * block_map.BLOCK_SIZE;
-    Fp3dHost result(
+    yakl::Array<T, 3, yakl::memHost> result(
         quantity.myname,
         quantity.extent(0),
         num_z,
         num_x
     );
-    Fp2d qty_page("qty_page", num_z, num_x);
+    yakl::Array<T, 2, yakl::memDevice> qty_page("qty_page", num_z, num_x);
 
     for (int n = 0; n < quantity.extent(0); ++n) {
         rehydrate_page(block_map, quantity, qty_page, n);
-        Fp2dHost qty_page_host = qty_page.createHostCopy();
+        auto qty_page_host = qty_page.createHostCopy();
 
         for (int z = 0; z < num_z; ++z) {
             for (int x = 0; x < num_x; ++x) {
@@ -177,23 +181,35 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
     }
     return result;
 }
+template yakl::Array<f32, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<f32, 2, yakl::memDevice>& quantity
+);
+template yakl::Array<f64, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<f64, 2, yakl::memDevice>& quantity
+);
 
-Fp4dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, const Fp2d& quantity) {
+template <typename T>
+yakl::Array<T, 4, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<T, 2, yakl::memDevice>& quantity
+) {
     const int num_x = block_map.num_x_tiles() * block_map.BLOCK_SIZE;
     const int num_y = block_map.num_y_tiles() * block_map.BLOCK_SIZE;
     const int num_z = block_map.num_z_tiles() * block_map.BLOCK_SIZE;
-    Fp4dHost result(
+    yakl::Array<T, 4, yakl::memHost> result(
         quantity.myname,
         quantity.extent(0),
         num_z,
         num_y,
         num_x
     );
-    Fp3d qty_page("qty_page", num_z, num_y, num_x);
+    yakl::Array<T, 3, yakl::memDevice> qty_page("qty_page", num_z, num_y, num_x);
 
     for (int n = 0; n < quantity.extent(0); ++n) {
         rehydrate_page(block_map, quantity, qty_page, n);
-        Fp3dHost qty_page_host = qty_page.createHostCopy();
+        auto qty_page_host = qty_page.createHostCopy();
 
         for (int z = 0; z < num_z; ++z) {
             for (int y = 0; z < num_y; ++y) {
@@ -205,25 +221,37 @@ Fp4dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, 
     }
     return result;
 }
+template yakl::Array<f32, 4, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<f32, 2, yakl::memDevice>& quantity
+);
+template yakl::Array<f64, 4, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<f64, 2, yakl::memDevice>& quantity
+);
 
-Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp2dHost& quantity) {
+template <typename T>
+yakl::Array<T, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<T, 2, yakl::memHost>& quantity
+) {
     // NOTE(cmo): This is not efficient, it just reuses the GPU machinery,
     // copying a page of CPU memory over at a time
     const int num_x = block_map.num_x_tiles() * block_map.BLOCK_SIZE;
     const int num_z = block_map.num_z_tiles() * block_map.BLOCK_SIZE;
-    Fp3dHost result(
+    yakl::Array<T, 3, yakl::memHost> result(
         quantity.myname,
         quantity.extent(0),
         num_z,
         num_x
     );
-    Fp2d qty_page("qty_page", num_z, num_x);
-    Fp2d qty_gpu("qty_gpu", 1, quantity.extent(1));
+    yakl::Array<T, 2, yakl::memDevice> qty_page("qty_page", num_z, num_x);
+    yakl::Array<T, 2, yakl::memDevice> qty_gpu("qty_gpu", 1, quantity.extent(1));
 
     for (int n = 0; n < quantity.extent(0); ++n) {
-        qty_gpu = Fp2dHost("qty_slice", &quantity(n, 0), 1, quantity.extent(1)).createDeviceCopy();
+        qty_gpu = yakl::Array<T, 2, yakl::memHost>("qty_slice", &quantity(n, 0), 1, quantity.extent(1)).createDeviceCopy();
         rehydrate_page(block_map, qty_gpu, qty_page, 0);
-        Fp2dHost qty_page_host = qty_page.createHostCopy();
+        auto qty_page_host = qty_page.createHostCopy();
 
         for (int z = 0; z < num_z; ++z) {
             for (int x = 0; x < num_x; ++x) {
@@ -233,27 +261,39 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const 
     }
     return result;
 }
+template yakl::Array<f32, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<f32, 2, yakl::memHost>& quantity
+);
+template yakl::Array<f64, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<f64, 2, yakl::memHost>& quantity
+);
 
-Fp4dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, const Fp2dHost& quantity) {
+template <typename T>
+yakl::Array<T, 4, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<T, 2, yakl::memHost>& quantity
+) {
     // NOTE(cmo): This is not efficient, it just reuses the GPU machinery,
     // copying a page of CPU memory over at a time
     const int num_x = block_map.num_x_tiles() * block_map.BLOCK_SIZE;
     const int num_y = block_map.num_y_tiles() * block_map.BLOCK_SIZE;
     const int num_z = block_map.num_z_tiles() * block_map.BLOCK_SIZE;
-    Fp4dHost result(
+    yakl::Array<T, 4, yakl::memHost> result(
         quantity.myname,
         quantity.extent(0),
         num_z,
         num_y,
         num_x
     );
-    Fp3d qty_page("qty_page", num_z, num_y, num_x);
-    Fp2d qty_gpu("qty_gpu", 1, quantity.extent(1));
+    yakl::Array<T, 3, yakl::memDevice> qty_page("qty_page", num_z, num_y, num_x);
+    yakl::Array<T, 2, yakl::memDevice> qty_gpu("qty_gpu", 1, quantity.extent(1));
 
     for (int n = 0; n < quantity.extent(0); ++n) {
-        qty_gpu = Fp2dHost("qty_slice", &quantity(n, 0), 1, quantity.extent(1)).createDeviceCopy();
+        qty_gpu = yakl::Array<T, 2, yakl::memHost>("qty_slice", &quantity(n, 0), 1, quantity.extent(1)).createDeviceCopy();
         rehydrate_page(block_map, qty_gpu, qty_page, 0);
-        Fp3dHost qty_page_host = qty_page.createHostCopy();
+        auto qty_page_host = qty_page.createHostCopy();
 
         for (int z = 0; z < num_z; ++z) {
             for (int y = 0; y < num_y; ++y) {
@@ -265,31 +305,63 @@ Fp4dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, 
     }
     return result;
 }
+template yakl::Array<f32, 4, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<f32, 2, yakl::memHost>& quantity
+);
+template yakl::Array<f64, 4, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<f64, 2, yakl::memHost>& quantity
+);
 
-Fp2dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE>& block_map, const Fp1d& quantity) {
-    Fp2d qtyx1("1 x qty", quantity.data(), 1, quantity.extent(0));
-    Fp2d qty_page(
+template <typename T>
+yakl::Array<T, 2, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<T, 1, yakl::memDevice>& quantity
+) {
+    yakl::Array<T, 2, yakl::memDevice> qtyx1("1 x qty", quantity.data(), 1, quantity.extent(0));
+    yakl::Array<T, 2, yakl::memDevice> qty_page(
         "qty_page",
         block_map.num_z_tiles() * block_map.BLOCK_SIZE,
         block_map.num_x_tiles() * block_map.BLOCK_SIZE
     );
     rehydrate_page(block_map, qtyx1, qty_page, 0);
-    Fp2dHost result = qty_page.createHostCopy();
+    auto result = qty_page.createHostCopy();
     return result;
 }
+template yakl::Array<f32, 2, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<f32, 1, yakl::memDevice>& quantity
+);
+template yakl::Array<f64, 2, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE>& block_map,
+    const yakl::Array<f64, 1, yakl::memDevice>& quantity
+);
 
-Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, const Fp1d& quantity) {
-    Fp2d qtyx1("1 x qty", quantity.data(), 1, quantity.extent(0));
-    Fp3d qty_page(
+template <typename T>
+yakl::Array<T, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<T, 1, yakl::memDevice>& quantity
+) {
+    yakl::Array<T, 2, yakl::memDevice> qtyx1("1 x qty", quantity.data(), 1, quantity.extent(0));
+    yakl::Array<T, 3, yakl::memDevice> qty_page(
         "qty_page",
         block_map.num_z_tiles() * block_map.BLOCK_SIZE,
         block_map.num_y_tiles() * block_map.BLOCK_SIZE,
         block_map.num_x_tiles() * block_map.BLOCK_SIZE
     );
     rehydrate_page(block_map, qtyx1, qty_page, 0);
-    Fp3dHost result = qty_page.createHostCopy();
+    auto result = qty_page.createHostCopy();
     return result;
 }
+template yakl::Array<f32, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<f32, 1, yakl::memDevice>& quantity
+);
+template yakl::Array<f64, 3, yakl::memHost> rehydrate_sparse_quantity(
+    const BlockMap<BLOCK_SIZE_3D, 3>& block_map,
+    const yakl::Array<f64, 1, yakl::memDevice>& quantity
+);
 
 std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(const State& state, int max_cascades) {
     // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if

@@ -38,6 +38,8 @@ struct State {
     Fp2d pops; /// [num_level, ks]
     Fp2d J; /// [num_wave, ks] -- if we're paging J to cpu, the first axis is wave_batch
     Fp2dHost J_cpu; /// [num_wave, ks] -- The full J in host memory, if we're paging after each batch.
+    yakl::Array<RadLossFp, 2, yakl::memDevice> rad_loss; /// [wave_batch || 1, ks] follows same logic as J, but also can be pre-integrated (i.e. all wavelength bins integrated)
+    yakl::Array<RadLossFp, 2, yakl::memHost> rad_loss_cpu; /// [num_wave || 1, ks] per wavelength if not pre-integrated.
     std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
     PwBc<> pw_bc;
     ZeroBc zero_bc;

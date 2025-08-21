@@ -45,8 +45,7 @@ if (${YAKL_AUTO_FENCE})
     set(YAKL_DEFS "${YAKL_DEFS} -DYAKL_AUTO_FENCE")
 endif()
 
-list(APPEND DEX_SOURCE_FILES
-    "source/main.cpp"
+list(APPEND DEX_2D_SOURCE_FILES
     "source/StaticFormalSolution.cpp"
     "source/DynamicFormalSolution.cpp"
     "source/CascadeState.cpp"
@@ -64,6 +63,14 @@ list(APPEND DEX_SOURCE_FILES
     "source/BlockMap.cpp"
     "source/ProbesToCompute.cpp"
     "source/InitialPops.cpp"
+)
+list(APPEND DEX_SOURCE_FILES
+    "source/main.cpp"
+    ${DEX_2D_SOURCE_FILES}
+)
+list(APPEND DEX_RE_SOURCE_FILES
+    "source/main_rad_eq.cpp"
+    ${DEX_2D_SOURCE_FILES}
 )
 list(APPEND DEX_3D_SOURCE_FILES
     "source/main_3d.cpp"
@@ -99,6 +106,9 @@ list(APPEND DEX_RAY_3D_SOURCE_FILES
 add_executable(dexrt
     "${DEX_SOURCE_FILES}"
 )
+add_executable(dexrt_rad_eq
+    "${DEX_RE_SOURCE_FILES}"
+)
 add_executable(dexrt_3d
     "${DEX_3D_SOURCE_FILES}"
 )
@@ -117,10 +127,12 @@ endif()
 
 # NOTE(cmo): Override language type for cuda, may need to do this for HIP too.
 set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
+set_source_files_properties(${DEX_RE_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_RAY_3D_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
+set_source_files_properties(${DEX_RE_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 set_source_files_properties(${DEX_RAY_3D_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
@@ -132,11 +144,13 @@ if ("${DEX_ARCH}" STREQUAL "CUDA")
         set(DEX_EXTRA_CUDA_STD_FLAG "-std=c++20")
     endif()
     set_target_properties(dexrt PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
+    set_target_properties(dexrt_rad_eq PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
     set_target_properties(dexrt_3d PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
     set_target_properties(dexrt_ray PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
     set_target_properties(dexrt_ray_3d PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
 
     set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
+    set_source_files_properties(${DEX_RE_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set_source_files_properties(${DEX_RAY_3D_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
@@ -173,6 +187,34 @@ set_target_properties(dexrt PROPERTIES
 )
 
 message("Compiling with: ${CMAKE_CXX_FLAGS} ${YAKL_DEFS} ${DEX_CXX_FLAGS}")
+############## dexrt_rad_eq ##############
+target_include_directories(dexrt_rad_eq SYSTEM PUBLIC
+    "${GCC_INCLUDE_PATH}"
+    "${MPI_INCLUDE_PATH}"
+    "${NETCDF_INCLUDE_PATH}"
+    "${MAGMA_INCLUDE_PATH}"
+    "${CUDA_MATH_INCLUDE_PATH}"
+)
+target_link_libraries(dexrt_rad_eq "${LDLIBS}")
+target_link_libraries(dexrt_rad_eq fmt::fmt)
+target_link_libraries(dexrt_rad_eq yaml-cpp::yaml-cpp)
+target_link_libraries(dexrt_rad_eq argparse)
+target_link_libraries(dexrt_rad_eq git_version)
+target_link_libraries(dexrt_rad_eq Kokkos::kokkos)
+target_link_libraries(dexrt_rad_eq yakl)
+if (KokkosKernels_FOUND)
+    target_link_libraries(dexrt_rad_eq Kokkos::kokkoskernels)
+endif()
+if (${DEXRT_USE_MPI})
+    target_include_directories(dexrt_rad_eq SYSTEM PUBLIC ${MPI_CXX_INCLUDE_DIRS})
+    target_link_libraries(dexrt_rad_eq MPI::MPI_CXX)
+    target_compile_definitions(dexrt_rad_eq PUBLIC HAVE_MPI)
+endif()
+
+set_target_properties(dexrt_rad_eq PROPERTIES
+    COMPILE_FLAGS "${YAKL_DEFS} ${DEX_CXX_FLAGS}"
+    LINK_FLAGS "${LDFLAGS}"
+)
 ############## dexrt_3d ##############
 target_include_directories(dexrt_3d SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"

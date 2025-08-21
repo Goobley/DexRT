@@ -34,7 +34,12 @@ typedef f64 StatEqPrecision;
 
 // Set the precision used in the accumulation of the Gamma matrix. Single
 // precision is usually fine.
-typedef fp_t GammaFp;
+// typedef fp_t GammaFp;
+typedef f64 GammaFp;
+
+// Set the precision used in the accumulation of the radiative losses
+// typedef fp_t RadLossFp;
+typedef f64 RadLossFp;
 
 /*== 2D Config ===============================================================*/
 // To consider a flatland setup (no inclination rays), uncomment the #define
@@ -184,7 +189,7 @@ enum class LineCoeffCalc {
 // and opacity for up to `CORE_AND_VOIGT_MAX_LINES` are considered without the
 // effects of the line profile, and these are then modulated by the line profile
 // for each direction.
-constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::CoreAndVoigt;
+constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::Classic;
 
 // The fraction of the thermal velocity in a cell below which to consider it
 // static (minimising line profile calculations). Only considered if LINE_SCHEME

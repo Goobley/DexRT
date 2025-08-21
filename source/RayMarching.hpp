@@ -443,6 +443,134 @@ YAKL_INLINE RaySegment<2> ray_seg_from_ray_props(const RayProps& ray) {
     return RaySegment<2>(ray.start, ray.dir, FP(0.0), t1);
 }
 
+template <class DynamicState = DexEmpty>
+struct SampleEmisOpacArgs {
+    i64 ks;
+    i32 wave;
+    i32 la;
+    fp_t lambda;
+    vec3 mu;
+    const MultiResMipChain& mip_chain;
+    DynamicState dyn_state;
+};
+
+template <typename DynamicState, std::enable_if_t<std::is_same_v<DynamicState, DexEmpty>, int> = 0>
+KOKKOS_INLINE_FUNCTION EmisOpac sample_emis_opac(const SampleEmisOpacArgs<DynamicState>& args) {
+    JasUnpack(args, ks, wave, mip_chain);
+    fp_t eta_s = mip_chain.emis(ks, wave);
+    fp_t chi_s = mip_chain.opac(ks, wave);
+    return EmisOpac {
+        .eta = eta_s,
+        .chi = chi_s
+    };
+}
+
+template <typename DynamicState, std::enable_if_t<std::is_same_v<DynamicState, Raymarch2dDynamicState>, int> = 0>
+KOKKOS_INLINE_FUNCTION EmisOpac sample_emis_opac(const SampleEmisOpacArgs<DynamicState>& args) {
+    JasUnpack(args, ks, wave, la, mu, mip_chain, dyn_state);
+    fp_t eta_s = mip_chain.emis(ks, wave);
+    fp_t chi_s = mip_chain.opac(ks, wave);
+    const SparseAtmosphere& atmos = dyn_state.atmos;
+    if (
+        mip_chain.classic_data.dynamic_opac(ks, wave)
+        && dyn_state.active_set.extent(0) > 0
+    ) {
+        fp_t vel = (
+            atmos.vx.get_data()[ks] * mu(0)
+            + atmos.vy.get_data()[ks] * mu(1)
+            + atmos.vz.get_data()[ks] * mu(2)
+        );
+        AtmosPointParams local_atmos{
+            .temperature = atmos.temperature.get_data()[ks],
+            .ne = atmos.ne.get_data()[ks],
+            .vturb = atmos.vturb.get_data()[ks],
+            .nhtot = atmos.nh_tot.get_data()[ks],
+            .vel = vel,
+            .nh0 = dyn_state.nh0.get_data()[ks]
+        };
+        auto lines = emis_opac(
+            EmisOpacState<fp_t>{
+                .adata = dyn_state.adata,
+                .profile = dyn_state.profile,
+                .la = la,
+                .n = dyn_state.n,
+                .k = ks,
+                .atmos = local_atmos,
+                .active_set = dyn_state.active_set,
+                .mode = EmisOpacMode::DynamicOnly
+            }
+        );
+
+        eta_s += lines.eta;
+        chi_s += lines.chi;
+    }
+    return EmisOpac {
+        .eta = eta_s,
+        .chi = chi_s
+    };
+}
+
+template <typename DynamicState, std::enable_if_t<std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>, int> = 0>
+KOKKOS_INLINE_FUNCTION EmisOpac sample_emis_opac(const SampleEmisOpacArgs<DynamicState>& args) {
+    JasUnpack(args, ks, wave, mu, mip_chain);
+    const fp_t vel = (
+        mip_chain.vx(ks) * mu(0)
+        + mip_chain.vy(ks) * mu(1)
+        + mip_chain.vz(ks) * mu(2)
+    );
+    auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
+    fp_t eta_s = contrib.eta;
+    fp_t chi_s = contrib.chi;
+    return EmisOpac {
+        .eta = eta_s,
+        .chi = chi_s
+    };
+}
+
+template <typename DynamicState, std::enable_if_t<std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>, int> = 0>
+KOKKOS_INLINE_FUNCTION EmisOpac sample_emis_opac(const SampleEmisOpacArgs<DynamicState>& args) {
+    JasUnpack(args, ks, wave, lambda, mu, mip_chain, dyn_state);
+    JasUnpack(dyn_state, active_set, profile, adata);
+    i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
+    fp_t eta_s = mip_chain.emis.get_data()[ks_wave];
+    fp_t chi_s = mip_chain.opac.get_data()[ks_wave];
+
+    const fp_t vel = (
+        mip_chain.vx.get_data()[ks] * mu(0)
+        + mip_chain.vy.get_data()[ks] * mu(1)
+        + mip_chain.vz.get_data()[ks] * mu(2)
+    );
+    CavEmisOpacState emis_opac_state {
+        .ks = ks,
+        .krl = 0,
+        .wave = wave,
+        .lambda = lambda,
+        .vel = vel,
+        .phi = profile
+    };
+
+    // pls do this in registers
+    #pragma unroll
+    for (int kri = 0; kri < CORE_AND_VOIGT_MAX_LINES; ++kri) {
+        i32 krl = active_set(kri);
+        if (krl < 0) {
+            break;
+        }
+
+        emis_opac_state.krl = krl;
+        i32 kr = mip_chain.cav_data.active_set_mapping(krl);
+        EmisOpac eta_chi = mip_chain.cav_data.emis_opac(
+            emis_opac_state
+        );
+        eta_s += eta_chi.eta;
+        chi_s += eta_chi.chi;
+    }
+    return EmisOpac {
+        .eta = eta_s,
+        .chi = chi_s
+    };
+}
+
 template <
     int RcMode=0,
     typename Bc,
@@ -455,9 +583,9 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(args, mip_chain);
     JasUnpack(casc_state_bc, state, bc);
-    constexpr bool dynamic = (RcMode & RC_DYNAMIC);
-    constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>;
-    constexpr bool dynamic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
+    // constexpr bool dynamic = (RcMode & RC_DYNAMIC);
+    // constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>;
+    // constexpr bool dynamic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
     bool start_clipped;
@@ -492,7 +620,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     // NOTE(cmo): implicit assumption muy != 1.0
     const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
     fp_t lambda;
-    if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
+    if constexpr ((RcMode & RC_DYNAMIC) && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
         lambda = dyn_state.adata.wavelength(la);
     }
     do {
@@ -502,91 +630,17 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             i32 v = s.curr_coord(1);
             i64 ks = idx_gen.idx(s.current_mip_level, Coord2{.x = u, .z = v});
 
-            if constexpr (dynamic_interp) {
-                const fp_t vel = (
-                    mip_chain.vx(ks) * mu(0)
-                    + mip_chain.vy(ks) * mu(1)
-                    + mip_chain.vz(ks) * mu(2)
-                );
-                auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
-                eta_s = contrib.eta;
-                chi_s = contrib.chi + FP(1e-15);
-            } else if constexpr (dynamic_cav) {
-                JasUnpack(dyn_state, active_set, profile, adata);
-                i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
-                eta_s = mip_chain.emis.get_data()[ks_wave];
-                chi_s = mip_chain.opac.get_data()[ks_wave] + FP(1e-15);
-
-                const fp_t vel = (
-                    mip_chain.vx.get_data()[ks] * mu(0)
-                    + mip_chain.vy.get_data()[ks] * mu(1)
-                    + mip_chain.vz.get_data()[ks] * mu(2)
-                );
-                CavEmisOpacState emis_opac_state {
-                    .ks = ks,
-                    .krl = 0,
-                    .wave = wave,
-                    .lambda = lambda,
-                    .vel = vel,
-                    .phi = profile
-                };
-
-                // pls do this in registers
-                #pragma unroll
-                for (int kri = 0; kri < CORE_AND_VOIGT_MAX_LINES; ++kri) {
-                    i32 krl = active_set(kri);
-                    if (krl < 0) {
-                        break;
-                    }
-
-                    emis_opac_state.krl = krl;
-                    i32 kr = mip_chain.cav_data.active_set_mapping(krl);
-                    EmisOpac eta_chi = mip_chain.cav_data.emis_opac(
-                        emis_opac_state
-                    );
-                    eta_s += eta_chi.eta;
-                    chi_s += eta_chi.chi;
-                }
-            } else {
-                eta_s = mip_chain.emis(ks, wave);
-                chi_s = mip_chain.opac(ks, wave) + FP(1e-15);
-                if constexpr (dynamic) {
-                    const SparseAtmosphere& atmos = dyn_state.atmos;
-                    if (
-                        mip_chain.classic_data.dynamic_opac(ks, wave)
-                        && dyn_state.active_set.extent(0) > 0
-                    ) {
-                        fp_t vel = (
-                            atmos.vx.get_data()[ks] * mu(0)
-                            + atmos.vy.get_data()[ks] * mu(1)
-                            + atmos.vz.get_data()[ks] * mu(2)
-                        );
-                        AtmosPointParams local_atmos{
-                            .temperature = atmos.temperature.get_data()[ks],
-                            .ne = atmos.ne.get_data()[ks],
-                            .vturb = atmos.vturb.get_data()[ks],
-                            .nhtot = atmos.nh_tot.get_data()[ks],
-                            .vel = vel,
-                            .nh0 = dyn_state.nh0.get_data()[ks]
-                        };
-                        auto lines = emis_opac(
-                            EmisOpacState<fp_t>{
-                                .adata = dyn_state.adata,
-                                .profile = dyn_state.profile,
-                                .la = la,
-                                .n = dyn_state.n,
-                                .k = ks,
-                                .atmos = local_atmos,
-                                .active_set = dyn_state.active_set,
-                                .mode = EmisOpacMode::DynamicOnly
-                            }
-                        );
-
-                        eta_s += lines.eta;
-                        chi_s += lines.chi;
-                    }
-                }
-            }
+            EmisOpac emis_opac = sample_emis_opac(SampleEmisOpacArgs<DynamicState> {
+                .ks=ks,
+                .wave=wave,
+                .la=la,
+                .lambda=lambda,
+                .mu=mu,
+                .mip_chain=mip_chain,
+                .dyn_state=dyn_state
+            });
+            eta_s = emis_opac.eta;
+            chi_s = emis_opac.chi + FP(1e-15);
 
             if constexpr (EXTRA_SAFE_SOURCE_FN) {
                 chi_s += (std::abs(chi_s) < FP(1e-15)) * FP(1e-15);
