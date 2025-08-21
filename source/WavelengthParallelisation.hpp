@@ -140,8 +140,8 @@ struct WavelengthDistributor {
             }
         } else {
             // Get next wavelength, step with stride num_ranks * batch_size
-            la += mpi_state.num_ranks * batch_size;
             next_la = la;
+            la += mpi_state.num_ranks * batch_size;
         }
         batch->la_start = next_la;
         batch->la_end = std::min(batch->la_start + batch_size, la_max);
