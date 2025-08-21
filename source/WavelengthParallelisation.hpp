@@ -63,6 +63,8 @@ struct WavelengthDistributor {
                         }
                     );
             }
+        } else {
+            la = mpi_state.rank * batch_size;
         }
     #endif
         return true;
@@ -73,6 +75,9 @@ struct WavelengthDistributor {
         std::lock_guard<std::mutex> lock_holder(lock);
 #endif
         la = 0;
+        if constexpr (!MPI_LOAD_BALANCE) {
+            la = mpi_state.rank * batch_size;
+        }
     }
 
 #ifdef HAVE_MPI
