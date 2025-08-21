@@ -44,21 +44,25 @@ struct WavelengthDistributor {
 
     ~WavelengthDistributor() {
 #ifdef HAVE_MPI
-        service_thread.request_stop();
+        if constexpr (MPI_LOAD_BALANCE) {
+            service_thread.request_stop();
+        }
 #endif
     }
 
     inline bool init(const MpiState& mpi_state, int la_max_, int batch_size_) {
-        la = 0; // only used on rank 0
+        la = 0; // only used on rank 0 or if not load balancing
         la_max = la_max_;
         batch_size = batch_size_;
     #ifdef HAVE_MPI
-        if (mpi_state.rank == 0) {
-            service_thread = std::jthread(
-                    [this, mpi_state] (std::stop_token stopper) {
-                        this->serve_requests(stopper, mpi_state);
-                    }
-                );
+        if constexpr (MPI_LOAD_BALANCE) {
+            if (mpi_state.rank == 0) {
+                service_thread = std::jthread(
+                        [this, mpi_state] (std::stop_token stopper) {
+                            this->serve_requests(stopper, mpi_state);
+                        }
+                    );
+            }
         }
     #endif
         return true;
@@ -115,10 +119,16 @@ struct WavelengthDistributor {
     inline bool next_batch(const MpiState& mpi_state, WavelengthBatch* batch) {
 #ifdef HAVE_MPI
         int next_la;
-        if (mpi_state.rank == 0) {
-            next_la = get_next_la_critical(batch_size);
+        if constexpr (MPI_LOAD_BALANCE) {
+            if (mpi_state.rank == 0) {
+                next_la = get_next_la_critical(batch_size);
+            } else {
+                next_la = request_next_la(mpi_state);
+            }
         } else {
-            next_la = request_next_la(mpi_state);
+            // Get next wavelength, step with stride num_ranks * batch_size
+            la += mpi_state.num_ranks * batch_size;
+            next_la = la;
         }
         batch->la_start = next_la;
         batch->la_end = std::min(batch->la_start + batch_size, la_max);

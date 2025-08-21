@@ -214,5 +214,11 @@ constexpr bool EXTRA_SAFE_SOURCE_FN = true;
 // report the wavelength if it is).
 constexpr bool REPORT_NAN_INTENSITY = false;
 
+/*== MPI Setup ===============================================================*/
+
+// Whether to load balance wavelength distribution over MPI by running a
+// separate server thread on rank 0 to send wavelength batches to workers.
+constexpr bool MPI_LOAD_BALANCE = false;
+
 #else
 #endif
