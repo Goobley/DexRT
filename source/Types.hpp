@@ -158,7 +158,7 @@ template <typename Alo=DexEmpty>
 struct RadianceInterval {
     fp_t I = FP(0.0);
     fp_t tau = FP(0.0);
-    Alo alo;
+    Alo psi_star;
 };
 
 /// deprecated but needs removing from API

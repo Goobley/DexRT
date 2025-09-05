@@ -17,7 +17,7 @@ struct DexrtOutputConfig {
     bool ne = true;
     bool nh_tot = true;
     bool max_mip_level = true;
-    bool alo = false;
+    bool psi_star = false;
     bool active = true;
     std::vector<int> cascades;
 };
@@ -201,8 +201,8 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     if (output["nh_tot"]) {
         out.nh_tot = output["nh_tot"].as<bool>();
     }
-    if (output["alo"]) {
-        out.alo = output["alo"].as<bool>();
+    if (output["psi_star"]) {
+        out.psi_star = output["psi_star"].as<bool>();
     }
     if (output["cascades"]) {
         for (const auto& c : output["cascades"]) {
@@ -217,12 +217,12 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
         out.pops = false;
         out.lte_pops = false;
         out.active = false;
-        out.alo = false;
+        out.psi_star = false;
     } else if (config.mode == DexrtMode::Lte) {
         out.ne = false;
         out.nh_tot = false;
         out.lte_pops = false;
-        out.alo = false;
+        out.psi_star = false;
         out.active = true;
     } else if (config.mode == DexrtMode::NonLte) {
         out.active = true;

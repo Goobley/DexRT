@@ -137,7 +137,7 @@ void dynamic_compute_gamma(
     const auto spatial_bounds = mr_block_map.block_map.loop_bounds();
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
-        const auto& alo = casc_state.alo;
+        const auto& psi_star = casc_state.psi_star;
         const auto& I = casc_state.i_cascades[0];
         dex_parallel_for(
             "Compute Gamma",
@@ -165,7 +165,7 @@ void dynamic_compute_gamma(
                 };
                 RaySegment<3> ray = probe_ray(ray_set, num_cascades, 0, probe_idx);
                 const fp_t intensity = probe_fetch<RcMode>(I, ray_set, probe_idx);
-                const fp_t alo_entry = probe_fetch<RcMode>(alo, ray_set, probe_idx);
+                const fp_t psi_star_entry = probe_fetch<RcMode>(psi_star, ray_set, probe_idx);
 
                 const fp_t lambda = wavelength(la);
                 using namespace ConstantsFP;
@@ -244,7 +244,7 @@ void dynamic_compute_gamma(
                         .chi = chi,
                         .uv = uv,
                         .I = intensity,
-                        .alo = alo_entry,
+                        .psi_star = psi_star_entry,
                         .wlamu = wl_ray_weight * wphi(kr, ks),
                         .Gamma = Gamma,
                         .i = l.i,
@@ -293,7 +293,7 @@ void dynamic_compute_gamma(
                         .chi = chi,
                         .uv = uv,
                         .I = intensity,
-                        .alo = alo_entry,
+                        .psi_star = psi_star_entry,
                         .wlamu = wl_ray_weight,
                         .Gamma = Gamma,
                         .i = cont.i,
@@ -467,7 +467,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
     } while (s.step_through_grid());
 
     if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
-        result.alo = std::max(one_m_edt, FP(0.0));
+        result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
     }
     return result;
 }
@@ -689,7 +689,7 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
         .upper_tau = tau_cascade_ip
     };
     if constexpr (compute_alo) {
-        dev_casc_state.alo = casc_state.alo;
+        dev_casc_state.psi_star = casc_state.psi_star;
     }
     DeviceBoundaries boundaries_h{
         .boundary = state.boundary,
@@ -780,7 +780,7 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
             }
             constexpr bool dev_compute_alo = bool(RcMode & RC_COMPUTE_ALO);
             if constexpr (dev_compute_alo) {
-                dev_casc_state.alo(lin_idx) = ri.alo;
+                dev_casc_state.psi_star(lin_idx) = ri.psi_star;
             }
         }
     );
@@ -836,7 +836,7 @@ void dynamic_formal_sol_rc_3d_subset(
             casc_idx
         );
     }
-    if (casc_state.alo.initialized() && !lambda_iterate) {
+    if (casc_state.psi_star.initialized() && !lambda_iterate) {
         compute_cascade_i_3d<RcModeAlo>(
             state,
             casc_state,
@@ -870,11 +870,11 @@ void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_s
 
     constexpr int num_subsets = subset_tasks_per_cascade_3d<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
-        if (casc_state.alo.initialized()) {
-            casc_state.alo = FP(0.0);
+        if (casc_state.psi_star.initialized()) {
+            casc_state.psi_star = FP(0.0);
         }
         dynamic_formal_sol_rc_3d_subset(state, casc_state, lambda_iterate, la, subset_idx);
-        if (casc_state.alo.initialized()) {
+        if (casc_state.psi_star.initialized()) {
             dynamic_compute_gamma(
                 state,
                 casc_state,
