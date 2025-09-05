@@ -524,8 +524,8 @@ void save_results(const State3d& state, const CascadeState3d& casc_state, i32 nu
     if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
         maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
     }
-    if (out_cfg.alo && casc_state.alo.initialized()) {
-        nc.write(casc_state.alo, "alo", {"casc_shape"});
+    if (out_cfg.psi_star && casc_state.psi_star.initialized()) {
+        nc.write(casc_state.psi_star, "psi_star", {"casc_shape"});
     }
     for (int casc : out_cfg.cascades) {
         // NOTE(cmo): The validity of these + necessary warning were checked/output in the config parsing step

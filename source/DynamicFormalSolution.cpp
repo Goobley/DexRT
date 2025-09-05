@@ -39,7 +39,7 @@ void dynamic_compute_gamma_atomic(
 
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
-        const auto& alo = casc_state.alo;
+        const auto& psi_star = casc_state.psi_star;
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
         int wave_batch = la_end - la_start;
@@ -75,7 +75,7 @@ void dynamic_compute_gamma_atomic(
                 };
                 RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
                 const fp_t intensity = probe_fetch<RcMode>(I, ray_set, probe_idx);
-                const fp_t alo_entry = probe_fetch<RcMode>(alo, ray_set, probe_idx);
+                const fp_t psi_star_entry = probe_fetch<RcMode>(psi_star, ray_set, probe_idx);
 
                 const int la = la_start + wave;
                 fp_t lambda = wavelength(la);
@@ -135,7 +135,7 @@ void dynamic_compute_gamma_atomic(
                         .chi = chi,
                         .uv = uv,
                         .I = intensity,
-                        .alo = alo_entry,
+                        .psi_star = psi_star_entry,
                         .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx) * wphi(kr, ks),
                         .Gamma = Gamma,
                         .i = l.i,
@@ -173,7 +173,7 @@ void dynamic_compute_gamma_atomic(
                         .chi = chi,
                         .uv = uv,
                         .I = intensity,
-                        .alo = alo_entry,
+                        .psi_star = psi_star_entry,
                         .wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx),
                         .Gamma = Gamma,
                         .i = cont.i,
@@ -243,7 +243,7 @@ void dynamic_compute_gamma_nonatomic(
 
     for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
         const auto& Gamma = state.Gamma[ia];
-        const auto& alo = casc_state.alo;
+        const auto& psi_star = casc_state.psi_star;
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
 
@@ -295,7 +295,7 @@ void dynamic_compute_gamma_nonatomic(
                             };
                             RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
                             const fp_t intensity = probe_fetch<RcMode>(I, ray_set, probe_idx);
-                            const fp_t alo_entry = probe_fetch<RcMode>(alo, ray_set, probe_idx);
+                            const fp_t psi_star_entry = probe_fetch<RcMode>(psi_star, ray_set, probe_idx);
 
                             vec3 mu = inverted_mu(ray, incl_quad.muy(probe_idx.incl));
                             local_atmos.vel = (
@@ -346,7 +346,7 @@ void dynamic_compute_gamma_nonatomic(
                                     .chi = chi,
                                     .uv = uv,
                                     .I = intensity,
-                                    .alo = alo_entry,
+                                    .psi_star = psi_star_entry,
                                     .wlamu = wlamu,
                                     .Gamma = Gamma,
                                     .i = l.i,
@@ -395,7 +395,7 @@ void dynamic_compute_gamma_nonatomic(
                                     .chi = chi,
                                     .uv = uv,
                                     .I = intensity,
-                                    .alo = alo_entry,
+                                    .psi_star = psi_star_entry,
                                     .wlamu = wl_ray_weights(wave) * incl_quad.wmuy(theta_idx),
                                     .Gamma = Gamma,
                                     .i = cont.i,
@@ -602,8 +602,8 @@ void dynamic_formal_sol_rc(
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
-        if (casc_state.alo.initialized()) {
-            casc_state.alo = FP(0.0);
+        if (casc_state.psi_star.initialized()) {
+            casc_state.psi_star = FP(0.0);
         }
         CascadeCalcSubset subset{
             .la_start=la_start,
@@ -628,7 +628,7 @@ void dynamic_formal_sol_rc(
                 mip_chain
             );
         }
-        if (casc_state.alo.initialized() && !lambda_iterate) {
+        if (casc_state.psi_star.initialized() && !lambda_iterate) {
             cascade_i_25d<RcModeAlo>(
                 state,
                 casc_state,
@@ -653,7 +653,7 @@ void dynamic_formal_sol_rc(
                 mip_chain
             );
         }
-        if (opts.compute_gamma && casc_state.alo.initialized()) {
+        if (opts.compute_gamma && casc_state.psi_star.initialized()) {
             // NOTE(cmo): Add terms to Gamma
             dynamic_compute_gamma(
                 state,

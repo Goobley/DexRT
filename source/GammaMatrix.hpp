@@ -10,7 +10,7 @@ struct GammaAccumState {
     fp_t chi;
     UV uv;
     fp_t I;
-    fp_t alo;
+    fp_t psi_star;
     fp_t wlamu;
     const GammaMat& Gamma;
     int i;
@@ -23,11 +23,10 @@ struct GammaAccumState {
 */
 template <bool atomic=true>
 YAKL_INLINE void add_to_gamma(const GammaAccumState& args) {
-    JasUnpack(args, eta, chi, uv, I, alo, wlamu, Gamma, i, j, k);
-    const fp_t psi_star = alo / chi;
+    JasUnpack(args, eta, chi, uv, I, psi_star, wlamu, Gamma, i, j, k);
     const fp_t I_eff = I - psi_star * eta;
 
-    fp_t integrand = (FP(1.0) - alo) * uv.Uji + uv.Vji * I_eff;
+    fp_t integrand = (FP(1.0) - chi * psi_star) * uv.Uji + uv.Vji * I_eff;
     GammaFp G_ij = GammaFp(integrand) * GammaFp(wlamu);
 
     integrand = uv.Vij * I_eff;

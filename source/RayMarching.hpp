@@ -615,7 +615,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         return result;
     }
 
-    // NOTE(cmo): one_m_edt is also the ALO
+    // NOTE(cmo): one_m_edt is also the ALO -- divide by chi_s for PsiStar_lambda_omegahat
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
     // NOTE(cmo): implicit assumption muy != 1.0
     const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
@@ -657,7 +657,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     } while(s.step_through_grid());
 
     if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
-        result.alo = std::max(one_m_edt, FP(0.0));
+        result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
     }
     return result;
 }

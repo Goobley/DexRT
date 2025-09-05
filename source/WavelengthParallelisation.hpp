@@ -13,6 +13,8 @@ inline void setup_comm(State* state) {
     MPI_Comm_dup(MPI_COMM_WORLD, &state->mpi_state.comm);
     MPI_Comm_size(state->mpi_state.comm, &state->mpi_state.num_ranks);
     MPI_Comm_rank(state->mpi_state.comm, &state->mpi_state.rank);
+    MPI_Barrier(state->mpi_state.comm);
+    state->println("Running on {} ranks", state->mpi_state.num_ranks);
 #endif
 }
 
@@ -32,9 +34,11 @@ struct WavelengthDistributor {
     int la = 0;
     int la_max;
     int batch_size;
+    int rank_la_start = 0;
 #ifdef HAVE_MPI
     std::jthread service_thread;
     std::mutex lock;
+    std::mutex test_lock; // For protecting the load-balancing test
 #endif
 
     static constexpr int wavelength_tag = 1001;
@@ -42,21 +46,27 @@ struct WavelengthDistributor {
 
     ~WavelengthDistributor() {
 #ifdef HAVE_MPI
-        service_thread.request_stop();
+        if constexpr (MPI_LOAD_BALANCE) {
+            service_thread.request_stop();
+        }
 #endif
     }
 
     inline bool init(const MpiState& mpi_state, int la_max_, int batch_size_) {
-        la = 0; // only used on rank 0
+        la = 0; // only used on rank 0 or if not load balancing
         la_max = la_max_;
         batch_size = batch_size_;
     #ifdef HAVE_MPI
-        if (mpi_state.rank == 0) {
-            service_thread = std::jthread(
-                    [this, mpi_state] (std::stop_token stopper) {
-                        this->serve_requests(stopper, mpi_state);
-                    }
-                );
+        if constexpr (MPI_LOAD_BALANCE) {
+            if (mpi_state.rank == 0) {
+                service_thread = std::jthread(
+                        [this, mpi_state] (std::stop_token stopper) {
+                            this->serve_requests(stopper, mpi_state);
+                        }
+                    );
+            }
+        } else {
+            rank_la_start = mpi_state.rank * batch_size;
         }
     #endif
         return true;
@@ -66,7 +76,7 @@ struct WavelengthDistributor {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(lock);
 #endif
-        la = 0;
+        la = rank_la_start;
     }
 
 #ifdef HAVE_MPI
@@ -82,12 +92,7 @@ struct WavelengthDistributor {
         int from[req_size];
         bool setup_new_recv = true;
 
-        while (!stop_token.stop_requested()) {
-            if (setup_new_recv) {
-                MPI_Irecv(from, req_size, MPI_INT, MPI_ANY_SOURCE, wavelength_tag, mpi_state.comm, &req);
-                setup_new_recv = false;
-            }
-
+        auto loop_body = [&]() {
             int message_ready = 0;
             MPI_Status status;
             MPI_Test(&req, &message_ready, &status);
@@ -97,6 +102,20 @@ struct WavelengthDistributor {
                 int next_la = get_next_la_critical(rank_batch_size);
                 MPI_Send(&next_la, 1, MPI_INT, status.MPI_SOURCE, wavelength_tag, mpi_state.comm);
                 setup_new_recv = true;
+            }
+        };
+
+        while (!stop_token.stop_requested()) {
+            if (setup_new_recv) {
+                MPI_Irecv(from, req_size, MPI_INT, MPI_ANY_SOURCE, wavelength_tag, mpi_state.comm, &req);
+                setup_new_recv = false;
+            }
+
+            if constexpr (MPI_PROTECT_TEST) {
+                std::lock_guard<std::mutex> lock_holder(test_lock);
+                loop_body();
+            } else {
+                loop_body();
             }
         }
     }
@@ -113,10 +132,16 @@ struct WavelengthDistributor {
     inline bool next_batch(const MpiState& mpi_state, WavelengthBatch* batch) {
 #ifdef HAVE_MPI
         int next_la;
-        if (mpi_state.rank == 0) {
-            next_la = get_next_la_critical(batch_size);
+        if constexpr (MPI_LOAD_BALANCE) {
+            if (mpi_state.rank == 0) {
+                next_la = get_next_la_critical(batch_size);
+            } else {
+                next_la = request_next_la(mpi_state);
+            }
         } else {
-            next_la = request_next_la(mpi_state);
+            // Get next wavelength, step with stride num_ranks * batch_size
+            next_la = la;
+            la += mpi_state.num_ranks * batch_size;
         }
         batch->la_start = next_la;
         batch->la_end = std::min(batch->la_start + batch_size, la_max);
@@ -138,6 +163,7 @@ struct WavelengthDistributor {
     template <typename State>
     inline void reduce_Gamma(State* state) {
 #ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
         for (int ia = 0; ia < state->Gamma.size(); ++ia) {
             if (state->mpi_state.rank == 0) {
                 MPI_Reduce(
@@ -167,6 +193,7 @@ struct WavelengthDistributor {
     template <typename State>
     inline void reduce_J(State* state) {
 #ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
         fp_t* J_ptr = state->config.store_J_on_cpu ? state->J_cpu.data() : state->J.data();
         i64 J_size = state->config.store_J_on_cpu ? state->J_cpu.size() : state->J.size();
         if (state->mpi_state.rank == 0) {
@@ -196,6 +223,7 @@ struct WavelengthDistributor {
     template <typename State>
     inline void update_pops(State* state) {
 #ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
         MPI_Bcast(state->pops.data(), state->pops.size(), get_FpMpi(), 0, state->mpi_state.comm);
 #endif
     }
@@ -203,6 +231,7 @@ struct WavelengthDistributor {
     template <typename State>
     inline void update_ne(State* state) {
 #ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
         MPI_Bcast(state->atmos.ne.data(), state->atmos.ne.size(), get_FpMpi(), 0, state->mpi_state.comm);
 #endif
     }
@@ -210,6 +239,7 @@ struct WavelengthDistributor {
     template <typename State>
     inline void update_nh_tot(State* state) {
 #ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
         MPI_Bcast(state->atmos.nh_tot.data(), state->atmos.nh_tot.size(), get_FpMpi(), 0, state->mpi_state.comm);
 #endif
     }

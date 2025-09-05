@@ -238,7 +238,7 @@ YAKL_INLINE RadianceInterval<DexEmpty> interp_probe_dir(
     ri.tau = -std::log(ri.tau);
     ri.tau = std::min(ri.tau, FP(1e4));
 
-    // NOTE(cmo): Can ignore the alo, as it's never merged (comes from C0 only).
+    // NOTE(cmo): Can ignore the psi_star, as it's never merged (comes from C0 only).
     return ri;
 }
 
@@ -648,7 +648,7 @@ void cascade_i_25d(
         .upper_tau = tau_cascade_ip
     };
     if constexpr (compute_alo) {
-        dev_casc_state.alo = casc_state.alo;
+        dev_casc_state.psi_star = casc_state.psi_star;
     }
 
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
@@ -768,7 +768,7 @@ void cascade_i_25d(
                     average_ri.I += sample_weight * ri.I;
                     average_ri.tau += sample_weight * ri.tau;
                     if constexpr (dev_compute_alo) {
-                        average_ri.alo += sample_weight * ri.alo;
+                        average_ri.psi_star += sample_weight * ri.psi_star;
                     }
                 }
 
@@ -786,7 +786,7 @@ void cascade_i_25d(
                     dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
                 }
                 if constexpr (dev_compute_alo) {
-                    dev_casc_state.alo(lin_idx) = average_ri.alo;
+                    dev_casc_state.psi_star(lin_idx) = average_ri.psi_star;
                 }
             }
         );
