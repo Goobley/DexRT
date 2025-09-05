@@ -189,7 +189,7 @@ enum class LineCoeffCalc {
 // and opacity for up to `CORE_AND_VOIGT_MAX_LINES` are considered without the
 // effects of the line profile, and these are then modulated by the line profile
 // for each direction.
-constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::Classic;
+constexpr LineCoeffCalc LINE_SCHEME = LineCoeffCalc::CoreAndVoigt;
 
 // The fraction of the thermal velocity in a cell below which to consider it
 // static (minimising line profile calculations). Only considered if LINE_SCHEME
