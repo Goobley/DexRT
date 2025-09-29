@@ -6,14 +6,14 @@ import numpy as np
 from dexrt.config_schemas.dexrt import DexrtNgConfig, DexrtNonLteConfig, AtomicModelConfig, DexrtLteConfig, DexrtSystemConfig, DexrtOutputConfig, DexrtMipConfig
 from dexrt.write_config import write_config
 
-pressure_val = 3e-3
+pressure_val = 1e-2
 # lyman_cont = "pw"
 lyman_cont = "obs"
 # lyman_cont = "bb"
 # lyman_cont = "full_bb"
 shape = "square"
 shape = "circle"
-prefix = f"rad_loss_p{pressure_val:.0e}_{lyman_cont}_{shape}"
+prefix = f"rad_loss_p{pressure_val:.0e}_{lyman_cont}_{shape}_falling"
 if __name__ == '__main__':
     nc = ncdf.Dataset(f"RadLossTest/{prefix}_atmos.nc", "w", format="NETCDF4")
 
@@ -118,7 +118,7 @@ if __name__ == '__main__':
 
     vx[...] = 0.0
     vy[...] = 0.0
-    vz[...] = 0.0
+    vz[...] = -60e3
 
     nc.close()
 
