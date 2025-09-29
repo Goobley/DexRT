@@ -69,7 +69,6 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
 
     State& state = *st;
 
-    Atmosphere atmos = load_atmos(config.atmos_path);
     std::vector<ModelAtom<f64>> crtaf_models;
     crtaf_models.reserve(config.atom_paths.size());
     for (int i = 0; i < config.atom_paths.size(); ++i) {
@@ -86,6 +85,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     state.atoms_with_gamma = gamma_atoms.atoms;
     state.atoms_with_gamma_mapping = gamma_atoms.mapping;
 
+    Atmosphere atmos = load_atmos(config.atmos_path);
     BlockMap<BLOCK_SIZE> block_map;
     block_map.init(atmos, config.threshold_temperature);
     i32 max_mip_level = 0;
@@ -97,7 +97,6 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
         state.println("Mips not supported with LineCoeffCalc::Classic");
     }
     state.mr_block_map.init(block_map, max_mip_level);
-
     state.atmos = sparsify_atmosphere(atmos, block_map);
 
     state.phi = VoigtProfile<fp_t>(

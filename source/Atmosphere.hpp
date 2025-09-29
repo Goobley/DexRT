@@ -277,5 +277,162 @@ YAKL_INLINE vec3 get_offsets(const Atmosphere& atmos) {
     return result;
 }
 
+inline bool atmosphere_file_is_sparse(const std::string& path) {
+    yakl::SimpleNetCDF nc;
+    nc.open(path, yakl::NETCDF_MODE_READ);
+    int ncid = nc.file.ncid;
+
+    constexpr const char* sparse = "sparse";
+    nc_type dtype;
+    size_t att_len;
+    if (nc_inq_att(ncid, NC_GLOBAL, sparse, &dtype, &att_len) != NC_NOERR) {
+        // NOTE(cmo): If not specified, it's dense.
+        return false;
+    }
+    if (dtype != NC_INT || att_len != 1) {
+        throw std::runtime_error("Expected sparse attribute to be 1x int32");
+    }
+
+    i32 is_sparse;
+    if (nc_get_att_int(ncid, NC_GLOBAL, sparse, &is_sparse) != NC_NOERR) {
+        throw std::runtime_error("NetCDF error");
+    }
+    return is_sparse;
+}
+
+template <int NumDim>
+inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
+    typedef yakl::Array<f32, 1, yakl::memDevice> FpLoad;
+
+    auto ncwrap = [] (int ierr , int line) {
+        if (ierr != NC_NOERR) {
+            printf("NetCDF Error at line: %d\n", line);
+            printf("%s\n",nc_strerror(ierr));
+            Kokkos::abort(nc_strerror(ierr));
+        }
+    };
+
+    const int ncid = nc.file.ncid;
+    int x_dim, y_dim, z_dim, block_size;
+    ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "x", &x_dim), __LINE__);
+    ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "z", &z_dim), __LINE__);
+    y_dim = 1;
+    if constexpr (NumDim > 2) {
+        ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "y", &y_dim), __LINE__);
+    }
+    ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "block_size", &block_size), __LINE__);
+
+    if constexpr (NumDim == 2) {
+        if (block_size != BLOCK_SIZE) {
+            throw std::runtime_error(fmt::format("block_size attribute in atmosphere file ({}) does not match compiled BLOCK_SIZE ({}).", block_size, BLOCK_SIZE));
+        }
+    } else {
+        if (block_size != BLOCK_SIZE_3D) {
+            throw std::runtime_error(fmt::format("block_size attribute in atmosphere file ({}) does not match compiled BLOCK_SIZE_3D ({}).", block_size, BLOCK_SIZE_3D));
+        }
+    }
+
+    i64 num_active_cells = nc.getDimSize("cells");
+    FpLoad temperature("temperature", num_active_cells);
+    FpLoad pressure("pressure", num_active_cells);
+    FpLoad ne("ne", num_active_cells);
+    FpLoad nh_tot("nh_tot", num_active_cells);
+    FpLoad vturb("vturb", num_active_cells);
+    FpLoad vx("vx", num_active_cells);
+    FpLoad vy("vy", num_active_cells);
+    FpLoad vz("vz", num_active_cells);
+
+    f32 voxel_scale;
+    nc.read(voxel_scale, "voxel_scale");
+    nc.read(temperature, "temperature");
+    nc.read(pressure, "pressure");
+    nc.read(ne, "ne");
+    nc.read(nh_tot, "nh_tot");
+    nc.read(vturb, "vturb");
+    nc.read(vx, "vx");
+    nc.read(vy, "vy");
+    nc.read(vz, "vz");
+
+    f32 offset_x = FP(0.0);
+    f32 offset_y = FP(0.0);
+    f32 offset_z = FP(0.0);
+
+    if (nc.varExists("offset_x")) {
+        nc.read(offset_x, "offset_x");
+    }
+    if (nc.varExists("offset_y")) {
+        nc.read(offset_y, "offset_y");
+    }
+    if (nc.varExists("offset_z")) {
+        nc.read(offset_z, "offset_z");
+    }
+    AtmosphereNd<NumDim, yakl::memHost> result{
+        .voxel_scale = voxel_scale,
+        .offset_x = offset_x,
+        .offset_y = offset_y,
+        .offset_z = offset_z
+    };
+
+#ifdef DEXRT_SINGLE_PREC
+    result.temperature = temperature;
+    result.pressure = pressure;
+    result.ne = ne;
+    result.nh_tot = nh_tot;
+    result.vturb = vturb;
+    result.vx = vx;
+    result.vy = vy;
+    result.vz = vz;
+#else
+    result.temperature = Fp1d("temperature", num_active_cells);
+    result.pressure = Fp1d("pressure", num_active_cells);
+    result.ne = Fp1d("ne", num_active_cells);
+    result.nh_tot = Fp1d("nh_tot", num_active_cells);
+    result.vturb = Fp1d("vturb", num_active_cells);
+    result.vx = Fp1d("vx", num_active_cells);
+    result.vy = Fp1d("vy", num_active_cells);
+    result.vz = Fp1d("vz", num_active_cells);
+
+    #define DEX_FLOAT_CONVERT(X) dex_parallel_for( \
+        "convert", \
+        FlatLoop<1>(num_active_cells), \
+        YAKL_LAMBDA (i64 x) { \
+            result.X(x) = X(x); \
+        } \
+    )
+
+    DEX_FLOAT_CONVERT(temperature);
+    DEX_FLOAT_CONVERT(pressure);
+    DEX_FLOAT_CONVERT(ne);
+    DEX_FLOAT_CONVERT(nh_tot);
+    DEX_FLOAT_CONVERT(vturb);
+    DEX_FLOAT_CONVERT(vx);
+    DEX_FLOAT_CONVERT(vy);
+    DEX_FLOAT_CONVERT(vz);
+    yakl::fence();
+
+    #undef DEX_FLOAT_CONVERT
+
+#endif
+
+    result.nh0 = Fp1d("nh0", num_active_cells);
+    result.nh0 = FP(0.0);
+
+    fp_t max_vel_2;
+    dex_parallel_reduce(
+        "Atmosphere Max Vel",
+        FlatLoop<2>(vx.extent(0)),
+        KOKKOS_LAMBDA (i64 x, fp_t& running_max) {
+            fp_t vel2 = square(result.vz(x)) + square(result.vy(x)) + square(result.vx(x));
+            if (vel2 > running_max) {
+                running_max = vel2;
+            }
+        },
+        Kokkos::Max<fp_t>(max_vel_2)
+    );
+    result.moving = std::sqrt(max_vel_2) > FP(10.0);
+
+    return result;
+}
+
 #else
 #endif

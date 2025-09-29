@@ -106,7 +106,6 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
 
     State3d& state = *st;
 
-    AtmosphereNd<3, yakl::memHost> atmos = load_atmos_3d_host(config.atmos_path);
     std::vector<ModelAtom<f64>> crtaf_models;
     crtaf_models.reserve(config.atom_paths.size());
     for (int i = 0; i < config.atom_paths.size(); ++i) {
@@ -123,6 +122,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
     state.atoms_with_gamma = gamma_atoms.atoms;
     state.atoms_with_gamma_mapping = gamma_atoms.mapping;
 
+    AtmosphereNd<3, yakl::memHost> atmos = load_atmos_3d_host(config.atmos_path);
     BlockMap<BLOCK_SIZE_3D, 3> block_map;
     block_map.init(atmos, config.threshold_temperature);
     i32 max_mip_level = 0;
