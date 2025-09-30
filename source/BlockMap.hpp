@@ -412,13 +412,7 @@ struct MultiResBlockMap {
     BlockMap block_map;
     MultiLevelLookup<NumDim, ENTRY_SIZE> lookup;
 
-    typedef MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim, Lookup, BlockMap> MRBlockMap;
-    struct AtmosphereAndBlockMap {
-        SparseAtmosphere atmos;
-        MRBlockMap mr_block_map;
-    };
-
-    static AtmosphereAndBlockMap load_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);
+    SparseAtmosphere init_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);
 
     void init(const BlockMap& block_map_, i32 max_mip_level_) {
         block_map = block_map_;

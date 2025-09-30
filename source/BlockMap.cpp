@@ -326,7 +326,7 @@ AtmosphereNd<3, yakl::memHost> load_dense_atmos<3>(const std::string& path) {
 
 template <int NumDim, class BlockMap>
 BlockMap setup_block_map_sparse_atmos(
-    const yakl::SimpleNetCDF& nc,
+    yakl::SimpleNetCDF& nc,
     const SparseAtmosphere& atmos
 ) {
     BlockMap map;
@@ -365,9 +365,15 @@ BlockMap setup_block_map_sparse_atmos(
         map.bbox.max(2) = atmos.num_z;
     }
 
-    const int num_x_tiles = map->num_x_tiles();
-    const int num_y_tiles = (NumDim == 2) ? 1 : map->num_y_tiles();
-    const int num_z_tiles = map->num_z_tiles();
+    const int num_x_tiles = map.num_x_tiles();
+    const int num_y_tiles = [&](){
+        if constexpr (NumDim == 2) {
+            return 1;
+        } else {
+            return map.num_y_tiles();
+        }
+    }();
+    const int num_z_tiles = map.num_z_tiles();
     const i64 num_total_tiles = i64(num_x_tiles) * i64(num_y_tiles) * i64(num_z_tiles);
 
     auto coord = [](i32 x, i32 y, i32 z) {
@@ -417,37 +423,32 @@ BlockMap setup_block_map_sparse_atmos(
 }
 
 template <int BLOCK_SIZE, int ENTRY_SIZE, int NumDim, class Lookup, class BlockMap>
-MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim, Lookup, BlockMap>::AtmosphereAndBlockMap
-MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim, Lookup, BlockMap>::load_and_sparsify_atmos(
+SparseAtmosphere
+MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim, Lookup, BlockMap>::init_and_sparsify_atmos(
     const std::string& path,
     fp_t cutoff_temperature,
     i32 max_mip_level
 ) {
     typedef MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim, Lookup, BlockMap> self_t;
-    self_t::AtmosphereAndBlockMap result;
+    SparseAtmosphere sparse_atmos;
 
     if (atmosphere_file_is_sparse(path)) {
         yakl::SimpleNetCDF nc;
         nc.open(path, yakl::NETCDF_MODE_READ);
-        SparseAtmosphere atmos = load_sparse_atmosphere<NumDim>(nc);
-        BlockMap block_map = setup_block_map_sparse_atmos<NumDim, BlockMap>(nc, atmos);
-        self_t mr_block_map;
-        mr_block_map.init(block_map, max_mip_level);
-        result.atmos = atmos;
-        result.mr_block_map = mr_block_map;
+        sparse_atmos = load_sparse_atmosphere<NumDim>(nc);
+        BlockMap block_map = setup_block_map_sparse_atmos<NumDim, BlockMap>(nc, sparse_atmos);
+        this->init(block_map, max_mip_level);
     } else {
         auto atmos = load_dense_atmos<NumDim>(path);
         BlockMap block_map;
         block_map.init(atmos, cutoff_temperature);
         self_t mr_block_map;
-        mr_block_map.init(block_map, max_mip_level);
-        SparseAtmosphere sparse_atmos = sparsify_atmosphere(atmos, block_map);
-        result.atmos = sparse_atmos;
-        result.mr_block_map = mr_block_map;
+        this->init(block_map, max_mip_level);
+        sparse_atmos = sparsify_atmosphere(atmos, block_map);
     }
-    return result;
+    return sparse_atmos;
 }
 
 // NOTE(cmo): Create specialisations
-template MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, 2>::AtmosphereAndBlockMap MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, 2>::load_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);
-template MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>::AtmosphereAndBlockMap MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>::load_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);
+template SparseAtmosphere MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, 2>::init_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);
+template SparseAtmosphere MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>::init_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);

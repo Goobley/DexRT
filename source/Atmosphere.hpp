@@ -366,11 +366,14 @@ inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
     if (nc.varExists("offset_z")) {
         nc.read(offset_z, "offset_z");
     }
-    AtmosphereNd<NumDim, yakl::memHost> result{
+    SparseAtmosphere result{
         .voxel_scale = voxel_scale,
         .offset_x = offset_x,
         .offset_y = offset_y,
-        .offset_z = offset_z
+        .offset_z = offset_z,
+        .num_x = x_dim,
+        .num_y = y_dim,
+        .num_z = z_dim
     };
 
 #ifdef DEXRT_SINGLE_PREC
@@ -420,7 +423,7 @@ inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
     fp_t max_vel_2;
     dex_parallel_reduce(
         "Atmosphere Max Vel",
-        FlatLoop<2>(vx.extent(0)),
+        FlatLoop<1>(vx.extent(0)),
         KOKKOS_LAMBDA (i64 x, fp_t& running_max) {
             fp_t vel2 = square(result.vz(x)) + square(result.vy(x)) + square(result.vx(x));
             if (vel2 > running_max) {
