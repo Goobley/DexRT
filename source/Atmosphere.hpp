@@ -289,8 +289,8 @@ inline bool atmosphere_file_is_sparse(const std::string& path) {
         // NOTE(cmo): If not specified, it's dense.
         return false;
     }
-    if (dtype != NC_INT || att_len != 1) {
-        throw std::runtime_error("Expected sparse attribute to be 1x int32");
+    if (att_len != 1) {
+        throw std::runtime_error("Expected sparse attribute to be 1x int");
     }
 
     i32 is_sparse;
@@ -314,11 +314,11 @@ inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
 
     const int ncid = nc.file.ncid;
     int x_dim, y_dim, z_dim, block_size;
-    ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "x", &x_dim), __LINE__);
-    ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "z", &z_dim), __LINE__);
+    ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "num_x", &x_dim), __LINE__);
+    ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "num_z", &z_dim), __LINE__);
     y_dim = 1;
     if constexpr (NumDim > 2) {
-        ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "y", &y_dim), __LINE__);
+        ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "num_y", &y_dim), __LINE__);
     }
     ncwrap(nc_get_att_int(ncid, NC_GLOBAL, "block_size", &block_size), __LINE__);
 

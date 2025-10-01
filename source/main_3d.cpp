@@ -122,9 +122,6 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
     state.atoms_with_gamma = gamma_atoms.atoms;
     state.atoms_with_gamma_mapping = gamma_atoms.mapping;
 
-    AtmosphereNd<3, yakl::memHost> atmos = load_atmos_3d_host(config.atmos_path);
-    BlockMap<BLOCK_SIZE_3D, 3> block_map;
-    block_map.init(atmos, config.threshold_temperature);
     i32 max_mip_level = 0;
     for (int i = 0; i <= config.max_cascade; ++i) {
         max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
@@ -133,9 +130,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
         max_mip_level = 0;
         state.println("Mips not supported with LineCoeffCalc::Classic");
     }
-    state.mr_block_map.init(block_map, max_mip_level);
-
-    state.atmos = sparsify_atmosphere(atmos, block_map);
+    state.atmos = state.mr_block_map.init_and_sparsify_atmos(config.atmos_path, config.threshold_temperature, max_mip_level);
 
     state.phi = VoigtProfile<fp_t>(
         VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
@@ -144,7 +139,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
     state.nh_lte = HPartFn();
     state.println("Scale: {} m", state.atmos.voxel_scale);
 
-    i64 num_active_cells = block_map.get_num_active_cells();
+    i64 num_active_cells = state.mr_block_map.block_map.get_num_active_cells();
 
     const int n_level_total = state.adata.energy.extent(0);
     state.pops = Fp2d("pops", n_level_total, num_active_cells);
@@ -165,19 +160,12 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
 
     // NOTE(cmo): This doesn't actually know that things will be allocated sparse
     CascadeRays3d c0_rays;
-    const auto space_dims = atmos.temperature.get_dimensions();
-    c0_rays.num_probes(0) = space_dims(2);
-    c0_rays.num_probes(1) = space_dims(1);
-    c0_rays.num_probes(2) = space_dims(0);
+    c0_rays.num_probes(0) = state.atmos.num_x;
+    c0_rays.num_probes(1) = state.atmos.num_y;
+    c0_rays.num_probes(2) = state.atmos.num_z;
     c0_rays.num_az_rays = C0_AZ_RAYS_3D;
     c0_rays.num_polar_rays = C0_POLAR_RAYS_3D;
 
-    // state.max_block_mip = decltype(state.max_block_mip)(
-    //     "max_block_mip",
-    //     (state.adata.wavelength.extent(0) + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
-    //     block_map.num_z_tiles(),
-    //     block_map.num_x_tiles()
-    // );
     return c0_rays;
 }
 
