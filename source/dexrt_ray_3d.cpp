@@ -520,7 +520,6 @@ int main(int argc, char** argv) {
         state.phi = VoigtProfile<fp_t>();
         state.nh_lte = HPartFn();
 
-        AtmosphereNd<3, yakl::memHost> atmos = load_atmos_3d_host(config.dexrt.atmos_path);
         std::vector<ModelAtom<f64>> crtaf_models;
         // TODO(cmo): Override atoms in ray config
         crtaf_models.reserve(config.dexrt.atom_paths.size());
@@ -532,12 +531,13 @@ int main(int argc, char** argv) {
         AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
         state.adata = atomic_data.device;
 
-        BlockMap<BLOCK_SIZE_3D, 3> block_map;
-        block_map.init(atmos, config.dexrt.threshold_temperature);
-        i32 max_mip_level = 0;
-        state.mr_block_map.init(block_map, max_mip_level);
+        const i32 max_mip_level = 0;
+        state.atmos = state.mr_block_map.init_and_sparsify_atmos(
+            config.dexrt.atmos_path,
+            config.dexrt.threshold_temperature,
+            max_mip_level
+        );
         configure_mr_block_map(state.mr_block_map);
-        state.atmos = sparsify_atmosphere(atmos, block_map);
 
         update_atmosphere(config.dexrt, &state.atmos);
         DexOutput model_output = load_dex_output(config.dexrt);

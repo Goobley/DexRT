@@ -45,17 +45,17 @@ struct RaySet {
 };
 
 struct DexRayState {
-    Atmosphere atmos;
+    SparseAtmosphere atmos;
+    MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, 2> mr_block_map;
     AtomicData<fp_t> adata;
-    yakl::Array<bool, 2, yakl::memDevice> active;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
-    Fp3d pops;
+    Fp2d pops;
     RaySet<> ray_set;
     Fp2d ray_I; // [wavelength, pos]
     Fp2d ray_tau; // [wavelength, pos]
-    Fp2d eta;
-    Fp2d chi;
+    Fp1d eta;
+    Fp1d chi;
 
     // NOTE(cmo): Depth-data output, big, and only allocated if needed
     yakl::Array<i64, 1, yakl::memDevice> num_steps;
@@ -76,8 +76,7 @@ struct DexRayStateAndBc {
 
 struct DexOutput {
     // TODO(cmo): When we have scattering, add J
-    Fp3d pops;
-    yakl::Array<bool, 2, yakl::memDevice> active;
+    Fp2d pops;
 };
 
 struct AabbPoints {
@@ -211,119 +210,103 @@ bool dex_data_is_sparse(const yakl::SimpleNetCDF& nc) {
     return is_sparse;
 }
 
-BlockMap<BLOCK_SIZE> dex_block_map(const DexrtConfig& config, const Atmosphere& atmos, yakl::SimpleNetCDF& nc) {
-    int block_size_file = 0;
-    int ncid = nc.file.ncid;
-    int ierr = nc_get_att_int(ncid, NC_GLOBAL, "block_size", &block_size_file);
-    if (ierr != NC_NOERR) {
-        throw std::runtime_error(fmt::format("Unable to load block_size from dex output: {}", nc_strerror(ierr)));
-    }
-
-    if (BLOCK_SIZE != block_size_file) {
-        throw std::runtime_error(
-            fmt::format(
-                "Compiled BLOCK_SIZE ({}) != block_size in dex output ({}), please recompile so these are the same",
-                BLOCK_SIZE,
-                block_size_file
-            )
-        );
-    }
-
-    BlockMap<BLOCK_SIZE> block_map;
-    block_map.init(atmos, config.threshold_temperature);
-    return block_map;
+void configure_mr_block_map(const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, 2>& mr_block_map) {
+    const auto& block_map = mr_block_map.block_map;
+    yakl::Array<i32, 1, yakl::memDevice> max_mip_level("max mip entries", block_map.num_z_tiles() * block_map.num_x_tiles());
+    max_mip_level = 0;
+    Kokkos::fence();
+    dex_parallel_for(
+        "Set active blocks in mr_block_map",
+        FlatLoop<1>(block_map.loop_bounds().dim(0)),
+        YAKL_LAMBDA (i64 tile_idx) {
+            MRIdxGen idx_gen(mr_block_map);
+            Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+            i64 flat_entry = mr_block_map.lookup.flat_tile_index(tile_coord);
+            max_mip_level(flat_entry) = 1;
+        }
+    );
+    Kokkos::fence();
+    mr_block_map.lookup.pack_entries(max_mip_level);
 }
 
-DexOutput load_dex_output(const DexrtConfig& config, const Atmosphere& atmos) {
+void load_dex_output(const DexrtConfig& config, DexRayState* state) {
     yakl::SimpleNetCDF nc;
     nc.open(config.output_path, yakl::NETCDF_MODE_READ);
     const bool is_sparse = dex_data_is_sparse(nc);
-    DexOutput result;
 
     if (is_sparse) {
-        BlockMap<BLOCK_SIZE> block_map = dex_block_map(config, atmos, nc);
-        Fp2d temp_pops;
-        nc.read(temp_pops, "pops");
-        Fp3dHost full_pops = rehydrate_sparse_quantity(block_map, temp_pops);
-        result.pops = full_pops.createDeviceCopy();
-
-        // NOTE(cmo): If we're sparse -- we need active, so rely on it being there.
-        // currently active is always written dense -- but we reconstruct it from the block_map here anyway
-        auto active = reify_active_c0(block_map);
-        result.active = decltype(result.active)("active", active.extent(0), active.extent(1));
-        dex_parallel_for(
-            FlatLoop<2>(active.extent(0), active.extent(1)),
-            YAKL_LAMBDA (int i, int j) {
-                result.active(i, j) = active(i, j);
-            }
-        );
-        yakl::fence();
+        nc.read(state->pops, "pops");
     } else {
-        nc.read(result.pops, "pops");
+        // NOTE(cmo): Need to sparsify pops
+        Fp3d temp_pops;
+        nc.read(temp_pops, "pops");
+        const i32 num_level = temp_pops.extent(0);
+        state->pops = Fp2d("pops", num_level, state->atmos.temperature.extent(0));
 
-        if (nc.varExists("active")) {
-            // NOTE(cmo): This is dumb, but isn't going to cause an issue, and netCDF doesn't let us save bool arrays.
-            yakl::Array<unsigned char, 2, yakl::memHost> active_char;
-            nc.read(active_char, "active");
-            yakl::Array<bool, 2, yakl::memHost> active_host("active", active_char.extent(0), active_char.extent(1));
-            for (int z = 0; z < active_char.extent(0); ++z) {
-                for (int x = 0; x < active_char.extent(1); ++x) {
-                    active_host(z, x) = active_char(z, x);
+        JasUnpack((*state), mr_block_map, pops);
+        dex_parallel_for(
+            mr_block_map.block_map.loop_bounds(),
+            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
+                IdxGen idx_gen(mr_block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+                for (int i = 0; i < num_level; ++i) {
+                    pops(i, ks) = temp_pops(i, coord.z, coord.x);
                 }
             }
-            result.active = active_host.createDeviceCopy();
-        } else {
-            // NOTE(cmo): If the active mask isn't in the file, then set everything to true
-            result.active = decltype(result.active)("active", result.pops.extent(1), result.pops.extent(2));
-            result.active = true;
-            yakl::fence();
-        }
+        );
+        Kokkos::fence();
     }
-
-    return result;
 }
 
-void update_atmosphere(const DexrtConfig& config, Atmosphere* atmos) {
+void update_atmosphere(const DexrtConfig& config, DexRayState* state) {
     yakl::SimpleNetCDF nc;
     nc.open(config.output_path, yakl::NETCDF_MODE_READ);
     if (!(nc.varExists("ne") || nc.varExists("nh_tot"))) {
         return;
     }
 
+    JasUnpack((*state), atmos);
     const bool is_sparse = dex_data_is_sparse(nc);
     if (is_sparse) {
-        BlockMap<BLOCK_SIZE> block_map = dex_block_map(config, *atmos, nc);
-
-        auto load_and_rehydrate_if_present = [&](const std::string& name) -> std::optional<Fp2d> {
-            if (!nc.varExists(name)) {
-                return std::nullopt;
-            }
-            Fp1d temp;
-            nc.read(temp, name);
-            // NOTE(cmo): This is a little inefficient, but eh.
-            Fp2dHost hydrated = rehydrate_sparse_quantity(block_map, temp);
-            return hydrated.createDeviceCopy();
-        };
-        auto ne = load_and_rehydrate_if_present("ne");
-        if (ne) {
-            atmos->ne = *ne;
-        }
-        auto nh_tot = load_and_rehydrate_if_present("nh_tot");
-        if (nh_tot) {
-            atmos->nh_tot = *nh_tot;
-        }
-    } else {
         if (nc.varExists("ne")) {
-            nc.read(atmos->ne, "ne");
+            nc.read(atmos.ne, "ne");
         }
         if (nc.varExists("nh_tot")) {
-            nc.read(atmos->nh_tot, "nh_tot");
+            nc.read(atmos.nh_tot, "nh_tot");
         }
+    } else {
+        auto dehydrate_2d_arr = [state](Fp1d& dst, const Fp2d& src) {
+            JasUnpack((*state), mr_block_map);
+
+            dex_parallel_for(
+                FlatLoop<2>(mr_block_map.block_map.loop_bounds()),
+                KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
+                    IdxGen idx_gen(mr_block_map);
+                    i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                    Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+
+                    dst(ks) = src(coord.z, coord.x);
+                }
+            );
+        };
+        if (nc.varExists("ne")) {
+            Fp2d temp_ne;
+            nc.read(temp_ne, "ne");
+            dehydrate_2d_arr(atmos.ne, temp_ne);
+        }
+        if (nc.varExists("nh_tot")) {
+            Fp2d temp_nh_tot;
+            nc.read(temp_nh_tot, "nh_tot");
+            dehydrate_2d_arr(atmos.nh_tot, temp_nh_tot);
+        }
+        Kokkos::fence();
     }
 }
 
 template <int mem_space=yakl::memDevice>
-RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos, int mu_idx) {
+RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const SparseAtmosphere& atmos, int mu_idx) {
     RaySet<mem_space> result;
     if (cfg.rotate_aabb) {
         auto matvec = [] (const mat2x2& mat, const vec2& vec) {
@@ -361,8 +344,8 @@ RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos,
         rot(1, 1) = c;
 
         AabbPoints aabb;
-        int nz = atmos.temperature.extent(0);
-        int nx = atmos.temperature.extent(1);
+        int nz = atmos.num_z;
+        int nx = atmos.num_x;
         aabb.bl(0) = FP(0.0);
         aabb.bl(1) = FP(0.0);
         aabb.br(0) = fp_t(nx);
@@ -469,9 +452,9 @@ RaySet<mem_space> compute_ray_set(const RayConfig& cfg, const Atmosphere& atmos,
             result.start_coord = ray_pos.createDeviceCopy();
         }
     } else {
-        Fp2dHost ray_pos("ray_starts", atmos.temperature.extent(1), 2);
-        fp_t z_max = fp_t(atmos.temperature.extent(0));
-        for (int i = 0; i < atmos.temperature.extent(1); ++i) {
+        Fp2dHost ray_pos("ray_starts", atmos.num_x, 2);
+        fp_t z_max = fp_t(atmos.num_z);
+        for (int i = 0; i < atmos.num_x; ++i) {
             ray_pos(i, 0) = (i + FP(0.5));
             ray_pos(i, 1) = z_max;
         }
@@ -526,48 +509,38 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
     DexRayStateAndBc<Bc>& state = *st;
     JasUnpack(state.state, atmos, pops, ray_set, ray_I, ray_tau, eta, chi, adata, phi, nh_lte);
     JasUnpack(state.state, num_steps, pos, cont_fn, source_fn_depth, tau_depth, eta_depth, chi_depth);
-    JasUnpack(state.state, chi_tau, active);
+    JasUnpack(state.state, chi_tau, mr_block_map);
     auto& bc(state.bc);
 
-    FlatAtmosphere<fp_t> flatmos = flatten(atmos);
-    Fp2d flat_pops = pops.reshape(pops.extent(0), pops.extent(1) * pops.extent(2));
-    // Fp2d flat_n_star = flat_pops.createDeviceObject();
-    Fp2d flat_n_star = Fp2d("flat_n_star", flat_pops.extent(0), flat_pops.extent(1));
-    Fp1d flat_eta = eta.collapse();
-    Fp1d flat_chi = chi.collapse();
-    auto flat_active = active.collapse();
+    Fp2d n_star = Fp2d("flat_n_star", pops.extent(0), pops.extent(1));
 
     for (int wave = 0; wave < ray_set.wavelength.extent(0); ++wave) {
         dex_parallel_for(
             "Compute eta, chi",
-            FlatLoop<1>(flatmos.temperature.extent(0)),
-            YAKL_LAMBDA (i64 k) {
-                if (!flat_active(k)) {
-                    flat_eta(k) = FP(0.0);
-                    flat_chi(k) = FP(0.0);
-                    return;
-                }
+            mr_block_map.block_map.loop_bounds(),
+            YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+                IdxGen idx_gen(mr_block_map);
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 fp_t lambda = ray_set.wavelength(wave);
                 // NOTE(cmo): The projection vector is inverted here as we are
                 // tracing front-to-back.
                 fp_t v_proj = (
-                    flatmos.vx(k) * -ray_set.mu(0)
-                    + flatmos.vy(k) * -ray_set.mu(1)
-                    + flatmos.vz(k) * -ray_set.mu(2)
+                    atmos.vx(ks) * -ray_set.mu(0)
+                    + atmos.vy(ks) * -ray_set.mu(1)
+                    + atmos.vz(ks) * -ray_set.mu(2)
                 );
-                // TODO(cmo): Tidy this up.
                 const bool have_h = (adata.Z(0) == 1);
                 fp_t nh0;
                 if (have_h) {
-                    nh0 = flat_pops(0, k);
+                    nh0 = pops(0, ks);
                 } else {
-                    nh0 = nh_lte(flatmos.temperature(k), flatmos.ne(k), flatmos.nh_tot(k));
+                    nh0 = nh_lte(atmos.temperature(ks), atmos.ne(ks), atmos.nh_tot(ks));
                 }
                 AtmosPointParams local_atmos {
-                    .temperature = flatmos.temperature(k),
-                    .ne = flatmos.ne(k),
-                    .vturb = flatmos.vturb(k),
-                    .nhtot = flatmos.nh_tot(k),
+                    .temperature = atmos.temperature(ks),
+                    .ne = atmos.ne(ks),
+                    .vturb = atmos.vturb(ks),
+                    .nhtot = atmos.nh_tot(ks),
                     .vel = v_proj,
                     .nh0 = nh0
                 };
@@ -577,15 +550,15 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                         .adata = adata,
                         .profile = phi,
                         .lambda = lambda,
-                        .n = flat_pops,
-                        .n_star_scratch = flat_n_star,
-                        .k = k,
+                        .n = pops,
+                        .n_star_scratch = n_star,
+                        .k = ks,
                         .atmos = local_atmos
                     }
                 );
 
-                flat_eta(k) = eta_chi.eta;
-                flat_chi(k) = eta_chi.chi;
+                eta(ks) = eta_chi.eta;
+                chi(ks) = eta_chi.chi;
             }
         );
         yakl::fence();
@@ -609,27 +582,12 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                     flatland_mu(0) = ray_set.mu(0) / flatland_mu_norm;
                     flatland_mu(1) = ray_set.mu(2) / flatland_mu_norm;
 
-                    fp_t max_dim = std::max(fp_t(atmos.temperature.extent(0)), fp_t(atmos.temperature.extent(1)));
-                    vec2 end_pos;
-                    end_pos(0) = start_pos(0) + flatland_mu(0) * FP(10.0) * max_dim;
-                    end_pos(1) = start_pos(1) + flatland_mu(1) * FP(10.0) * max_dim;
+                    fp_t max_dim = std::max(fp_t(atmos.num_z), fp_t(atmos.num_x));
 
-                    vec2 box_x;
-                    box_x(0) = FP(0.0);
-                    box_x(1) = fp_t(atmos.temperature.extent(1));
-                    vec2 box_z;
-                    box_z(0) = FP(0.0);
-                    box_z(1) = fp_t(atmos.temperature.extent(0));
-
-                    ivec2 domain_size;
-                    domain_size(0) = atmos.temperature.extent(1);
-                    domain_size(1) = atmos.temperature.extent(0);
-                    RayMarchState2d s;
-                    bool have_marcher = s.init(
-                        start_pos,
-                        end_pos,
-                        domain_size
-                    );
+                    RaySegment<2> ray_seg(start_pos, flatland_mu, FP(0.0), max_dim);
+                    MRIdxGen idx_gen(mr_block_map);
+                    auto s = MultiLevelDDA<BLOCK_SIZE, ENTRY_SIZE>(idx_gen);
+                    const bool have_marcher = s.init(ray_seg, 0, nullptr);
 
                     if (!have_marcher) {
                         num_steps(ray_idx) = 0;
@@ -638,15 +596,10 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
 
                     i64 step_count = 0;
                     do {
-                        const auto& sample_coord(s.curr_coord);
-                        if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
-                            break;
+                        if (s.can_sample()) {
+                            step_count += 1;
                         }
-                        if (sample_coord(1) < 0 || sample_coord(1) >= domain_size(1)) {
-                            break;
-                        }
-                        step_count += 1;
-                    } while (next_intersection(&s));
+                    } while (s.step_through_grid());
 
                     num_steps(ray_idx) = step_count;
                 }
@@ -727,38 +680,22 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                 flatland_mu(0) = ray_set.mu(0) / flatland_mu_norm;
                 flatland_mu(1) = ray_set.mu(2) / flatland_mu_norm;
 
-                fp_t max_dim = std::max(fp_t(atmos.temperature.extent(0)), fp_t(atmos.temperature.extent(1)));
-                vec2 end_pos;
-                end_pos(0) = start_pos(0) + flatland_mu(0) * FP(10.0) * max_dim;
-                end_pos(1) = start_pos(1) + flatland_mu(1) * FP(10.0) * max_dim;
+                fp_t max_dim = std::max(fp_t(atmos.num_z), fp_t(atmos.num_x));
 
-                vec2 box_x;
-                box_x(0) = FP(0.0);
-                box_x(1) = fp_t(atmos.temperature.extent(1));
-                vec2 box_z;
-                box_z(0) = FP(0.0);
-                box_z(1) = fp_t(atmos.temperature.extent(0));
+                RaySegment<2> ray_seg(start_pos, flatland_mu, FP(0.0), max_dim);
+                MRIdxGen idx_gen(mr_block_map);
+                auto s = MultiLevelDDA<BLOCK_SIZE, ENTRY_SIZE>(idx_gen);
+                const bool have_marcher = s.init(ray_seg, 0, nullptr);
 
-                ivec2 domain_size;
-                domain_size(0) = atmos.temperature.extent(1);
-                domain_size(1) = atmos.temperature.extent(0);
-                RayMarchState2d s;
-                bool have_marcher = s.init(
-                    start_pos,
-                    end_pos,
-                    domain_size
-                );
-
+                fp_t boundary_I = FP(0.0);
+                if (ray_seg.d(1) < FP(0.0)) {
+                    vec2 sample;
+                    sample(0) = start_pos(0) * atmos.voxel_scale + atmos.offset_x;
+                    sample(1) = start_pos(1) * atmos.voxel_scale + atmos.offset_z;
+                    boundary_I = sample_bc(bc, wave, sample, flatland_mu);
+                }
                 if (!have_marcher) {
-                    if (end_pos(1) < start_pos(1)) {
-                        vec2 sample;
-                        sample(0) = start_pos(0) * atmos.voxel_scale + atmos.offset_x;
-                        sample(1) = start_pos(1) * atmos.voxel_scale + atmos.offset_z;
-                        fp_t bc_I = sample_bc(bc, wave, sample, flatland_mu);
-                        ray_I(wave, ray_idx) = bc_I;
-                    } else {
-                        ray_I(wave, ray_idx) = FP(0.0);
-                    }
+                    ray_I(wave, ray_idx) = boundary_I;
                     ray_tau(wave, ray_idx) = FP(0.0);
                     return;
                 }
@@ -770,50 +707,42 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
 
                 i64 step_idx = 0;
                 do {
-                    const auto& sample_coord(s.curr_coord);
-                    if (sample_coord(0) < 0 || sample_coord(0) >= domain_size(0)) {
-                        break;
-                    }
-                    if (sample_coord(1) < 0 || sample_coord(1) >= domain_size(1)) {
-                        break;
-                    }
-                    fp_t eta_s = eta(sample_coord(1), sample_coord(0));
-                    fp_t chi_s = chi(sample_coord(1), sample_coord(0)) + FP(1e-20);
-                    fp_t tau = chi_s * s.dt * distance_factor;
-                    fp_t source_fn = eta_s / chi_s;
-                    fp_t one_m_edt = -std::expm1(-tau);
-                    fp_t cumulative_trans = std::exp(-cumulative_tau);
+                    if (s.can_sample()) {
+                        i64 ks = idx_gen.idx(
+                            0,
+                            Coord2{.x = s.curr_coord(0), .z = s.curr_coord(2)}
+                        );
+                        fp_t eta_s = eta(ks);
+                        fp_t chi_s = chi(ks) + FP(1e-20);
+                        fp_t tau = chi_s * s.dt * distance_factor;
+                        fp_t source_fn = eta_s / chi_s;
+                        fp_t one_m_edt = -std::expm1(-tau);
+                        fp_t cumulative_trans = std::exp(-cumulative_tau);
 
-                    fp_t local_I = one_m_edt * source_fn;
-                    I += cumulative_trans * local_I;
-                    cumulative_tau += tau;
-                    if (output_cfn || output_eta_chi) {
-                        if (wave == 0) {
-                            pos(step_idx, ray_idx) = s.t;
-                        }
+                        fp_t local_I = one_m_edt * source_fn;
+                        I += cumulative_trans * local_I;
+                        cumulative_tau += tau;
+                        if (output_cfn || output_eta_chi) {
+                            if (wave == 0) {
+                                pos(step_idx, ray_idx) = s.t;
+                            }
 
-                        if (output_cfn) {
-                            source_fn_depth(wave, step_idx, ray_idx) = source_fn;
-                            tau_depth(wave, step_idx, ray_idx) = cumulative_tau;
-                            cont_fn(wave, step_idx, ray_idx) = eta_s * cumulative_trans;
-                            chi_tau(wave, step_idx, ray_idx) = chi_s / cumulative_tau;
+                            if (output_cfn) {
+                                source_fn_depth(wave, step_idx, ray_idx) = source_fn;
+                                tau_depth(wave, step_idx, ray_idx) = cumulative_tau;
+                                cont_fn(wave, step_idx, ray_idx) = eta_s * cumulative_trans;
+                                chi_tau(wave, step_idx, ray_idx) = chi_s / cumulative_tau;
+                            }
+                            if (output_eta_chi) {
+                                eta_depth(wave, step_idx, ray_idx) = eta_s;
+                                chi_depth(wave, step_idx, ray_idx) = chi_s;
+                            }
                         }
-                        if (output_eta_chi) {
-                            eta_depth(wave, step_idx, ray_idx) = eta_s;
-                            chi_depth(wave, step_idx, ray_idx) = chi_s;
-                        }
+                        step_idx += 1;
                     }
-                    step_idx += 1;
-                } while (next_intersection(&s));
+                } while (s.step_through_grid());
 
-                // NOTE(cmo): Check BC
-                if (s.p1(1) < s.p0(1)) {
-                    vec2 sample;
-                    sample(0) = s.p1(0) * atmos.voxel_scale + atmos.offset_x;
-                    sample(1) = s.p1(1) * atmos.voxel_scale + atmos.offset_z;
-                    fp_t bc_I = sample_bc(bc, wave, sample, flatland_mu);
-                    I += std::exp(-cumulative_tau) * bc_I;
-                }
+                I += std::exp(-cumulative_tau) * boundary_I;
 
                 ray_I(wave, ray_idx) = I;
                 ray_tau(wave, ray_idx) = cumulative_tau;
@@ -823,7 +752,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
     Kokkos::fence();
 }
 
-yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg, const Atmosphere& atmos) {
+yakl::SimpleNetCDF setup_output(const std::string& path, const RayConfig& cfg, const SparseAtmosphere& atmos) {
     yakl::SimpleNetCDF nc;
     nc.create(path, yakl::NETCDF_MODE_REPLACE);
 
@@ -935,8 +864,6 @@ int main(int argc, char** argv) {
         if (config.dexrt.boundary != BoundaryType::Promweaver) {
             throw std::runtime_error(fmt::format("Only promweaver boundaries are supported by {}", argv[0]));
         }
-        Atmosphere atmos = load_atmos(config.dexrt.atmos_path);
-        update_atmosphere(config.dexrt, &atmos);
         std::vector<ModelAtom<f64>> crtaf_models;
         // TODO(cmo): Override atoms in ray config
         crtaf_models.reserve(config.dexrt.atom_paths.size());
@@ -946,33 +873,36 @@ int main(int argc, char** argv) {
             crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
         }
         AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
-        DexOutput model_output = load_dex_output(config.dexrt, atmos);
 
         DexRayState state{
-            .atmos = atmos,
             .adata = atomic_data.device,
-            .active = model_output.active,
             .phi = VoigtProfile<fp_t>(
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.15), 1024},
                 VoigtProfile<fp_t>::Linspace{FP(0.0), FP(1.5e3), 64 * 1024}
             ),
             .nh_lte = HPartFn(),
-            .pops = model_output.pops
         };
 
+        const i32 max_mip_level = 0;
+        state.atmos = state.mr_block_map.init_and_sparsify_atmos(
+            config.dexrt.atmos_path,
+            config.dexrt.threshold_temperature,
+            max_mip_level
+        );
+        configure_mr_block_map(state.mr_block_map);
+        update_atmosphere(config.dexrt, &state);
+        load_dex_output(config.dexrt, &state);
 
-        state.eta = Fp2d(
+        state.eta = Fp1d(
             "eta",
-            atmos.temperature.extent(0),
-            atmos.temperature.extent(1)
+            state.atmos.temperature.extent(0)
         );
-        state.chi = Fp2d(
+        state.chi = Fp1d(
             "chi",
-            atmos.temperature.extent(0),
-            atmos.temperature.extent(1)
+            state.atmos.temperature.extent(0)
         );
 
-        auto out = setup_output(config.ray_output_path, config, atmos);
+        auto out = setup_output(config.ray_output_path, config, state.atmos);
 
         auto mu_iterator = tq::trange(config.muz.size());
         std::ostringstream ostream_redirect;
@@ -980,7 +910,7 @@ int main(int argc, char** argv) {
             mu_iterator.set_ostream(ostream_redirect);
         }
         for (int mu : mu_iterator) {
-            state.ray_set = compute_ray_set<yakl::memDevice>(config, atmos, mu);
+            state.ray_set = compute_ray_set<yakl::memDevice>(config, state.atmos, mu);
             // TODO(cmo): Hoist this if possible
             PwBc<> pw_bc = load_bc(
                 config.dexrt.atmos_path,
