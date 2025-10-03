@@ -710,7 +710,7 @@ void compute_ray_intensity(DexRayStateAndBc<Bc>* st, const RayConfig& config) {
                     if (s.can_sample()) {
                         i64 ks = idx_gen.idx(
                             0,
-                            Coord2{.x = s.curr_coord(0), .z = s.curr_coord(2)}
+                            Coord2{.x = s.curr_coord(0), .z = s.curr_coord(1)}
                         );
                         fp_t eta_s = eta(ks);
                         fp_t chi_s = chi(ks) + FP(1e-20);
