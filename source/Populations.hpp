@@ -191,6 +191,14 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         wavelength(la) = new_grid[la];
     }
     host_atom.wavelength = wavelength;
+    yakl::Array<T, 1, yakl::memHost> wavelength_bin("delta_lambda", new_grid.size());
+    wavelength_bin(0) = FP(0.5) * (new_grid[1] - new_grid[0]);
+    for (int la = 1; la < wavelength.extent(0) - 1; ++la) {
+        wavelength_bin(la) = FP(0.5) * (new_grid[la + 1] - new_grid[la - 1]);
+    }
+    wavelength_bin(wavelength.extent(0) - 1) = FP(0.5) * (new_grid[wavelength.extent(0) - 1] - new_grid[wavelength.extent(0) - 2]);
+    host_atom.wavelength_bin = wavelength_bin;
+
 
     int n_sigma = 0;
     for (int kr = 0; kr < blue_wavelengths.size(); ++kr) {
@@ -286,6 +294,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         result.lines = host_atom.lines.createDeviceCopy();
         result.broadening = host_atom.broadening.createDeviceCopy();
         result.wavelength = host_atom.wavelength.createDeviceCopy();
+        result.wavelength_bin = host_atom.wavelength_bin.createDeviceCopy();
         result.continua = host_atom.continua.createDeviceCopy();
         result.sigma = host_atom.sigma.createDeviceCopy();
         result.temperature = host_atom.temperature.createDeviceCopy();
@@ -582,7 +591,13 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
         wavelength(la) = new_grid[la];
         governing_trans(la) = gov_trans[la];
     }
-    JasPack(host_data, wavelength, governing_trans);
+    yakl::Array<T, 1, yakl::memHost> wavelength_bin("wavelength", new_grid.size());
+    wavelength_bin(0) = FP(0.5) * (new_grid[1] - new_grid[0]);
+    for (int la = 1; la < wavelength.extent(0) - 1; ++la) {
+        wavelength_bin(la) = FP(0.5) * (new_grid[la + 1] - new_grid[la - 1]);
+    }
+    wavelength_bin(wavelength.extent(0) - 1) = FP(0.5) * (new_grid[wavelength.extent(0) - 1] - new_grid[wavelength.extent(0) - 2]);
+    JasPack(host_data, wavelength, governing_trans, wavelength_bin);
 
     int n_sigma = 0;
     for (int kr = 0; kr < blue_wavelengths.size(); ++kr) {
@@ -734,6 +749,7 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
         .continua = host_data.continua.createDeviceCopy(),
         .sigma = host_data.sigma.createDeviceCopy(),
         .wavelength = host_data.wavelength.createDeviceCopy(),
+        .wavelength_bin = host_data.wavelength_bin.createDeviceCopy(),
         .governing_trans = host_data.governing_trans.createDeviceCopy(),
         .collisions = host_data.collisions.createDeviceCopy(),
         .temperature = host_data.temperature.createDeviceCopy(),
@@ -789,6 +805,7 @@ CompAtom<T, mem_space> extract_atom(
         // NOTE(cmo): We hand over the whole broadening array as the lines are set up to index into this
         .broadening = adata.broadening,
         .wavelength = adata.wavelength,
+        .wavelength_bin = adata.wavelength_bin,
 
         .continua = decltype(adata.continua)("continua", adata.continua.data() + cont_start, n_cont),
         // NOTE(cmo): Same for sigma

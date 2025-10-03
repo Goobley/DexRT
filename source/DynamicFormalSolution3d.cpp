@@ -182,16 +182,7 @@ void dynamic_compute_gamma(
                 if (include_4pi_hc) {
                     hc_4pi_eff = hc_kJ_nm / four_pi;
                 }
-                fp_t wl_weight = lambda / hc_4pi_eff;
-                if (la == 0) {
-                    wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
-                } else if (la == wavelength.extent(0) - 1) {
-                    wl_weight *= FP(0.5) * (
-                        wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
-                    );
-                } else {
-                    wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
-                }
+                fp_t wl_weight = lambda / hc_4pi_eff * adata.wavelength_bin(la);
                 const fp_t wl_ray_weight = wl_weight / fp_t(ray_set.num_az_rays * ray_set.num_polar_rays);
                 AtmosPointParams local_atmos;
                 local_atmos.temperature = flatmos.temperature(ks);

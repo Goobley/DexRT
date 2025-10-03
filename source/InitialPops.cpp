@@ -49,16 +49,7 @@ void set_zero_radiation_pops(State* st, int atom) {
 
                 const fp_t lambda = wavelength(la);
                 const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
-                fp_t wl_weight = FP(1.0) / hnu_4pi;
-                if (la == 0) {
-                    wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
-                } else if (la == num_wave - 1) {
-                    wl_weight *= FP(0.5) * (
-                        wavelength(num_wave - 1) - wavelength(num_wave - 2)
-                    );
-                } else {
-                    wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
-                }
+                fp_t wl_weight = FP(1.0) / hnu_4pi * adata.wavelength_bin(la);
 
                 const fp_t dE_kbT = (adata.energy(level_start + cont.j) - adata.energy(level_start + cont.i)) / (k_B_eV * temperature_k);
                 const fp_t saha_boltzmann = adata.g(level_start + cont.i) / adata.g(level_start + cont.j) * std::pow(debroglie_const / temperature_k, FP(1.5)) * std::exp(dE_kbT); // NOTE(cmo): Not missing a minus.

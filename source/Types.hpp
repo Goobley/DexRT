@@ -743,6 +743,8 @@ struct CompAtom {
     yakl::Array<ScaledExponentsBroadening<T> const, 1, mem_space> broadening;
 
     yakl::Array<T const, 1, mem_space> wavelength;
+    /// The width of the wavelength bin associated with each wavelength
+    yakl::Array<T const, 1, mem_space> wavelength_bin;
     yakl::Array<CompCont<T> const, 1, mem_space> continua;
     yakl::Array<T const, 1, mem_space> sigma;
 
@@ -797,6 +799,8 @@ struct AtomicData {
     yakl::Array<T const, 1, mem_space> sigma;
 
     yakl::Array<T const, 1, mem_space> wavelength;
+    /// The width of the wavelength bin associated with each wavelength
+    yakl::Array<T const, 1, mem_space> wavelength_bin;
     yakl::Array<TransitionIndex const, 1, mem_space> governing_trans;
 
     yakl::Array<CompColl<T> const, 1, mem_space> collisions; // num_atom * num_coll
