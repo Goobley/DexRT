@@ -511,3 +511,192 @@ void dynamic_formal_sol_rc(const State& state, const CascadeState& casc_state, b
         yakl::fence();
     }
 }
+
+struct PartialInnerSweepData {
+    int la_start;
+    int la_end;
+    bool lambda_iterate;
+    int sweep_start;
+    const State& state;
+    const CascadeState& casc_state;
+    const Fp2d& lte_scratch;
+    const Fp3d& cascade_cache;
+};
+
+void partial_inner_sweep(const PartialInnerSweepData& args) {
+    JasUnpack(args, la_start, la_end, lambda_iterate, sweep_start, state, casc_state, lte_scratch, cascade_cache);
+    constexpr int RcModeBc = RC_flags_pack(RcFlags{
+        .dynamic = true,
+        .preaverage = PREAVERAGE,
+        .sample_bc = true,
+        .compute_alo = false,
+        .dir_by_dir = DIR_BY_DIR
+    });
+    constexpr int RcModeNoBc = RC_flags_pack(RcFlags{
+        .dynamic = true,
+        .preaverage = PREAVERAGE,
+        .sample_bc = false,
+        .compute_alo = false,
+        .dir_by_dir = DIR_BY_DIR
+    });
+    constexpr int RcModeAlo = RC_flags_pack(RcFlags{
+        .dynamic = true,
+        .preaverage = PREAVERAGE,
+        .sample_bc = false,
+        .compute_alo = true,
+        .dir_by_dir = DIR_BY_DIR
+    });
+
+    constexpr int RcStorage = RC_flags_storage_2d();
+    constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
+    JasUnpack(casc_state, mip_chain);
+    // NOTE(cmo): lte_scratch filled here
+    mip_chain.fill_mip0_atomic(state, lte_scratch, la_start, la_end);
+    mip_chain.compute_mips(state, la_start, la_end);
+
+    auto copy_to_cache = [&](int subset, int casc_idx) {
+        CascadeIdxs casc_idxs = cascade_indices(casc_state, casc_idx);
+        const auto& casc_i = casc_state.i_cascades[casc_idxs.i];
+        dex_parallel_for(
+            // NOTE(cmo): the cache can be overallocated relative to the cascade, but not vice-versa
+            FlatLoop<1>(casc_i.extent(0)),
+            KOKKOS_LAMBDA (i64 idx) {
+                cascade_cache(subset, casc_idx-1, idx) = casc_i(idx);
+            }
+        );
+    };
+
+    for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
+        if (casc_state.psi_star.initialized()) {
+            casc_state.psi_star = FP(0.0);
+        }
+        CascadeCalcSubset subset{
+            .la_start=la_start,
+            .la_end=la_end,
+            .subset_idx=subset_idx
+        };
+        mip_chain.fill_subset_mip0_atomic(state, subset, lte_scratch);
+        mip_chain.compute_subset_mips(state, subset);
+
+        // NOTE(cmo): We start solving for radiation on cascade s (sweep_start),
+        // merging with s+1. Thus, s+1 needs to be set up to be merged from.
+        CascadeIdxs casc_idxs = cascade_indices(casc_state, sweep_start);
+        if (casc_idxs.ip != -1) {
+            const auto& casc_ip = casc_state.i_cascades[casc_idxs.ip];
+            dex_parallel_for(
+                // NOTE(cmo): the cache can be overallocated relative to the cascade, but not vice-versa
+                FlatLoop<1>(casc_ip.extent(0)),
+                KOKKOS_LAMBDA (i64 idx) {
+                    // NOTE(cmo): We don't cache cascade 0, so c_s+1 is stored
+                    // in index s.
+                    casc_ip(idx) = cascade_cache(subset_idx, sweep_start, idx);
+                }
+            );
+            Kokkos::fence();
+        }
+
+        if (sweep_start == casc_state.num_cascades) {
+            cascade_i_25d<RcModeBc>(
+                state,
+                casc_state,
+                casc_state.num_cascades,
+                subset,
+                mip_chain
+            );
+            copy_to_cache(subset_idx, casc_state.num_cascades);
+        }
+        for (
+            int casc_idx = std::min(casc_state.num_cascades - 1, sweep_start);
+            casc_idx >= 1;
+            --casc_idx
+        ) {
+            cascade_i_25d<RcModeNoBc>(
+                state,
+                casc_state,
+                casc_idx,
+                subset,
+                mip_chain
+            );
+            copy_to_cache(subset_idx, casc_idx);
+        }
+        if (casc_state.psi_star.initialized() && !lambda_iterate) {
+            cascade_i_25d<RcModeAlo>(
+                state,
+                casc_state,
+                0,
+                subset,
+                mip_chain
+            );
+        } else {
+            cascade_i_25d<RcModeNoBc>(
+                state,
+                casc_state,
+                0,
+                subset,
+                mip_chain
+            );
+        }
+        if (casc_state.psi_star.initialized()) {
+            // NOTE(cmo): Add terms to Gamma
+            dynamic_compute_gamma(
+                state,
+                casc_state,
+                lte_scratch,
+                subset
+            );
+        }
+        merge_c0_to_J(
+            casc_state,
+            state.mr_block_map,
+            state.J,
+            state.incl_quad,
+            la_start,
+            la_end
+        );
+        yakl::fence();
+    }
+}
+
+void dynamic_formal_sol_rc_wcycle(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
+    // TODO(cmo): This scratch space isn't ideal right now - we will get rid of
+    // it, for now, trust the pool allocator
+    auto pops_dims = state.pops.get_dimensions();
+    Fp2d lte_scratch("lte_scratch", pops_dims(0), pops_dims(1));
+
+    constexpr int RcStorage = RC_flags_storage_2d();
+    constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
+    i64 max_casc_size = 0;
+    for (int i = 0; i < casc_state.i_cascades.size(); ++i) {
+        max_casc_size = std::max(max_casc_size, i64(casc_state.i_cascades[i].extent(0)));
+    }
+    // NOTE(cmo): We assume in general that PINGPONG_BUFFERS and DIR_BY_DIR will
+    // be used, so we need to cache the results of the upper cascades. We don't
+    // need to cache cascade 0, so don't allocate for it.
+    Fp3d casc_cache("cascade_cache", num_subsets, casc_state.num_cascades, max_casc_size);
+    JasUnpack(casc_state, mip_chain);
+
+    if (la_end == -1) {
+        la_end = la_start + 1;
+    }
+    if ((la_end - la_start) > WAVE_BATCH) {
+        assert(false && "Wavelength batch too big.");
+    }
+
+    partial_inner_sweep(
+        PartialInnerSweepData{
+            .la_start = la_start,
+            .la_end = la_end,
+            .lambda_iterate = lambda_iterate,
+            .sweep_start = sweep_start,
+            .state = state,
+            .casc_state = casc_state,
+            .lte_scratch = lte_scratch,
+            .cascade_cache = casc_cache
+        }
+    );
+
+    // TODO(cmo): Setup sweep_start on the state, and modify it over time in a
+    // way that produces the desired cycle, along with some variable to track
+    // whether the cycle is complete. Hoise casc_cache to CascadeState so it
+    // persists.
+}

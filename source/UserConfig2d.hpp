@@ -214,6 +214,19 @@ constexpr bool EXTRA_SAFE_SOURCE_FN = true;
 // report the wavelength if it is).
 constexpr bool REPORT_NAN_INTENSITY = false;
 
+/*== Iteration Scheme ========================================================*/
+
+enum class PopSolverRadiationEstimate {
+    Full,
+    WCycle,
+};
+// The scheme to use for estimating the radiation field to evaluate the population update:
+// - Full: Classic RC, evaluate everything, computing cascades from highest to lowest, and merging as we go.
+// - WCycle: Multigrid inspired, first perform a full iteration, then perform
+// iterations only updating the lower cascades. Significantly more memory
+// expensive. N.B. currently not compatible with parallax fixes.
+constexpr PopSolverRadiationEstimate POP_SOLVER_RAD_ESTIMATE = PopSolverRadiationEstimate::WCycle;
+
 /*== MPI Setup ===============================================================*/
 
 // Whether to load balance wavelength distribution over MPI by running a
