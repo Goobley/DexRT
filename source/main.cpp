@@ -850,7 +850,7 @@ int main(int argc, char** argv) {
 
     std::optional<std::string> restart_path = program.present("--restart-from");
 
-    const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
+    const DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
 
     Kokkos::initialize();
     yakl::init(

@@ -91,7 +91,7 @@ RayConfig parse_ray_config(const std::string& path) {
         }
     }
 
-    config.dexrt = parse_dexrt_config(config.dexrt_config_path);
+    config.dexrt = load_and_parse_dexrt_config(config.dexrt_config_path);
 
     auto require_key = [&] (const std::string& key) {
         if (!file[key]) {

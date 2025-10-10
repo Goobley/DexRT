@@ -703,7 +703,7 @@ int main(int argc, char** argv) {
     program.add_epilog("DexRT 3D Radiance Cascade based non-LTE solver (3d).");
 
     program.parse_args(argc, argv);
-    const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
+    const DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
 
     std::optional<std::string> restart_path = program.present("--restart-from");
     const bool show_iteration_progress = program.get<bool>("--intra-iteration-progress");
