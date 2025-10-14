@@ -357,7 +357,7 @@ YAKL_INLINE EmisOpac emis_opac(
                     ia
                 );
                 const auto lte_data = extract_lte_terms_dev(adata, ia);
-                lte_pops<T, fp_t, mem_space>(
+                lte_pops(
                     lte_data.energy,
                     lte_data.g,
                     lte_data.stage,
