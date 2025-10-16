@@ -1,3 +1,7 @@
+#ifdef KOKKOS_ENABLE_DEBUG
+// NOTE(cmo): This file is causing weird linker errors in debug
+#undef KOKKOS_ENABLE_DEBUG
+#endif
 #include "NgAcceleration.hpp"
 #include "Utils.hpp"
 #include "State.hpp"
