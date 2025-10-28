@@ -321,14 +321,12 @@ inline void parse_mip_config(DexrtConfig* cfg, const YAML::Node& file) {
     }
 }
 
-
-inline DexrtConfig parse_dexrt_config(const std::string& path) {
+inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file) {
     DexrtConfig config{};
     config.own_path = path;
     config.atmos_path = "dexrt_atmos.nc";
     config.output_path = "dexrt.nc";
 
-    YAML::Node file = YAML::LoadFile(path);
     if (file["system"]) {
         auto system = file["system"];
         if (system["mem_pool_gb"]) {
@@ -386,6 +384,11 @@ inline DexrtConfig parse_dexrt_config(const std::string& path) {
     parse_mip_config(&config, file);
 
     return config;
+}
+
+inline DexrtConfig load_and_parse_dexrt_config(const std::string& path) {
+    YAML::Node file = YAML::LoadFile(path);
+    return parse_dexrt_config(path, file);
 }
 
 #else

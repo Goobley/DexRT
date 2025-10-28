@@ -16,6 +16,15 @@ typedef float fp_t;
 typedef double fp_t;
 #define FP(X) (X)
 #endif
+namespace Dex {
+    using fp_t = fp_t;
+
+    inline namespace literals {
+        constexpr fp_t operator""_fp(long double x) {
+            return fp_t(x);
+        }
+    }
+}
 typedef float f32;
 typedef double f64;
 typedef int8_t i8;

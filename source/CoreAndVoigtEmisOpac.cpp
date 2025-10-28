@@ -1,5 +1,6 @@
 #include "CoreAndVoigtEmisOpac.hpp"
 #include "State3d.hpp"
+#include "Atmosphere.hpp"
 
 namespace CoreAndVoigt {
     struct CoreAndVoigtState {

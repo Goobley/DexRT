@@ -1,4 +1,6 @@
 #include "BlockMap.hpp"
+#include "Atmosphere.hpp"
+#include "MiscSparse.hpp"
 
 template <>
 template <class BlockMap>
@@ -306,3 +308,147 @@ template void BlockMapInit<2>::setup_sparse<BlockMap<BLOCK_SIZE, 2>, yakl::memDe
 template void BlockMapInit<2>::setup_dense<BlockMap<BLOCK_SIZE, 2>>(BlockMap<BLOCK_SIZE, 2>*, Dims<2>);
 template void BlockMapInit<3>::setup_sparse<BlockMap<BLOCK_SIZE_3D, 3>, yakl::memHost>(BlockMap<BLOCK_SIZE_3D, 3>*, const AtmosphereNd<3, yakl::memHost>&, fp_t);
 template void BlockMapInit<3>::setup_dense<BlockMap<BLOCK_SIZE_3D, 3>>(BlockMap<BLOCK_SIZE_3D, 3>*, Dims<3>);
+
+template <int NumDim>
+std::conditional_t<NumDim < 3, AtmosphereNd<NumDim>, AtmosphereNd<NumDim, yakl::memHost>>
+load_dense_atmos(const std::string& path) {
+}
+
+template <>
+AtmosphereNd<2> load_dense_atmos<2>(const std::string& path) {
+    return load_atmos(path);
+}
+
+template <>
+AtmosphereNd<3, yakl::memHost> load_dense_atmos<3>(const std::string& path) {
+    return load_atmos_3d_host(path);
+}
+
+template <int NumDim, class BlockMap>
+BlockMap setup_block_map_sparse_atmos(
+    yakl::SimpleNetCDF& nc,
+    const SparseAtmosphere& atmos
+) {
+    BlockMap map;
+    constexpr i32 block_size = (NumDim == 2) ? BLOCK_SIZE : BLOCK_SIZE_3D;
+    if (
+        atmos.num_x % block_size != 0
+        || atmos.num_z % block_size != 0
+        || (NumDim == 3 && atmos.num_y % block_size != 0)
+    ) {
+        throw std::runtime_error("Grid is not a multiple of BLOCK_SIZE");
+    }
+    map.num_x_tiles() = atmos.num_x / block_size;
+    map.num_z_tiles() = atmos.num_z / block_size;
+    if constexpr (NumDim > 2) {
+        map.num_y_tiles() = atmos.num_y / block_size;
+    }
+
+    map.num_active_tiles = nc.getDimSize("num_active_tiles");
+    if (map.num_active_tiles * DexImpl::int_pow<NumDim>(block_size) != atmos.temperature.extent(0)) {
+        throw std::runtime_error(
+            fmt::format(
+                "num_active_tiles in atmosphere file ({}) doesn't the expected number from the atmosphere fields ({} / {})",
+                map.num_active_tiles,
+                atmos.temperature.extent(0),
+                DexImpl::int_pow<NumDim>(block_size)
+            )
+        );
+    }
+
+    map.bbox.min = 0;
+    map.bbox.max(0) = atmos.num_x;
+    if constexpr (NumDim == 2) {
+        map.bbox.max(1) = atmos.num_z;
+    } else {
+        map.bbox.max(1) = atmos.num_y;
+        map.bbox.max(2) = atmos.num_z;
+    }
+
+    const int num_x_tiles = map.num_x_tiles();
+    const int num_y_tiles = [&](){
+        if constexpr (NumDim == 2) {
+            return 1;
+        } else {
+            return map.num_y_tiles();
+        }
+    }();
+    const int num_z_tiles = map.num_z_tiles();
+    const i64 num_total_tiles = i64(num_x_tiles) * i64(num_y_tiles) * i64(num_z_tiles);
+
+    auto coord = [](i32 x, i32 y, i32 z) {
+        if constexpr (NumDim == 2) {
+            return Coord2{.x = x, .z = z};
+        } else {
+            return Coord3{.x = x, .y = y, .z = z};
+        }
+    };
+
+    yakl::Array<uint32_t, 1, yakl::memHost> morton_order("morton_traversal_order", num_total_tiles);
+    i64 idx = 0;
+    for (int z = 0; z < num_z_tiles; ++z) {
+        for (int y = 0; y < num_y_tiles; ++y) {
+            for (int x = 0; x < num_x_tiles; ++x) {
+                morton_order(idx++) = encode_morton<NumDim>(
+                    coord(x, y, z)
+                );
+            }
+        }
+    }
+    std::sort(morton_order.begin(), morton_order.end());
+    map.morton_traversal_order = morton_order.createDeviceCopy();
+
+    if constexpr (NumDim == 2) {
+        map.lookup.init(Dims<2>{.x = num_x_tiles, .z = num_z_tiles});
+    } else {
+        map.lookup.init(Dims<3>{.x = num_x_tiles, .y = num_y_tiles, .z = num_z_tiles});
+    }
+    // NOTE(cmo): We will trust the morton_tiles (i.e. active_tiles in
+    // block_map) loaded from the file. It could be different from the
+    // morton_traversal_order if something goes wrong, but there aren't actually
+    // any downstream consumers of morton_traversal_order, so it shouldn't
+    // matter.
+    nc.read(map.active_tiles, "morton_tiles");
+    KOKKOS_ASSERT(map.active_tiles.extent(0) == map.num_active_tiles);
+    dex_parallel_for(
+        FlatLoop<1>(map.active_tiles.extent(0)),
+        KOKKOS_LAMBDA (i64 active_idx) {
+            auto tile_idx = decode_morton<NumDim>(map.active_tiles(active_idx));
+            map.lookup(tile_idx) = active_idx;
+        }
+    );
+    Kokkos::fence();
+
+    return map;
+}
+
+template <int BLOCK_SIZE, int ENTRY_SIZE, int NumDim, class Lookup, class BlockMap>
+SparseAtmosphere
+MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim, Lookup, BlockMap>::init_and_sparsify_atmos(
+    const std::string& path,
+    fp_t cutoff_temperature,
+    i32 max_mip_level
+) {
+    typedef MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, NumDim, Lookup, BlockMap> self_t;
+    SparseAtmosphere sparse_atmos;
+
+    if (atmosphere_file_is_sparse(path)) {
+        yakl::SimpleNetCDF nc;
+        nc.open(path, yakl::NETCDF_MODE_READ);
+        sparse_atmos = load_sparse_atmosphere<NumDim>(nc);
+        BlockMap block_map = setup_block_map_sparse_atmos<NumDim, BlockMap>(nc, sparse_atmos);
+        this->init(block_map, max_mip_level);
+    } else {
+        auto atmos = load_dense_atmos<NumDim>(path);
+        BlockMap block_map;
+        block_map.init(atmos, cutoff_temperature);
+        self_t mr_block_map;
+        this->init(block_map, max_mip_level);
+        sparse_atmos = sparsify_atmosphere(atmos, block_map);
+    }
+    return sparse_atmos;
+}
+
+// NOTE(cmo): Create specialisations
+template SparseAtmosphere MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE, 2>::init_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);
+template SparseAtmosphere MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>::init_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);

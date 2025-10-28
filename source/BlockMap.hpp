@@ -3,7 +3,7 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "Utils.hpp"
-#include "Atmosphere.hpp"
+// #include "Atmosphere.hpp"
 #include "MortonCodes.hpp"
 #include <fmt/core.h>
 
@@ -411,6 +411,8 @@ struct MultiResBlockMap {
     yakl::SArray<i64, 1, max_storable_entry> mip_offsets;
     BlockMap block_map;
     MultiLevelLookup<NumDim, ENTRY_SIZE> lookup;
+
+    SparseAtmosphere init_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);
 
     void init(const BlockMap& block_map_, i32 max_mip_level_) {
         block_map = block_map_;

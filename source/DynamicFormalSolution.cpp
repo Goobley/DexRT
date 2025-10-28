@@ -80,16 +80,7 @@ void dynamic_compute_gamma_atomic(
                 const int la = la_start + wave;
                 fp_t lambda = wavelength(la);
                 const fp_t hnu_4pi = hc_kJ_nm / (four_pi * lambda);
-                fp_t wl_weight = FP(1.0) / hnu_4pi;
-                if (la == 0) {
-                    wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
-                } else if (la == wavelength.extent(0) - 1) {
-                    wl_weight *= FP(0.5) * (
-                        wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
-                    );
-                } else {
-                    wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
-                }
+                fp_t wl_weight = FP(1.0) / hnu_4pi * adata.wavelength_bin(la);
                 const fp_t wl_ray_weight = wl_weight / fp_t(c0_dirs_to_average<RcMode>());
 
                 vec3 mu = inverted_mu(ray, incl_quad.muy(probe_idx.incl));
@@ -227,16 +218,7 @@ void dynamic_compute_gamma_nonatomic(
         if (include_4pi_hc) {
             hc_4pi_eff *= hc_4pi;
         }
-        fp_t wl_weight = lambda / hc_4pi_eff;
-        if (la == 0) {
-            wl_weight *= FP(0.5) * (wavelength_h(1) - wavelength_h(0));
-        } else if (la == wavelength_h.extent(0) - 1) {
-            wl_weight *= FP(0.5) * (
-                wavelength_h(wavelength_h.extent(0) - 1) - wavelength_h(wavelength_h.extent(0) - 2)
-            );
-        } else {
-            wl_weight *= FP(0.5) * (wavelength_h(la + 1) - wavelength_h(la - 1));
-        }
+        fp_t wl_weight = lambda / hc_4pi_eff * state.adata_host.wavelength_bin(la);
         const fp_t wl_ray_weight = wl_weight / fp_t(c0_dirs_to_average<RcMode>());
         wl_ray_weights(wave) = wl_ray_weight;
     }

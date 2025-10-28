@@ -26,6 +26,10 @@ struct NgAccelerator {
         return true;
     }
 
+    void reset() {
+        step_count = 0;
+    }
+
     void copy_pops(i32 storage_idx, const Fp2d& pops_in) {
         JasUnpack((*this), pops);
         auto pops_in_h = pops_in.createHostCopy();

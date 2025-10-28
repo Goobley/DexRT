@@ -11,6 +11,8 @@ struct NrPostUpdateOptions {
     /// starting fraction lower than this
     fp_t ignore_change_below_ntot_frac = FP(0.0);
     bool conserve_pressure = false;
+    /// Set the total baryon abundance relative to H (e.g. 1.1 for a 10% He mix). Negative for default
+    fp_t total_abund = FP(-1.0);
 };
 
 

@@ -72,16 +72,7 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
             JasUse(ray_set, incl_quad, ray_set_3d, num_cascades);
             for (int la = line.blue_idx; la < line.red_idx; ++la) {
                 const fp_t lambda = wavelength(la);
-                fp_t wl_weight = FP(1.0);
-                if (la == 0) {
-                    wl_weight *= FP(0.5) * (wavelength(1) - wavelength(0));
-                } else if (la == wavelength.extent(0) - 1) {
-                    wl_weight *= FP(0.5) * (
-                        wavelength(wavelength.extent(0) - 1) - wavelength(wavelength.extent(0) - 2)
-                    );
-                } else {
-                    wl_weight *= FP(0.5) * (wavelength(la + 1) - wavelength(la - 1));
-                }
+                fp_t wl_weight = adata.wavelength_bin(la);
 
                 // NOTE(cmo): Evaluate the profile with the current value in
                 // local_atmos, and add it to entry with the provided ray_weight

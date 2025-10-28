@@ -1,6 +1,8 @@
 #include "Mipmaps3d.hpp"
 #include "RcUtilsModes.hpp"
 #include "EmisOpac.hpp"
+#include "Atmosphere.hpp"
+#include "Utils.hpp"
 
 void ClassicEmisOpacData3d::init(i64 buffer_len) {
     dynamic_opac = Fp1d("dynamic_opac", buffer_len);

@@ -101,7 +101,6 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
 
     State& state = *st;
 
-    Atmosphere atmos = load_atmos(config.atmos_path);
     std::vector<ModelAtom<f64>> crtaf_models;
     crtaf_models.reserve(config.atom_paths.size());
     for (int i = 0; i < config.atom_paths.size(); ++i) {
@@ -118,8 +117,6 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     state.atoms_with_gamma = gamma_atoms.atoms;
     state.atoms_with_gamma_mapping = gamma_atoms.mapping;
 
-    BlockMap<BLOCK_SIZE> block_map;
-    block_map.init(atmos, config.threshold_temperature);
     i32 max_mip_level = 0;
     for (int i = 0; i <= config.max_cascade; ++i) {
         max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
@@ -128,9 +125,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
         max_mip_level = 0;
         state.println("Mips not supported with LineCoeffCalc::Classic");
     }
-    state.mr_block_map.init(block_map, max_mip_level);
-
-    state.atmos = sparsify_atmosphere(atmos, block_map);
+    state.atmos = state.mr_block_map.init_and_sparsify_atmos(config.atmos_path, config.threshold_temperature, max_mip_level);
 
     state.phi = VoigtProfile<fp_t>(
         VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
@@ -139,7 +134,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     state.nh_lte = HPartFn();
     state.println("Scale: {} m", state.atmos.voxel_scale);
 
-    i64 num_active_cells = block_map.get_num_active_cells();
+    i64 num_active_cells = state.mr_block_map.get_num_active_cells();
 
     const int n_level_total = state.adata.energy.extent(0);
     state.pops = Fp2d("pops", n_level_total, num_active_cells);
@@ -160,13 +155,13 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
 
     // NOTE(cmo): This doesn't actually know that things will be allocated sparse
     CascadeRays c0_rays;
-    const auto space_dims = atmos.temperature.get_dimensions();
-    c0_rays.num_probes(0) = space_dims(1);
-    c0_rays.num_probes(1) = space_dims(0);
+    c0_rays.num_probes(0) = state.atmos.num_x;
+    c0_rays.num_probes(1) = state.atmos.num_z;
     c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
     c0_rays.num_incl = NUM_INCL;
     c0_rays.wave_batch = WAVE_BATCH;
 
+    const auto& block_map = state.mr_block_map.block_map;
     state.max_block_mip = decltype(state.max_block_mip)(
         "max_block_mip",
         (state.adata.wavelength.extent(0) + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
@@ -925,7 +920,7 @@ int main(int argc, char** argv) {
 
     std::optional<std::string> restart_path = program.present("--restart-from");
 
-    const DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
+    const DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
 
     Kokkos::initialize(argc, argv);
     yakl::init(
