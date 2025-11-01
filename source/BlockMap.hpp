@@ -414,11 +414,13 @@ struct MultiResBlockMap {
 
     SparseAtmosphere init_and_sparsify_atmos(const std::string& path, fp_t cutoff_temperature, i32 max_mip_level);
 
-    void init(const BlockMap& block_map_, i32 max_mip_level_) {
+    void init(const BlockMap& block_map_, i32 max_mip_level_, bool quiet=true) {
         block_map = block_map_;
         lookup.init(block_map);
         max_mip_level = max_mip_level_;
-        fmt::println("Using a max mip level of {}", max_mip_level);
+        if (quiet) {
+            fmt::println("Using a max mip level of {}", max_mip_level);
+        }
         if ((max_mip_level + 1) > max_storable_entry) {
             throw std::runtime_error("More mip levels requested than storable in packed data. Increase ENTRY_SIZE");
         }
