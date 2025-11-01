@@ -88,29 +88,22 @@ struct WavelengthDistributor {
     }
 
     inline void serve_requests(std::stop_token stop_token, const MpiState& mpi_state) {
-        MPI_Request req;
         int from[req_size];
-        bool setup_new_recv = true;
 
         auto loop_body = [&]() {
             int message_ready = 0;
             MPI_Status status;
-            MPI_Test(&req, &message_ready, &status);
+            MPI_Iprobe(MPI_ANY_SOURCE, wavelength_tag, mpi_state.comm, &message_ready, &status);
             if (message_ready) {
+                MPI_Recv(from, req_size, MPI_INT, MPI_ANY_SOURCE, wavelength_tag, mpi_state.comm, &status);
                 int rank_from = from[0];
                 int rank_batch_size = from[1];
                 int next_la = get_next_la_critical(rank_batch_size);
                 MPI_Send(&next_la, 1, MPI_INT, status.MPI_SOURCE, wavelength_tag, mpi_state.comm);
-                setup_new_recv = true;
             }
         };
 
         while (!stop_token.stop_requested()) {
-            if (setup_new_recv) {
-                MPI_Irecv(from, req_size, MPI_INT, MPI_ANY_SOURCE, wavelength_tag, mpi_state.comm, &req);
-                setup_new_recv = false;
-            }
-
             if constexpr (MPI_PROTECT_TEST) {
                 std::lock_guard<std::mutex> lock_holder(test_lock);
                 loop_body();
