@@ -214,6 +214,36 @@ struct WavelengthDistributor {
     }
 
     template <typename State>
+    inline void reduce_rad_loss(State* state) {
+#ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
+        RadLossFp* rad_loss_ptr = state->config.store_J_on_cpu ? state->rad_loss_cpu.data() : state->rad_loss.data();
+        i64 rad_loss_size = state->config.store_J_on_cpu ? state->rad_loss_cpu.size() : state->rad_loss.size();
+        if (state->mpi_state.rank == 0) {
+            MPI_Reduce(
+                MPI_IN_PLACE,
+                rad_loss_ptr,
+                rad_loss_size,
+                get_RadLossFpMpi(),
+                MPI_SUM,
+                0,
+                state->mpi_state.comm
+            );
+        } else {
+            MPI_Reduce(
+                rad_loss_ptr,
+                rad_loss_ptr,
+                rad_loss_size,
+                get_RadLossFpMpi(),
+                MPI_SUM,
+                0,
+                state->mpi_state.comm
+            );
+        }
+#endif
+    }
+
+    template <typename State>
     inline void update_pops(State* state) {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(test_lock);

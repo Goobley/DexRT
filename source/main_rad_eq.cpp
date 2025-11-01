@@ -1023,7 +1023,7 @@ void dump_properties(const State& state, int iter, fp_t time) {
     nc.write(state.pops, "pops", {"level", "ks"});
 }
 
-void update_temperature(const State& state, fp_t delta_t) {
+void update_temperature(fp_t delta_t) {
     JasUnpack(state, atmos, rad_loss);
     const fp_t threshold = state.config.threshold_temperature;
 

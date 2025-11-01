@@ -18,6 +18,12 @@ inline auto get_GammaFpMpi() {
     }
     return MPI_DOUBLE;
 }
+inline auto get_RadLossFpMpi() {
+    if constexpr (std::is_same_v<RadLossFp, f32>) {
+        return MPI_FLOAT;
+    }
+    return MPI_DOUBLE;
+}
 #endif
 
 
