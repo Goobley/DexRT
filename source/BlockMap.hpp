@@ -418,7 +418,7 @@ struct MultiResBlockMap {
         block_map = block_map_;
         lookup.init(block_map);
         max_mip_level = max_mip_level_;
-        if (quiet) {
+        if (!quiet) {
             fmt::println("Using a max mip level of {}", max_mip_level);
         }
         if ((max_mip_level + 1) > max_storable_entry) {
