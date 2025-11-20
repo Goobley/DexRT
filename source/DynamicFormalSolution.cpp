@@ -455,6 +455,8 @@ void compute_rad_loss(
     const auto& I = casc_state.i_cascades[0];
     const auto& incl_quad = state.incl_quad;
     typedef typename RcDynamicState<RcMode>::type DynamicState;
+    constexpr bool include_flux_divergence = true;
+    constexpr fp_t flux_div_tau_0 = FP(0.1);
 
     dex_parallel_for(
         "compute radiative losses",
@@ -520,9 +522,37 @@ void compute_rad_loss(
                         const fp_t wlamu = wl_ray_weights(wave) * incl_quad.wmuy(theta_idx);
                         const fp_t intensity = probe_fetch<RcMode>(I, ray_set, probe_idx);
 
-                        // loss_entry += wlamu * (emis_opac.eta - emis_opac.chi * intensity);
                         const fp_t S = emis_opac.eta / (emis_opac.chi + FP(1e-20));
-                        loss_entry += wlamu * emis_opac.chi * (S - intensity);
+                        const fp_t direct_contrib = wlamu * emis_opac.chi * (S - intensity);
+
+                        JasUse(include_flux_divergence, flux_div_tau_0);
+                        if constexpr (include_flux_divergence) {
+                            vec3 flatland_mu = inverted_flatland_mu(ray);
+                            ProbeIndex idx(probe_idx);
+                            idx.coord(0) = std::max(probe_idx.coord(0) - 1, mr_block_map.block_map.bbox.min(0));
+                            const fp_t im = probe_fetch<RcMode>(I, ray_set, idx);
+                            idx.coord(0) = std::min(probe_idx.coord(0) + 1, mr_block_map.block_map.bbox.max(0) - 1);
+                            const fp_t ip = probe_fetch<RcMode>(I, ray_set, idx);
+
+                            const fp_t dFdx = (ip - im) * flatland_mu(0) / (FP(2.0) * sparse_atmos.voxel_scale);
+
+                            idx.coord(0) = probe_idx.coord(0);
+                            idx.coord(1) = std::max(probe_idx.coord(1) - 1, mr_block_map.block_map.bbox.min(1));
+                            const fp_t imz = probe_fetch<RcMode>(I, ray_set, idx);
+                            idx.coord(1) = std::min(probe_idx.coord(1) + 1, mr_block_map.block_map.bbox.max(1) - 1);
+                            const fp_t ipz = probe_fetch<RcMode>(I, ray_set, idx);
+
+                            const fp_t dFdz = (ipz - imz) * flatland_mu(2) / (FP(2.0) * sparse_atmos.voxel_scale);
+                            const fp_t divF = dFdx + dFdz;
+                            const fp_t divF_contrib = wlamu * divF;
+                            // Do the exp weighting
+                            const fp_t expw = std::exp(-emis_opac.chi * sparse_atmos.voxel_scale / flux_div_tau_0);
+                            loss_entry += expw * direct_contrib + (FP(1.0) - expw) * divF_contrib;
+                        } else {
+                            // loss_entry += wlamu * (emis_opac.eta - emis_opac.chi * intensity);
+                            // loss_entry += wlamu * emis_opac.chi * (S - intensity);
+                            loss_entry += direct_contrib;
+                        }
                     }
                 }
                 int rad_loss_plane = rl_la_start;
