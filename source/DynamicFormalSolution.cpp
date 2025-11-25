@@ -437,17 +437,7 @@ void compute_rad_loss(
     yakl::SArray<fp_t, 1, WAVE_BATCH> wl_ray_weights(FP(0.0));
     for (int wave = 0; wave < wave_batch; ++wave) {
         const int la = la_start + wave;
-        const auto& wavelength_h = state.adata_host.wavelength;
-        fp_t wl_weight = FP(1.0);
-        if (la == 0) {
-            wl_weight *= FP(0.5) * (wavelength_h(1) - wavelength_h(0));
-        } else if (la == wavelength_h.extent(0) - 1) {
-            wl_weight *= FP(0.5) * (
-                wavelength_h(wavelength_h.extent(0) - 1) - wavelength_h(wavelength_h.extent(0) - 2)
-            );
-        } else {
-            wl_weight *= FP(0.5) * (wavelength_h(la + 1) - wavelength_h(la - 1));
-        }
+        const fp_t wl_weight = state.adata_host.wavelength_bin(la);
         const fp_t wl_ray_weight = four_pi * wl_weight / fp_t(c0_dirs_to_average<RcMode>());
         wl_ray_weights(wave) = wl_ray_weight;
     }
@@ -523,7 +513,8 @@ void compute_rad_loss(
                         const fp_t intensity = probe_fetch<RcMode>(I, ray_set, probe_idx);
 
                         const fp_t S = emis_opac.eta / (emis_opac.chi + FP(1e-20));
-                        const fp_t direct_contrib = wlamu * emis_opac.chi * (S - intensity);
+                        // const fp_t direct_contrib = wlamu * emis_opac.chi * (S - intensity);
+                        const fp_t direct_contrib = wlamu * (emis_opac.eta - emis_opac.chi * intensity);
 
                         JasUse(include_flux_divergence, flux_div_tau_0);
                         if constexpr (include_flux_divergence) {
