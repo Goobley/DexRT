@@ -6,19 +6,22 @@ import numpy as np
 from dexrt.config_schemas.dexrt import DexrtNgConfig, DexrtNonLteConfig, AtomicModelConfig, DexrtLteConfig, DexrtSystemConfig, DexrtOutputConfig, DexrtMipConfig
 from dexrt.write_config import write_config
 
-pressure_val = 1e-2
+# pressure_val = 3.3e-2
+pressure_val = 0.0237
+ALTITUDE = 50e6
 # lyman_cont = "pw"
 lyman_cont = "obs"
 # lyman_cont = "bb"
 # lyman_cont = "full_bb"
 shape = "square"
 shape = "circle"
-prefix = f"rad_loss_p{pressure_val:.0e}_{lyman_cont}_{shape}_falling"
+shape = "gaussian"
+prefix = f"rad_loss_p{pressure_val:.0e}_{lyman_cont}_{shape}"
 if __name__ == '__main__':
     nc = ncdf.Dataset(f"RadLossTest/{prefix}_atmos.nc", "w", format="NETCDF4")
 
     atomic_models = pw.default_atomic_models()
-    atomic_models[0] = H_6_atom()
+    # atomic_models[0] = H_6_atom()
     bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"], atomic_models=atomic_models, prd=True, Nthreads=6)
     boundary_wavelengths = bc_ctx.spect.wavelength
     boundary_wavelengths = np.unique(np.sort(np.concatenate([bc_ctx.spect.wavelength, np.arange(20.0, 4000.0, 2.0)])))
@@ -61,7 +64,8 @@ if __name__ == '__main__':
             outUnits="kW / (m2 nm sr)"
         ).value
 
-    atmos_size = 256 + 64
+    # atmos_size = 256 + 64
+    atmos_size = 256
     x_dim = nc.createDimension("x", atmos_size)
     z_dim = nc.createDimension("z", atmos_size)
     index_order = ("z", "x")
@@ -81,11 +85,13 @@ if __name__ == '__main__':
     # NOTE(cmo): We should have a margin around the outside of the model to avoid issues with the CLAMP modes
 
     # prom_cell_dim = 246
-    prom_cell_dim = 256
-    atmos_size_m = 1.0e6
+    prom_cell_dim = 200
+    border_size = int((atmos_size - prom_cell_dim) // 2)
+    atmos_size_m = 2.0e6
     # atmos_size_m = 2e5
+    cell_size = atmos_size_m / prom_cell_dim
     scale[...] = atmos_size_m / prom_cell_dim
-    altitude[...] = 10.0e6
+    altitude[...] = ALTITUDE
     offset_x[...] = -0.5 * atmos_size_m
     offset_y[...] = 0.0
     high_temp_val = 300e3
@@ -108,6 +114,21 @@ if __name__ == '__main__':
         prom_slice = slice(atmos_size // 2 - prom_cell_dim // 2, atmos_size // 2 + prom_cell_dim // 2)
         temperature[prom_slice, prom_slice] = temp_val
         pressure[prom_slice, prom_slice] = pressure_val
+    elif shape == "gaussian":
+        pressure[...] = pressure_val
+        rho = np.ones_like(pressure) * 1e-12
+        zz, xx = np.mgrid[:atmos_size, :atmos_size]
+        zz = zz.astype(np.float64)
+        xx = xx.astype(np.float64)
+        zz *= cell_size
+        zz += altitude[0] - border_size * cell_size
+        xx *= cell_size
+        xx += offset_x[0] - border_size * cell_size
+        delta = 0.5e6
+        gauss_factor = np.exp(-((xx)**2 + (zz - (altitude[0] + atmos_size_m / 2))**2) / delta**2)
+        rho += gauss_factor * 1e-10
+        ntot = 2.0 * rho / lw.Amu
+        temperature[...] = pressure / (lw.KBoltzmann * ntot)
 
     # NOTE(cmo): Approximate ionisation fraction
     X = 0.9
@@ -118,7 +139,7 @@ if __name__ == '__main__':
 
     vx[...] = 0.0
     vy[...] = 0.0
-    vz[...] = -60e3
+    vz[...] = 0.0
 
     nc.close()
 
@@ -157,9 +178,9 @@ if __name__ == '__main__':
         rad_loss="Integrated",
         snapshot_frequency=10,
         ng_config=DexrtNgConfig(
-            enable=False,
-            threshold=6e-3,
-            lower_threshold=1e-3,
+            enable=True,
+            threshold=4e-2,
+            lower_threshold=1.4e-3,
         ),
     )
     write_config(config_sparse, f"RadLossTest/{prefix}.yaml")

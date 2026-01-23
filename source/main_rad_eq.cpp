@@ -1168,6 +1168,7 @@ int main(int argc, char** argv) {
             .actually_conserve_charge=actually_conserve_charge,
             .actually_conserve_pressure=actually_conserve_pressure
         });
+        save_results(state, casc_state, num_iter);
 
         state.config.max_iter = 50;
 
@@ -1181,7 +1182,7 @@ int main(int argc, char** argv) {
             fmt::println("\n~~~~~~~~~~~~ Step {}, t = {:.0f} s ~~~~~~~~~~~~~~", ii, current_time);
             fmt::println("t_cv = {:e} s", tcv);
             fmt::println("mean temperature = {:e} K", mean_temp);
-            delta_t = std::min(0.007 * tcv, 50.0);
+            delta_t = std::min(0.05 * tcv, 50.0);
             dump_properties(state, ii, current_time);
             update_temperature(state, delta_t);
             // fp_t pop_tol = std::min(FP(9e-4), fp_t(FP(5e-2) / (FP(0.01) * tcv)));
