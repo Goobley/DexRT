@@ -48,6 +48,7 @@ struct DexrtConfig {
     std::vector<ModelAtomConfig> atom_configs;
     BoundaryType boundary = BoundaryType::Zero;
     bool sparse_calculation = false;
+    bool sparse_nlinear_interp = false;
     bool final_dense_fs = true;
     fp_t threshold_temperature = FP(0.0);
     int max_iter = 200;
@@ -77,6 +78,12 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
 
     if (file["sparse_calculation"]) {
         config.sparse_calculation = file["sparse_calculation"].as<bool>();
+    }
+    if (file["sparse_nlinear_interp"]) {
+        config.sparse_nlinear_interp = file["sparse_nlinear_interp"].as<bool>();
+        if (config.sparse_nlinear_interp && !config.sparse_calculation) {
+            throw std::runtime_error("sparse_nlinear_interp cannot be set without sparse_calculation");
+        }
     }
     if (file["threshold_temperature"]) {
         config.threshold_temperature = file["threshold_temperature"].as<fp_t>();

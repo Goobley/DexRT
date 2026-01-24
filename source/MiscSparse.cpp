@@ -3,6 +3,7 @@
 #include "State.hpp"
 #include "RcUtilsModes3d.hpp"
 #include "State3d.hpp"
+#include "Kokkos_Sort.hpp"
 
 SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLOCK_SIZE>& block_map) {
     i64 num_active_cells = block_map.get_num_active_cells();
@@ -291,128 +292,155 @@ Fp3dHost rehydrate_sparse_quantity(const BlockMap<BLOCK_SIZE_3D, 3>& block_map, 
     return result;
 }
 
-std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(const State& state, int max_cascades) {
-    // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if
-    // Really this function is backwards. We can loop over each probe of i+1 and
-    // check the dependents in i, in parallel. The merge process remains the
-    // same.
-    JasUnpack(state, mr_block_map);
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> probes_to_compute;
+std::vector<ActiveProbeView<2>> compute_active_probe_lists(const State& state, int max_cascades) {
+    JasUnpack(state, mr_block_map, c0_size);
+    const bool sparse_nlinear = state.config.sparse_nlinear_interp;
+    std::vector<yakl::Array<Coord2, 1, yakl::memDevice>> probes_to_compute;
     probes_to_compute.reserve(max_cascades + 1);
 
-    yakl::Array<u64, 2, yakl::memDevice> prev_active("active c0", state.atmos.num_z, state.atmos.num_x);
-    prev_active = 0;
-    yakl::fence();
+    i64 num_active = mr_block_map.get_num_active_cells();
+    i64 total_num_probes = c0_size.num_probes(0) * c0_size.num_probes(1);
+    yakl::Array<Coord2, 1, yakl::memDevice> probes_to_compute_c0("C0 to compute", num_active);
     dex_parallel_for(
+        "Compute C0 active",
         mr_block_map.block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(mr_block_map);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            prev_active(coord.z, coord.x) = 1;
-        }
-    );
-    yakl::fence();
-    u64 num_active = mr_block_map.get_num_active_cells();
-
-    auto prev_active_h = prev_active.createHostCopy();
-    yakl::fence();
-    yakl::Array<i32, 2, yakl::memDevice> probes_to_compute_c0("c0 to compute", num_active, 2);
-    dex_parallel_for(
-        mr_block_map.block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
-            IdxGen idx_gen(mr_block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            probes_to_compute_c0(ks, 0) = coord.x;
-            probes_to_compute_c0(ks, 1) = coord.z;
+            probes_to_compute_c0(ks) = coord;
         }
     );
+    Kokkos::fence();
     probes_to_compute.emplace_back(probes_to_compute_c0);
     state.println(
         "C0 Active Probes {}/{} ({}%)",
         num_active,
-        prev_active.extent(0)*prev_active.extent(1),
-        fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
+        total_num_probes,
+        fp_t(num_active) / fp_t(total_num_probes) * FP(100.0)
     );
 
+    // Hoist this, but will only be created for C1 onwards (not C0)
+    yakl::Array<i8, 2, yakl::memDevice> prev_active;
 
+    // NOTE(cmo): Repeat this process for the other cascades
     for (int cascade_idx = 1; cascade_idx <= max_cascades; ++cascade_idx) {
+        CascadeStorage prev_dims = cascade_size(state.c0_size, cascade_idx-1);
         CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
-        yakl::Array<u64, 2, yakl::memDevice> curr_active(
-            "casc_active",
+        yakl::Array<i8, 2, yakl::memDevice> next_probes(
+            "cn active",
             dims.num_probes(1),
             dims.num_probes(0)
         );
-        curr_active = 0;
-        yakl::fence();
-        auto my_atomic_max = YAKL_LAMBDA (u64& ref, unsigned long long int val) {
-            Kokkos::atomic_max(
-                reinterpret_cast<unsigned long long int*>(&ref),
-                val
-            );
-        };
+        yakl::Array<Coord2, 1, yakl::memDevice> next_probe_coords("Cn probes", next_probes.size());
+        next_probes = i8(0);
+        Kokkos::fence();
         dex_parallel_for(
-            FlatLoop<2>(prev_active.extent(0), prev_active.extent(1)),
-            YAKL_LAMBDA (int z, int x) {
-                int z_bc = std::max(int((z - 1) / 2), 0);
-                int x_bc = std::max(int((x - 1) / 2), 0);
-                const bool z_clamp = (z_bc == 0) || (z_bc == (curr_active.extent(0) - 1));
-                const bool x_clamp = (x_bc == 0) || (x_bc == (curr_active.extent(1) - 1));
+            "Compute Cn active",
+            FlatLoop<2>(dims.num_probes(1), dims.num_probes(0)),
+            KOKKOS_LAMBDA (int zn, int xn) {
+                int zp = 2 * zn;
+                int xp = 2 * xn;
+                IdxGen idx_gen(mr_block_map);
 
-                if (!prev_active(z, x)) {
-                    return;
+                auto check_lower_cascade = [&]() -> bool {
+                    // NOTE(cmo): On each axis, check in range [x0 - 1, x0 + 2]. If any
+                    // are active, this one is also active, if sparse_nlinear is false.
+                    // If it is true, then only activate if this is the closest
+                    // probe to an active probe of Cn-1., i.e. check range [x0, x0 + 1]
+
+                    int zp_start = zp - 1;
+                    int zp_end = zp + 3;
+                    int xp_start = xp - 1;
+                    int xp_end = xp + 3;
+                    if (sparse_nlinear) {
+                        zp_start = zp;
+                        zp_end = zp + 2;
+                        xp_start = xp;
+                        xp_end = xp + 2;
+                    }
+
+                    for (int z = zp_start; z < zp_end; ++z) {
+                        for (int x = xp_start; x < xp_end; ++x) {
+                            // NOTE(cmo): clamp access
+                            Coord2 coord {
+                                .x = std::min(std::max(x, 0), prev_dims.num_probes(0) - 1),
+                                .z = std::min(std::max(z, 0), prev_dims.num_probes(1) - 1)
+                            };
+
+                            // NOTE(cmo): Special handling for C1 to leverage the blockmap over C0
+                            if (cascade_idx == 1) {
+                                if (idx_gen.has_leaves(coord)) {
+                                    return true;
+                                }
+                            } else {
+                                if (prev_active(coord.z, coord.x)) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                };
+
+                if (check_lower_cascade()) {
+                    next_probes(zn, xn) = 1;
                 }
 
-                // NOTE(cmo): Atomically set the (up-to) 4 valid
-                // probes for this active probe of cascade_idx-1
-                my_atomic_max(curr_active(z_bc, x_bc), 1);
-                if (!x_clamp) {
-                    my_atomic_max(curr_active(z_bc, x_bc+1), 1);
-                }
-                if (!z_clamp) {
-                    my_atomic_max(curr_active(z_bc+1, x_bc), 1);
-                }
-                if (!(z_clamp || x_clamp)) {
-                    my_atomic_max(curr_active(z_bc+1, x_bc+1), 1);
-                }
+                Coord2 cn_coord {
+                    .x = xn,
+                    .z = zn
+                };
+                // NOTE(cmo): This is the array we will stream compact
+                next_probe_coords(zn * dims.num_probes(0) + xn) = cn_coord;
             }
         );
-        yakl::fence();
-        i64 num_active = yakl::intrinsics::sum(curr_active);
-        auto curr_active_h = curr_active.createHostCopy();
-        yakl::fence();
-        yakl::Array<u32, 1, yakl::memHost> probes_to_compute_morton("probes to compute morton", num_active);
-        i32 idx = 0;
-        for (int z = 0; z < curr_active_h.extent(0); ++z) {
-            for (int x = 0; x < curr_active_h.extent(1); ++x) {
-                if (curr_active_h(z, x)) {
-                    probes_to_compute_morton(idx++) = encode_morton(Coord2{.x = x, .z = z});
+        Kokkos::fence();
+
+        i64 num_active_cn;
+        dex_parallel_reduce(
+            "Compute number Cn active",
+            FlatLoop<2>(dims.num_probes(1), dims.num_probes(0)),
+            KOKKOS_LAMBDA (int zn, int xn, i64& num_active) {
+                if (next_probes(zn, xn)) {
+                    num_active += 1;
                 }
+            },
+            Kokkos::Sum<i64>(num_active_cn)
+        );
+
+        yakl::Array<Coord2, 1, yakl::memDevice> probes_to_compute_cn("Cn to compute", num_active_cn);
+        Kokkos::Experimental::copy_if(
+            "Compact C1 coords",
+            DefaultExecutionSpace{},
+            KView<Coord2*>(next_probe_coords.data(), next_probe_coords.size()),
+            KView<Coord2*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),
+            KOKKOS_LAMBDA (const Coord2& c) {
+                return next_probes(c.z, c.x);
             }
-        }
-        // NOTE(cmo): These are now being launched in morton order... should be close to tile order
-        std::sort(probes_to_compute_morton.begin(), probes_to_compute_morton.end());
-        yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("probes to compute", num_active, 2);
-        for (int idx = 0; idx < num_active; ++idx) {
-            Coord2 coord = decode_morton<2>(probes_to_compute_morton(idx));
-            probes_to_compute_h(idx, 0) = coord.x;
-            probes_to_compute_h(idx, 1) = coord.z;
-        }
-        auto probes_to_compute_ci = probes_to_compute_h.createDeviceCopy();
-        probes_to_compute.emplace_back(probes_to_compute_ci);
-        prev_active = curr_active;
+        );
+        Kokkos::fence();
+        Kokkos::sort(
+            KView<Coord2*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),
+            KOKKOS_LAMBDA (const Coord2& l, const Coord2& r) {
+                return encode_morton<2>(l) < encode_morton<2>(r);
+            }
+        );
+        Kokkos::fence();
+        probes_to_compute.emplace_back(probes_to_compute_cn);
+        prev_active = next_probes;
         state.println(
             "C{} Active Probes {}/{} ({}%)",
             cascade_idx,
-            num_active,
-            prev_active.extent(0)*prev_active.extent(1),
-            fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
+            num_active_cn,
+            prev_active.size(),
+            fp_t(num_active_cn) / fp_t(prev_active.size()) * FP(100.0)
         );
     }
     return probes_to_compute;
 }
 
-std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> compute_active_probe_lists(const State3d& state, int max_cascades) {
+std::vector<ActiveProbeView<3>> compute_active_probe_lists(const State3d& state, int max_cascades) {
     // NOTE(cmo): This is the strategy discussed in the 2D model. It makes a lot
     // more sense, and 2D should be migrated.
     JasUnpack(state, mr_block_map, c0_size);
@@ -548,27 +576,13 @@ std::vector<yakl::Array<Coord3, 1, yakl::memDevice>> compute_active_probe_lists(
             );
             Kokkos::fence();
         }
-        // NOTE(cmo): Kokkos sort is producing errors from thrust when included
-        // Kokkos::sort(
-        //     KView<Coord3*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),
-        //     KOKKOS_LAMBDA (const Coord3& l, const Coord3& r) {
-        //         // NOTE(cmo): This may overflow on very large models, but it's only an optimisation.
-        //         return encode_morton<3>(l) < encode_morton<3>(r);
-        //     }
-        // );
-        constexpr bool copy_to_host_and_sort = true;
-        if constexpr (copy_to_host_and_sort) {
-            auto probes_to_compute_host = probes_to_compute_cn.createHostCopy();
-            std::sort(
-                probes_to_compute_host.data(),
-                probes_to_compute_host.data() + probes_to_compute_host.size(),
-                [] (const Coord3& l, const Coord3& r) {
-                    // NOTE(cmo): This may overflow on very large models, but it's only an optimisation.
-                    return encode_morton<3>(l) < encode_morton<3>(r);
-                }
-            );
-            probes_to_compute_cn = probes_to_compute_host.createDeviceCopy();
-        }
+        Kokkos::sort(
+            KView<Coord3*>(probes_to_compute_cn.data(), probes_to_compute_cn.size()),
+            KOKKOS_LAMBDA (const Coord3& l, const Coord3& r) {
+                // NOTE(cmo): This may overflow on very large models, but it's only an optimisation.
+                return encode_morton<3>(l) < encode_morton<3>(r);
+            }
+        );
         Kokkos::fence();
         probes_to_compute.emplace_back(probes_to_compute_cn);
         prev_active = next_probes;

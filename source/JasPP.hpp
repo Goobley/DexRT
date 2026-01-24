@@ -9,12 +9,12 @@
 
 #define JASPP_H
 
-#ifndef JASNAH_NO_FIF
-    #define If ((
-    #define Then )?(
-    #define Else ):(
-    #define End ))
-#endif
+// #ifndef JASNAH_NO_FIF
+//     #define If ((
+//     #define Then )?(
+//     #define Else ):(
+//     #define End ))
+// #endif
 
 #define JAS_STRINGIFY_IMPL(x) #x
 #define JasStringify(x) JAS_STRINGIFY_IMPL(x)

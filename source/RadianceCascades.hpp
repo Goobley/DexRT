@@ -7,6 +7,7 @@
 #include "Atmosphere.hpp"
 #include "LineSweeping.hpp"
 
+constexpr fp_t INTENSITY_CLEAR_VALUE = FP(-1e3);
 template <typename DynamicState>
 struct RaymarchParams {
     fp_t distance_scale; // [m]
@@ -16,6 +17,7 @@ struct RaymarchParams {
     int la;
     vec3 offset; // (0,0,0) corner offset from (0,0,0) in m
     int max_mip_to_sample;
+    bool sparse_nlinear_interp;
     const BlockMap<BLOCK_SIZE>& block_map;
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const MultiResMipChain& mip_chain;
@@ -63,6 +65,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     if (casc_state.state.upper_I.initialized()) {
         BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
+        fp_t active_probe_weights = FP(0.0);
         JasUnpack(casc_state.state, upper_I, upper_tau, upper_dims);
         for (int bilin = 0; bilin < 4; ++bilin) {
             ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, bilin);
@@ -78,11 +81,20 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
                     .wave = this_probe.wave
                 };
                 i64 lin_idx = probe_linear_index<RcMode>(upper_dims, upper_probe);
+                fp_t I_sample = upper_I(lin_idx);
+                if (params.sparse_nlinear_interp && I_sample == INTENSITY_CLEAR_VALUE) {
+                    continue;
+                }
                 interp.I += ray_weight * weights(bilin) * upper_I(lin_idx);
+                active_probe_weights += weights(bilin);
                 if constexpr (STORE_TAU_CASCADES) {
                     interp.tau += ray_weight * weights(bilin) * upper_tau(lin_idx);
                 }
             }
+        }
+        interp.I /= active_probe_weights;
+        if constexpr (STORE_TAU_CASCADES) {
+            interp.tau /= active_probe_weights;
         }
     }
     return merge_intervals(ri, interp);
@@ -622,6 +634,7 @@ void cascade_i_25d(
 ) {
     JasUnpack(state, atmos, incl_quad, adata, pops);
     JasUnpack(subset, la_start, la_end, subset_idx);
+    const bool sparse_nlinear_interp = state.config.sparse_nlinear_interp;
     const auto& profile = state.phi;
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
@@ -634,6 +647,14 @@ void cascade_i_25d(
     if (lookup.ip != -1) {
         i_cascade_ip = casc_state.i_cascades[lookup.ip];
         tau_cascade_ip = casc_state.tau_cascades[lookup.ip];
+    }
+    if (sparse_nlinear_interp) {
+        // NOTE(cmo): Fill cascade i with a sentinel if we're doing sparse
+        // nlinear (i.e. relying on only having nearest probes, so we can
+        // quickly tell inside the kernel whether we have data for an interval
+        // or not)
+        i_cascade_i = INTENSITY_CLEAR_VALUE;
+        Kokkos::fence();
     }
     CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
     CascadeStorage upper_dims = cascade_size(state.c0_size, cascade_idx+1);
@@ -724,6 +745,7 @@ void cascade_i_25d(
                         .la = la,
                         .offset = offset,
                         .max_mip_to_sample = max_mip_to_sample,
+                        .sparse_nlinear_interp = sparse_nlinear_interp,
                         .block_map = block_map,
                         .mr_block_map = mr_block_map,
                         .mip_chain = mip_chain,

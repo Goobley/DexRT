@@ -316,7 +316,7 @@ struct RaySegment {
 template <int NumDim>
 using ActiveProbeView = std::conditional_t<
     NumDim == 2,
-    yakl::Array<i32, 2, yakl::memDevice>,
+    yakl::Array<Coord2, 1, yakl::memDevice>,
     yakl::Array<Coord3, 1, yakl::memDevice>
 >;
 
@@ -342,8 +342,8 @@ struct DeviceProbesToCompute {
         }
 
         ivec2 probe_coord;
-        probe_coord(0) = active_probes(ks, 0);
-        probe_coord(1) = active_probes(ks, 1);
+        probe_coord(0) = active_probes(ks).x;
+        probe_coord(1) = active_probes(ks).z;
         return probe_coord;
     }
 

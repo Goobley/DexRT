@@ -7,7 +7,7 @@
 void ProbesToCompute2d::init(
     const CascadeStorage& c0,
     bool sparse_,
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> probes_to_compute
+    std::vector<ActiveProbeView<2>> probes_to_compute
 ) {
     c0_size = c0;
     sparse = sparse_;
@@ -23,7 +23,7 @@ void ProbesToCompute2d::init(
 ) {
     const bool sparse_calc = state.config.sparse_calculation;
     CascadeStorage c0 = state.c0_size;
-    std::vector<yakl::Array<i32, 2, yakl::memDevice>> active_probes;
+    std::vector<ActiveProbeView<2>> active_probes;
     if (sparse_calc) {
         active_probes = compute_active_probe_lists(state, max_cascades);
     }
