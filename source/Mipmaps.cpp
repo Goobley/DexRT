@@ -11,7 +11,8 @@ void MultiResMipChain::init(const State& state, i64 buffer_len, i32 wave_batch) 
 
     max_mip_factor = state.mr_block_map.max_mip_level;
 
-    if (state.config.mode != DexrtMode::GivenFs) {
+    // NOTE(cmo): Neither given nor few freq (which ignores Doppler shifts) needs extra mips
+    if (state.config.mode != DexrtMode::GivenFs && !state.config.few_freq.enable) {
         // NOTE(cmo): Classic doesn't use mips
         if constexpr (LINE_SCHEME != LineCoeffCalc::Classic) {
             vx = Fp1d("vx_mips", buffer_len);
@@ -125,6 +126,91 @@ void MultiResMipChain::fill_mip0_atomic(
         cav_data.fill(state, la_start, la_end);
     }
 
+    yakl::fence();
+}
+
+void MultiResMipChain::fill_mip0_atomic_few_freq(
+    const State& state,
+    const Fp2d& lte_scratch,
+    const FewFreqSetup& fs_setup,
+    int w_start,
+    int w_end
+) const {
+    JasUnpack(state, atmos, pops, adata);
+    int wave_batch = w_end - w_start;
+
+    const auto flatmos = flatten<const fp_t>(atmos);
+
+    JasUnpack((*this), emis, opac);
+    const auto& block_map = state.mr_block_map.block_map;
+    auto bounds = block_map.loop_bounds();
+    dex_parallel_for(
+        "Compute eta, chi",
+        FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int wave) {
+            IndexGen<BLOCK_SIZE> idx_gen(block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+            const i32 w = w_start + wave;
+
+            AtmosPointParams local_atmos{};
+            local_atmos.temperature = flatmos.temperature(ks);
+            local_atmos.ne = flatmos.ne(ks);
+            local_atmos.vturb = flatmos.vturb(ks);
+            local_atmos.nhtot = flatmos.nh_tot(ks);
+            local_atmos.nh0 = flatmos.nh0(ks);
+            local_atmos.vel = FP(0.0);
+
+            const int la = fs_setup.wave_idx(w);
+            const int lambda = fs_setup.wavelength(w);
+            const int bandwidth = fs_setup.bandwidth(w);
+            const int kr = fs_setup.trans_idx(w);
+            const auto trans_type = fs_setup.trans_type(w);
+
+            if (trans_type == FewFreqSetup::TransType::Line) {
+                using namespace ConstantsFP;
+                // [kJ]
+                const fp_t hnu_4pi = FP(1.0) / lambda * hc_kJ_nm / four_pi;
+                const auto& l = adata.lines(kr);
+                // [m2]
+                const fp_t Vij = hnu_4pi * l.Bij / bandwidth;
+                // [m2]
+                const fp_t Vji = hnu_4pi * l.Bji / bandwidth;
+                // [kW / (nm sr)]
+                const fp_t Uji = hnu_4pi * l.Aji / bandwidth;
+
+                const int offset = adata.level_start(l.atom);
+                const fp_t nj = pops(offset + l.j, ks);
+                const fp_t ni = pops(offset + l.i, ks);
+                const fp_t eta = nj * Uji;
+                // TODO(cmo): Remove trailing term for stimulated emission?
+                const fp_t chi = ni * Vij - nj * Vji;
+                emis(ks, wave) = eta;
+                opac(ks, wave) = chi;
+            } else {
+                using namespace ConstantsFP;
+                const auto& cont = adata.continua(kr);
+                auto sigma_grid = get_sigma(adata, cont);
+
+                const int offset = adata.level_start(cont.atom);
+                const fp_t thermal_ratio = lte_scratch(offset + cont.i, ks) / lte_scratch(offset + cont.j, ks) * std::exp(-hc_k_B_nm / (lambda * local_atmos.temperature));
+
+                // [m2]
+                const fp_t Vij = sigma_grid.sigma(la - cont.blue_idx) * four_pi / hc_kJ_nm;
+                // [m2]
+                const fp_t Vji = thermal_ratio * Vij;
+                // [kW nm2 / (nm3 m2)] = [kW nm-1] (sr implicit)
+                const fp_t Uji = twohc2_kW_nm2 / (cube(lambda) * square(lambda) * FP(1e-18)) * Vji;
+                const fp_t nj = pops(offset + cont.j, ks);
+                const fp_t ni = pops(offset + cont.i, ks);
+                const fp_t eta = nj * Uji;
+                // TODO(cmo): Remove trailing term for stimulated emission?
+                const fp_t chi = ni * Vij - nj * Vji;
+                emis(ks, wave) = eta;
+                opac(ks, wave) = chi;
+            }
+        }
+    );
     yakl::fence();
 }
 

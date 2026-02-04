@@ -53,6 +53,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         new_l.Bji = l.Bji_wavelength * DFPU(1e12);
         new_l.Bij = l.Bij_wavelength * DFPU(1e12);
         new_l.lambda0 = l.lambda0;
+        new_l.bandwidth = l.wavelength[l.wavelength.size()-1] - l.wavelength[0];
 
         new_l.broad_start = broad_idx;
         for (int local_b_idx = 0; local_b_idx < l.broadening.size(); ++local_b_idx) {
@@ -418,6 +419,7 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
             new_l.Bji = l.Bji_wavelength * DFPU(1e12);
             new_l.Bij = l.Bij_wavelength * DFPU(1e12);
             new_l.lambda0 = l.lambda0;
+            new_l.bandwidth = l.wavelength[l.wavelength.size()-1] - l.wavelength[0];
 
             new_l.broad_start = broad_idx;
             for (int local_b_idx = 0; local_b_idx < l.broadening.size(); ++local_b_idx) {

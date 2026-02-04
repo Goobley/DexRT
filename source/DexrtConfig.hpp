@@ -35,6 +35,23 @@ struct DexrtNgConfig {
     fp_t lower_threshold = FP(2e-4);
 };
 
+enum class FewFrequencyLineMode {
+    FlatBandwidth,
+};
+
+enum class FewFrequencyContMode {
+    Sparse,
+    SparseLineOverlap,
+    Hydrogenic,
+};
+
+struct DexrtFewFrequencyConfig {
+    bool enable = false;
+    FewFrequencyLineMode line_mode = FewFrequencyLineMode::FlatBandwidth;
+    FewFrequencyContMode cont_mode = FewFrequencyContMode::Sparse;
+    f64 cont_sample_nm = FP(10.0);
+};
+
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_gb = FP(4.0);
@@ -60,6 +77,7 @@ struct DexrtConfig {
     int max_cascade = 5;
     DexrtMipConfig mip_config;
     DexrtNgConfig ng;
+    DexrtFewFrequencyConfig few_freq;
 };
 
 inline void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
@@ -142,6 +160,42 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
     }
 }
 
+inline void parse_extra_few_freq(DexrtConfig* cfg, const YAML::Node& file) {
+    auto& few_freq = cfg->few_freq;
+    if (!file["few_freq"]) {
+        return;
+    }
+
+    auto node = file["few_freq"];
+    if (node["enable"]) {
+        few_freq.enable = node["enable"].as<bool>();
+    }
+    if (node["line_mode"]) {
+        std::string mode = node["line_mode"].as<std::string>();
+        if (mode == "FlatBandwidth") {
+            few_freq.line_mode = FewFrequencyLineMode::FlatBandwidth;
+        } else {
+            throw std::runtime_error(fmt::format("Unexpected line_mode in few_freq: {}", mode));
+        }
+    }
+    if (node["cont_mode"]) {
+        std::string mode = node["cont_mode"].as<std::string>();
+        if (mode == "Sparse") {
+            few_freq.cont_mode = FewFrequencyContMode::Sparse;
+        } else if (mode == "SparseLineOverlap") {
+            few_freq.cont_mode = FewFrequencyContMode::SparseLineOverlap;
+        } else if (mode == "Hydrogenic") {
+            few_freq.cont_mode = FewFrequencyContMode::Hydrogenic;
+        } else {
+            throw std::runtime_error(fmt::format("Unexpected line_mode in few_freq: {}", mode));
+        }
+    }
+    if (node["cont_sample_nm"]) {
+        fp_t sample = node["cont_sample_nm"].as<fp_t>();
+        few_freq.cont_sample_nm = sample;
+    }
+}
+
 inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     // NOTE(cmo): Everything needed in Lte is also needed in NonLte.
     parse_extra_lte(cfg, file);
@@ -179,6 +233,9 @@ inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
         if (ng_config["lower_threshold"]) {
             config.ng.lower_threshold = ng_config["lower_threshold"].as<fp_t>();
         }
+    }
+    if (file["few_freq"]) {
+        parse_extra_few_freq(cfg, file);
     }
 }
 

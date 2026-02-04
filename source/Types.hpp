@@ -669,6 +669,8 @@ struct CompLine {
     T Bij;
     /// Rest wavelength [nm]
     T lambda0;
+    /// Line bandwidth. Used for single/few frequency solutions. [nm]
+    T bandwidth;
     /// Broadening start index
     int broad_start;
     /// Broadening end index (exclusive)
@@ -854,6 +856,24 @@ struct MipmapTolerance {
     fp_t opacity_threshold;
     fp_t log_chi_mip_variance;
     fp_t log_eta_mip_variance;
+};
+
+struct FewFreqSetup {
+    enum class TransType {
+        Line,
+        Continuum,
+    };
+
+    /// Indices into the full adata.wavelength grid
+    yakl::Array<i32, 1, yakl::memDevice> wave_idx;
+    /// Wavelength [nm]
+    Fp1d wavelength;
+    /// Bandwidth [nm]
+    Fp1d bandwidth;
+    /// Line or continuum
+    yakl::Array<TransType, 1, yakl::memDevice> trans_type;
+    /// kr associated with transition (line or cont)
+    yakl::Array<i32, 1, yakl::memDevice> trans_idx;
 };
 
 #else

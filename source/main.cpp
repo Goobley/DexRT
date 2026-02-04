@@ -997,23 +997,27 @@ int main(int argc, char** argv) {
                         state.J_cpu = FP(0.0);
                     }
                     yakl::fence();
-                    WavelengthBatch wave_batch;
-                    wave_dist.wait_for_all(state.mpi_state);
-                    wave_dist.reset();
-                    while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
-                        setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
-                        bool lambda_iterate = i < initial_lambda_iterations;
-                        dynamic_formal_sol_rc(
-                            state,
-                            casc_state,
-                            lambda_iterate,
-                            wave_batch.la_start,
-                            wave_batch.la_end
-                        );
-                        finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+                    if (state.config.few_freq.enable) {
+
+                    } else {
+                        WavelengthBatch wave_batch;
+                        wave_dist.wait_for_all(state.mpi_state);
+                        wave_dist.reset();
+                        while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
+                            setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+                            bool lambda_iterate = i < initial_lambda_iterations;
+                            dynamic_formal_sol_rc(
+                                state,
+                                casc_state,
+                                lambda_iterate,
+                                wave_batch.la_start,
+                                wave_batch.la_end
+                            );
+                            finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+                        }
+                        yakl::fence();
+                        wave_dist.wait_for_all(state.mpi_state);
                     }
-                    yakl::fence();
-                    wave_dist.wait_for_all(state.mpi_state);
 
                     state.println("  == Statistical equilibrium ==");
                     wave_dist.reduce_Gamma(&state);

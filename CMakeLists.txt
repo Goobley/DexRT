@@ -49,6 +49,7 @@ list(APPEND DEX_SOURCE_FILES
     "source/main.cpp"
     "source/StaticFormalSolution.cpp"
     "source/DynamicFormalSolution.cpp"
+    "source/FewFreqFormalSolution.cpp"
     "source/CascadeState.cpp"
     "source/PromweaverBoundary.cpp"
     "source/MiscSparse.cpp"

@@ -27,6 +27,9 @@ struct MultiResMipChain {
     /// buffer_len is expected to be the one from mr_block_map, i.e. to hold all the mips.
     void init(const State& state, i64 buffer_len, i32 wave_batch);
     void fill_mip0_atomic(const State& state, const Fp2d& lte_scratch, int la_start, int la_end) const;
+    /// For "few freq" mode. Ignores velocities (i.e. no per subset component).
+    /// w is like la, but in the fs_setup arrays.
+    void fill_mip0_atomic_few_freq(const State& state, const Fp2d& lte_scratch, const FewFreqSetup& fs_setup, int w_start, int w_end) const;
     void fill_subset_mip0_atomic(const State& state, const CascadeCalcSubset& subset, const Fp2d& n_star) const;
 
     /// compute the mips from mip0 (stored in the start of the arrays), for
