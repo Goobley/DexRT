@@ -467,6 +467,19 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                     }
                 );
 
+                if (ks == 168443) {
+                    Kokkos::single(Kokkos::PerTeam(team), [=] () {
+                        printf("Gamma at ks == %d\n", i32(ks));
+                        for (int i = 0; i < Gammak.extent(0); ++i) {
+                            for (int j = 0; j < Gammak.extent(1); ++j) {
+                                printf("%7.3e, ", Gammak(i, j));
+                            }
+                            printf("\n");
+                        }
+                    });
+                    team.team_barrier();
+                }
+
                 // Setup rhs
                 Kokkos::parallel_for(
                     Kokkos::TeamVectorRange(team, num_level),

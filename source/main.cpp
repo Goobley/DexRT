@@ -30,6 +30,7 @@
 #include "GitVersion.hpp"
 #include "WavelengthParallelisation.hpp"
 #include "InitialPops.hpp"
+#include "FewFreqFormalSolution.hpp"
 
 #include <random>
 
@@ -997,15 +998,19 @@ int main(int argc, char** argv) {
                         state.J_cpu = FP(0.0);
                     }
                     yakl::fence();
+                    bool lambda_iterate = i < initial_lambda_iterations;
                     if (state.config.few_freq.enable) {
-
+                        few_freq_formal_sol_rc(
+                            state,
+                            casc_state,
+                            lambda_iterate
+                        );
                     } else {
                         WavelengthBatch wave_batch;
                         wave_dist.wait_for_all(state.mpi_state);
                         wave_dist.reset();
                         while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
                             setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
-                            bool lambda_iterate = i < initial_lambda_iterations;
                             dynamic_formal_sol_rc(
                                 state,
                                 casc_state,

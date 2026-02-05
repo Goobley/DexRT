@@ -131,7 +131,7 @@ void MultiResMipChain::fill_mip0_atomic(
 
 void MultiResMipChain::fill_mip0_atomic_few_freq(
     const State& state,
-    const Fp2d& lte_scratch,
+    const Fp2d& n_star,
     const FewFreqSetup& fs_setup,
     int w_start,
     int w_end
@@ -162,8 +162,8 @@ void MultiResMipChain::fill_mip0_atomic_few_freq(
             local_atmos.vel = FP(0.0);
 
             const int la = fs_setup.wave_idx(w);
-            const int lambda = fs_setup.wavelength(w);
-            const int bandwidth = fs_setup.bandwidth(w);
+            const fp_t lambda = fs_setup.wavelength(w);
+            const fp_t bandwidth = fs_setup.bandwidth(w);
             const int kr = fs_setup.trans_idx(w);
             const auto trans_type = fs_setup.trans_type(w);
 
@@ -185,6 +185,7 @@ void MultiResMipChain::fill_mip0_atomic_few_freq(
                 const fp_t eta = nj * Uji;
                 // TODO(cmo): Remove trailing term for stimulated emission?
                 const fp_t chi = ni * Vij - nj * Vji;
+                // const fp_t chi = ni * Vij;
                 emis(ks, wave) = eta;
                 opac(ks, wave) = chi;
             } else {
@@ -193,10 +194,10 @@ void MultiResMipChain::fill_mip0_atomic_few_freq(
                 auto sigma_grid = get_sigma(adata, cont);
 
                 const int offset = adata.level_start(cont.atom);
-                const fp_t thermal_ratio = lte_scratch(offset + cont.i, ks) / lte_scratch(offset + cont.j, ks) * std::exp(-hc_k_B_nm / (lambda * local_atmos.temperature));
+                const fp_t thermal_ratio = n_star(offset + cont.i, ks) / n_star(offset + cont.j, ks) * std::exp(-hc_k_B_nm / (lambda * local_atmos.temperature));
 
                 // [m2]
-                const fp_t Vij = sigma_grid.sigma(la - cont.blue_idx) * four_pi / hc_kJ_nm;
+                const fp_t Vij = sigma_grid.sigma(la - cont.blue_idx);
                 // [m2]
                 const fp_t Vji = thermal_ratio * Vij;
                 // [kW nm2 / (nm3 m2)] = [kW nm-1] (sr implicit)
@@ -211,7 +212,7 @@ void MultiResMipChain::fill_mip0_atomic_few_freq(
             }
         }
     );
-    yakl::fence();
+    Kokkos::fence();
 }
 
 void MultiResMipChain::fill_subset_mip0_atomic(
@@ -247,7 +248,7 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
     yakl::Array<i32, 1, yakl::memDevice> mippable_entries("mippable entries", block_map.num_active_tiles);
     yakl::Array<i32, 1, yakl::memDevice> max_mip_level("max mip entries", block_map.num_z_tiles() * block_map.num_x_tiles());
 
-    const bool compute_criteria_on_base_array = (state.config.mode == DexrtMode::GivenFs) || (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest);
+    const bool compute_criteria_on_base_array = (state.config.mode == DexrtMode::GivenFs) || (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest) || (state.config.few_freq.enable);
     const MipmapTolerance mip_config = {
         .opacity_threshold = state.config.mip_config.opacity_threshold,
         .log_chi_mip_variance = state.config.mip_config.log_chi_mip_variance,
@@ -275,7 +276,7 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
         const i32 vox_size = (1 << (level_m_1 + 1));
         auto bounds = block_map.loop_bounds(vox_size);
 
-        if (state.config.mode != DexrtMode::GivenFs) {
+        if (state.config.mode != DexrtMode::GivenFs && !state.config.few_freq.enable) {
             dex_parallel_for(
                 "Compute vel mip",
                 FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
@@ -426,7 +427,7 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
             .vz = vz
         };
 
-        if (state.config.mode != DexrtMode::GivenFs) {
+        if (state.config.mode != DexrtMode::GivenFs && !state.config.few_freq.enable) {
             if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
                 dir_data.compute_mip_n(state, mm_state, level_m_1+1);
             } else if constexpr (LINE_SCHEME == LineCoeffCalc::CoreAndVoigt) {

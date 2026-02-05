@@ -59,7 +59,7 @@ inline FpConst2d merge_c0_to_J(
             const fp_t sample = probe_fetch<RcMode>(c0, c0_dims, idx);
             if (REPORT_NAN_INTENSITY) {
                 if (std::isnan(sample) || sample < FP(0.0)) {
-                    printf("nan intensity at ks=%" PRId64 ", dir=%d, incl=%d, la=%d ", ks, phi_idx, theta_idx, full_la_start + wave);
+                    printf("nan intensity at ks=%" PRId64 ", dir=%d, incl=%d, la=%d\n", ks, phi_idx, theta_idx, full_la_start + wave);
                 }
             }
             Kokkos::atomic_add(&J(la, ks), ray_weight * sample);

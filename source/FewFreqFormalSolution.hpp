@@ -6,7 +6,7 @@
 #include "State.hpp"
 
 struct CascadeState;
-void few_freq_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end);
+void few_freq_formal_sol_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate);
 
 #else
 #endif
