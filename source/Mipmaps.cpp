@@ -49,8 +49,8 @@ void MultiResMipChain::fill_mip0_atomic(
     auto bounds = block_map.loop_bounds();
     dex_parallel_for(
         "Compute eta, chi",
-        FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx, int wave) {
+        FlatLoop<2>(bounds),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
             IndexGen<BLOCK_SIZE> idx_gen(block_map);
             i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
@@ -66,41 +66,44 @@ void MultiResMipChain::fill_mip0_atomic(
                     + square(flatmos.vy(ks))
                     + square(flatmos.vz(ks))
             );
-            const int la = la_start + wave;
-            int governing_atom = adata.governing_trans(la).atom;
+            for (i32 wave = 0; wave < wave_batch; ++wave) {
+                const int la = la_start + wave;
+                int governing_atom = adata.governing_trans(la).atom;
 
-            const bool static_only = v_norm >= (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
-                adata.mass(governing_atom),
-                local_atmos.temperature
-            ));
-            auto active_set = slice_active_set(adata, la);
-            if (fill_dynamic_opac) {
-                const bool no_lines = (active_set.extent(0) == 0);
-                flat_dynamic_opac(ks, wave) = static_only || no_lines;
-            }
-            EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
-            if constexpr (BASE_MIP_CONTAINS == BaseMipContents::Continua) {
-                mode = EmisOpacMode::StaticOnly;
-            } else if constexpr (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest) {
-                mode = EmisOpacMode::All;
-            }
-
-            auto result = emis_opac(
-                EmisOpacState<fp_t>{
-                    .adata = adata,
-                    .profile = phi,
-                    .la = la,
-                    .n = pops,
-                    .n_star_scratch = lte_scratch,
-                    .k = ks,
-                    .atmos = local_atmos,
-                    .active_set = active_set,
-                    .active_set_cont = slice_active_cont_set(adata, la),
-                    .mode = mode
+                const bool static_only = v_norm >= (ANGLE_INVARIANT_THERMAL_VEL_FRAC * thermal_vel(
+                    adata.mass(governing_atom),
+                    local_atmos.temperature
+                ));
+                auto active_set = slice_active_set(adata, la);
+                if (fill_dynamic_opac) {
+                    const bool no_lines = (active_set.extent(0) == 0);
+                    flat_dynamic_opac(ks, wave) = static_only || no_lines;
                 }
-            );
-            emis(ks, wave) = result.eta;
-            opac(ks, wave) = result.chi;
+                EmisOpacMode mode = static_only ? EmisOpacMode::StaticOnly : EmisOpacMode::All;
+                if constexpr (BASE_MIP_CONTAINS == BaseMipContents::Continua) {
+                    mode = EmisOpacMode::StaticOnly;
+                } else if constexpr (BASE_MIP_CONTAINS == BaseMipContents::LinesAtRest) {
+                    mode = EmisOpacMode::All;
+                }
+
+                auto result = emis_opac(
+                    EmisOpacState<fp_t>{
+                        .adata = adata,
+                        .profile = phi,
+                        .la = la,
+                        .n = pops,
+                        .n_star_scratch = lte_scratch,
+                        .k = ks,
+                        .atmos = local_atmos,
+                        .active_set = active_set,
+                        .active_set_cont = slice_active_cont_set(adata, la),
+                        .update_n_star = (wave == 0),
+                        .mode = mode
+                    }
+                );
+                emis(ks, wave) = result.eta;
+                opac(ks, wave) = result.chi;
+            }
         }
     );
 

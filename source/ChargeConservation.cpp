@@ -469,8 +469,12 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
         }
     } else {
         // NOTE(cmo): From Asplund 2009/Lw calc
-        total_abund = FP(1.0861550335264554);
-        // NOTE(cmo): 1.1 is traditionally used to account for He, but it's all much of a muchness
+        if (args.total_abund <= FP(0.0)) {
+            total_abund = FP(1.0861550335264554);
+            // NOTE(cmo): 1.1 is traditionally used to account for He, but it's all much of a muchness
+        } else {
+            total_abund = args.total_abund;
+        }
     }
     constexpr fp_t ne_pert_size = FP(1e-2);
     constexpr bool iterative_improvement = true;

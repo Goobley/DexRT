@@ -875,16 +875,16 @@ extract_atoms_with_gamma_and_mapping(
     return result;
 }
 
-template <typename FPT=fp_t, typename T=fp_t, int mem_space>
+template <typename FPT=fp_t, typename T=fp_t, typename U=fp_t, typename V=fp_t, int mem_space>
 YAKL_INLINE
 void lte_pops(
     const yakl::Array<T const, 1, mem_space>& energy,
     const yakl::Array<T const, 1, mem_space>& g,
     const yakl::Array<T const, 1, mem_space>& stage,
-    fp_t temperature,
-    fp_t ne,
-    fp_t ntot,
-    const yakl::Array<T, 2, mem_space>& pops,
+    U temperature,
+    U ne,
+    U ntot,
+    const yakl::Array<V, 2, mem_space>& pops,
     int64_t ks
 ) {
     using namespace ConstantsF64;
