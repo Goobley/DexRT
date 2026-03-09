@@ -138,16 +138,42 @@ namespace DexImpl {
 template<i32 BLOCK_SIZE, i32 NumDim, class Lookup>
 struct BlockMap;
 
+struct BlockMapInit2 {
+    template <class BlockMap>
+    static void setup_dense(BlockMap*, Dims<2>);
+
+    template <class BlockMap, int mem_space>
+    static void setup_sparse(BlockMap*, const AtmosphereNd<2, mem_space>&, fp_t);
+};
+
+struct BlockMapInit3 {
+    template <class BlockMap>
+    static void setup_dense(BlockMap*, Dims<3>);
+
+    template <class BlockMap, int mem_space>
+    static void setup_sparse(BlockMap*, const AtmosphereNd<3, mem_space>&, fp_t);
+};
+
 template <i32 NumDim>
 struct BlockMapInit {
     template <class BlockMap>
-    static void setup_dense(BlockMap*, Dims<NumDim>);
+    static void setup_dense(BlockMap* b, Dims<NumDim> d) {
+        if constexpr (NumDim == 2) {
+            BlockMapInit2::setup_dense(b, d);
+        } else {
+            BlockMapInit3::setup_dense(b, d);
+        }
+    }
 
     template <class BlockMap, int mem_space>
-    static void setup_sparse(BlockMap*, const AtmosphereNd<NumDim, mem_space>&, fp_t);
+    static void setup_sparse(BlockMap* b, const AtmosphereNd<NumDim, mem_space>& d, fp_t f) {
+        if constexpr (NumDim == 2) {
+            BlockMapInit2::setup_sparse(b, d, f);
+        } else {
+            BlockMapInit3::setup_sparse(b, d, f);
+        }
+    }
 };
-extern template struct BlockMapInit<2>;
-extern template struct BlockMapInit<3>;
 
 template <i32 BlockSize, i32 NumDim=2, class Lookup=BlockMapLookup<NumDim>>
 struct BlockMap {
