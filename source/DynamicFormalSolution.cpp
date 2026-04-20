@@ -517,8 +517,7 @@ void compute_rad_loss(
                         const fp_t direct_contrib = wlamu * (emis_opac.eta - emis_opac.chi * intensity);
 
                         JasUse(include_flux_divergence, flux_div_tau_0);
-                        if constexpr (include_flux_divergence) {
-                            vec3 mu = inverted_mu(ray);
+                        if (include_flux_divergence) {
                             ProbeIndex idx(probe_idx);
                             idx.coord(0) = std::max(probe_idx.coord(0) - 1, mr_block_map.block_map.bbox.min(0));
                             const fp_t im = probe_fetch<RcMode>(I, ray_set, idx);
