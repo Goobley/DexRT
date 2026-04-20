@@ -66,6 +66,7 @@ struct DexrtConfig {
     int max_cascade = 5;
     bool limit_line_edge_bins = true;
     RadLossType rad_loss = RadLossType::None;
+    bool rad_loss_use_flux_divergence = false;
     DexrtMipConfig mip_config;
     DexrtNgConfig ng;
 };
@@ -154,6 +155,10 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
         } else {
             throw std::runtime_error(fmt::format("Unexpected radiative loss type: {}", mode));
         }
+    }
+
+    if (file["rad_loss_use_flux_divergence"]) {
+        config.rad_loss_use_flux_divergence = file["rad_loss_use_flux_divergence"].as<bool>();
     }
 
     if (file["limit_line_edge_bins"]) {

@@ -445,7 +445,7 @@ void compute_rad_loss(
     const auto& I = casc_state.i_cascades[0];
     const auto& incl_quad = state.incl_quad;
     typedef typename RcDynamicState<RcMode>::type DynamicState;
-    constexpr bool include_flux_divergence = true;
+    const bool include_flux_divergence = state.config.rad_loss_use_flux_divergence;
     constexpr fp_t flux_div_tau_0 = FP(0.1);
 
     dex_parallel_for(
@@ -518,14 +518,14 @@ void compute_rad_loss(
 
                         JasUse(include_flux_divergence, flux_div_tau_0);
                         if constexpr (include_flux_divergence) {
-                            vec3 flatland_mu = inverted_flatland_mu(ray);
+                            vec3 mu = inverted_mu(ray);
                             ProbeIndex idx(probe_idx);
                             idx.coord(0) = std::max(probe_idx.coord(0) - 1, mr_block_map.block_map.bbox.min(0));
                             const fp_t im = probe_fetch<RcMode>(I, ray_set, idx);
                             idx.coord(0) = std::min(probe_idx.coord(0) + 1, mr_block_map.block_map.bbox.max(0) - 1);
                             const fp_t ip = probe_fetch<RcMode>(I, ray_set, idx);
 
-                            const fp_t dFdx = (ip - im) * flatland_mu(0) / (FP(2.0) * sparse_atmos.voxel_scale);
+                            const fp_t dFdx = (ip - im) * mu(0) / (FP(2.0) * sparse_atmos.voxel_scale);
 
                             idx.coord(0) = probe_idx.coord(0);
                             idx.coord(1) = std::max(probe_idx.coord(1) - 1, mr_block_map.block_map.bbox.min(1));
@@ -533,7 +533,7 @@ void compute_rad_loss(
                             idx.coord(1) = std::min(probe_idx.coord(1) + 1, mr_block_map.block_map.bbox.max(1) - 1);
                             const fp_t ipz = probe_fetch<RcMode>(I, ray_set, idx);
 
-                            const fp_t dFdz = (ipz - imz) * flatland_mu(2) / (FP(2.0) * sparse_atmos.voxel_scale);
+                            const fp_t dFdz = (ipz - imz) * mu(2) / (FP(2.0) * sparse_atmos.voxel_scale);
                             const fp_t divF = dFdx + dFdz;
                             const fp_t divF_contrib = wlamu * divF;
                             // Do the exp weighting
