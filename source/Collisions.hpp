@@ -255,8 +255,11 @@ KOKKOS_INLINE_FUNCTION void compute_C_ne_pert(
     );
 }
 
+struct ComputeCollisionsOptions {
+    bool zero_gamma = true;
+};
 template <typename State>
-void compute_collisions_to_gamma(State* state);
+void compute_collisions_to_gamma(State* state, const ComputeCollisionsOptions& opts = ComputeCollisionsOptions());
 
 #else
 #endif

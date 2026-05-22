@@ -2,7 +2,7 @@
 #include "State3d.hpp"
 
 template <typename State_t>
-void compute_collisions_to_gamma(State_t* state) {
+void compute_collisions_to_gamma(State_t* state, const ComputeCollisionsOptions& opts) {
     const auto& atmos = state->atmos;
     const auto& Gamma_store = state->Gamma;
     const auto& nh_lte = state->nh_lte;
@@ -12,8 +12,10 @@ void compute_collisions_to_gamma(State_t* state) {
     // TODO(cmo): Get rid of this!
     auto n_star = state->pops.createDeviceObject();
     // NOTE(cmo): Zero Gamma before we start to refill it.
-    for (int i = 0; i < Gamma_store.size(); ++i) {
-        Gamma_store[i] = FP(0.0);
+    if (opts.zero_gamma) {
+        for (int i = 0; i < Gamma_store.size(); ++i) {
+            Gamma_store[i] = FP(0.0);
+        }
     }
     compute_lte_pops(state, n_star);
     yakl::fence();
@@ -50,5 +52,5 @@ void compute_collisions_to_gamma(State_t* state) {
     }
 }
 
-template void compute_collisions_to_gamma<State>(State* state);
-template void compute_collisions_to_gamma<State3d>(State3d* state);
+template void compute_collisions_to_gamma<State>(State* state, const ComputeCollisionsOptions&);
+template void compute_collisions_to_gamma<State3d>(State3d* state, const ComputeCollisionsOptions&);
