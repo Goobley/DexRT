@@ -245,22 +245,25 @@ struct BilinearCorner {
     vec2 frac;
 };
 
-YAKL_INLINE BilinearCorner bilinear_corner(ivec2 probe_coord) {
+YAKL_INLINE BilinearCorner bilinear_corner(
+    ivec2 probe_coord,
+    ivec2 num_probes,
+    yakl::SArray<bool, 1, NUM_DIM> periodic
+) {
     BilinearCorner result;
-    result.corner(0) = std::max(int((probe_coord(0) - 1) / 2), 0);
-    result.corner(1) = std::max(int((probe_coord(1) - 1) / 2), 0);
-    // NOTE(cmo): Weights for this corner
-    if (probe_coord(0) == 0) {
-        // NOTE(cmo): Clamp first row
-        result.frac(0) = FP(1.0);
-    } else {
-        result.frac(0) = FP(0.25) + FP(0.5) * (probe_coord(0) % 2);
-    }
-    if (probe_coord(1) == 0) {
-        // NOTE(cmo): Clamp first col
-        result.frac(1) = FP(1.0);
-    } else {
-        result.frac(1) = FP(0.25) + FP(0.5) * (probe_coord(1) % 2);
+    #pragma unroll
+    for (int i = 0; i < NUM_DIM; ++i) {
+        result.corner(i) = std::max(int((probe_coord(i) - 1) / 2), 0);
+        if (periodic(i) && probe_coord(i) == 0) {
+            result.corner(i) = std::max((num_probes(i) - 2) / 2, 0);
+        }
+        // NOTE(cmo): Weights for this corner
+        if (probe_coord(i) == 0 && !periodic(i)) {
+            // NOTE(cmo): Clamp first row/col
+            result.frac(i) = FP(1.0);
+        } else {
+            result.frac(i) = FP(0.25) + FP(0.5) * (probe_coord(i) % 2);
+        }
     }
     return result;
 }
@@ -282,22 +285,35 @@ YAKL_INLINE ivec2 bilinear_offset() {
     return result;
 };
 
-YAKL_INLINE ivec2 bilinear_offset(const BilinearCorner& bilin, const ivec2& num_probes, int sample) {
+YAKL_INLINE ivec2 bilinear_offset(
+    const BilinearCorner& bilin,
+    const ivec2& num_probes,
+    yakl::SArray<bool, 1, NUM_DIM> periodic,
+    int sample
+) {
     // const bool u0 = bilin.corner(0) == 0;
     const bool u0 = false; // NOTE(cmo): Handled by initial weight
     const bool u_max = bilin.corner(0) == (num_probes(0) - 1);
     const bool u_clamp = (u0 || u_max);
+    const bool u_wrap = u_clamp && periodic(0);
 
     // const bool v0 = bilin.corner(1) == 0;
     const bool v0 = false; // NOTE(cmo): Handled by initial weight
     const bool v_max = bilin.corner(1) == (num_probes(1) - 1);
     const bool v_clamp = (v0 || v_max);
+    const bool v_wrap = u_clamp && periodic(1);
     switch (sample) {
         case 0: {
             return bilinear_offset<0, 0>();
         } break;
         case 1: {
             if (u_clamp) {
+                if (u_wrap) {
+                    ivec2 result;
+                    result(0) = (bilin.corner(0) + 1) % num_probes(0) - bilin.corner(0);
+                    result(1) = 0;
+                    return result;
+                }
                 return bilinear_offset<0, 0>();
             } else {
                 return bilinear_offset<1, 0>();
@@ -305,20 +321,43 @@ YAKL_INLINE ivec2 bilinear_offset(const BilinearCorner& bilin, const ivec2& num_
         } break;
         case 2: {
             if (v_clamp) {
+                if (v_wrap) {
+                    ivec2 result;
+                    result(0) = 0;
+                    result(1) = (bilin.corner(1) + 1) % num_probes(1) - bilin.corner(1);
+                    return result;
+                }
                 return bilinear_offset<0, 0>();
             } else {
                 return bilinear_offset<0, 1>();
             }
         } break;
         case 3: {
-            if (u_clamp && v_clamp) {
-                return bilinear_offset<0, 0>();
-            } else if (u_clamp) {
-                return bilinear_offset<0, 1>();
-            } else if (v_clamp) {
-                return bilinear_offset<1, 0>();
-            } else {
-                return bilinear_offset<1, 1>();
+            if (!(u_wrap || v_wrap)) {
+                if (u_clamp && v_clamp) {
+                    return bilinear_offset<0, 0>();
+                } else if (u_clamp) {
+                    return bilinear_offset<0, 1>();
+                } else if (v_clamp) {
+                    return bilinear_offset<1, 0>();
+                } else {
+                    return bilinear_offset<1, 1>();
+                }
+            } else if (u_wrap && v_wrap) {
+                ivec2 result;
+                result(0) = (bilin.corner(0) + 1) % num_probes(0) - bilin.corner(0);
+                result(1) = (bilin.corner(1) + 1) % num_probes(1) - bilin.corner(1);
+                return result;
+            } else if (u_wrap) {
+                ivec2 result;
+                result(0) = (bilin.corner(0) + 1) % num_probes(0) - bilin.corner(0);
+                result(1) = 0;
+                return result;
+            } else if (v_wrap) {
+                ivec2 result;
+                result(0) = 0;
+                result(1) = (bilin.corner(1) + 1) % num_probes(1) - bilin.corner(1);
+                return result;
             }
         } break;
     }

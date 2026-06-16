@@ -35,6 +35,10 @@ struct DexrtNgConfig {
     fp_t lower_threshold = FP(2e-4);
 };
 
+struct DexrtPeriodicConfig {
+    bool axis[3] = {false, false, false};
+};
+
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_gb = FP(4.0);
@@ -59,6 +63,7 @@ struct DexrtConfig {
     int max_cascade = 5;
     DexrtMipConfig mip_config;
     DexrtNgConfig ng;
+    DexrtPeriodicConfig periodic;
 };
 
 inline void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
@@ -355,6 +360,19 @@ inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file)
     }
 
     parse_mip_config(&config, file);
+
+    if (file["periodic"]) {
+        if (!file["periodic"].IsSequence()) {
+            throw std::runtime_error("Expect sequence of bools for periodic configuration [x, (y,) z]");
+        }
+        if (file["periodic"].size() > get_dexrt_dimensionality()) {
+            throw std::runtime_error(fmt::format("More than {} axes specified in periodic setup", get_dexrt_dimensionality()));
+        }
+
+        for (int i = 0; i < file["periodic"].size(); ++i) {
+            config.periodic.axis[i] = file["periodic"][i].as<bool>();
+        }
+    }
 
     return config;
 }

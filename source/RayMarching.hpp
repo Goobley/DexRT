@@ -431,6 +431,7 @@ struct Raymarch2dArgs {
     int la;
     vec3 offset;
     int max_mip_to_sample;
+    yakl::SArray<bool, 1, NUM_DIM> periodic;
     const BlockMap<BLOCK_SIZE>& block_map;
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const MultiResMipChain& mip_chain;
@@ -443,6 +444,32 @@ YAKL_INLINE RaySegment<2> ray_seg_from_ray_props(const RayProps& ray) {
     return RaySegment<2>(ray.start, ray.dir, FP(0.0), t1);
 }
 
+template <int NumDim>
+YAKL_INLINE bool segment_has_external_periodic_contribution(
+    const GridBbox<NumDim>& aabb,
+    const yakl::SArray<bool, 1, NumDim>& periodic,
+    const RaySegment<NumDim>& seg
+) {
+    bool has_contribution = true;
+    auto end_point = seg(seg.t1);
+    for (int i = 0; i < NumDim; ++i) {
+        if (periodic(i)) {
+            if (MAX_PERIODIC_WRAPS > 0) {
+                // NOTE(cmo): On a periodic axis, check if the contribution comes from within the max number of wraparounds
+                i32 side_length = aabb.max(i) - aabb.min(i);
+                has_contribution &= end_point(i) > aabb.min(i) - MAX_PERIODIC_WRAPS * side_length;
+                has_contribution &= end_point(i) < aabb.max(i) + MAX_PERIODIC_WRAPS * side_length;
+            }
+        } else {
+            // NOTE(cmo): On a non-periodic axis, check if the ray-end is bounded by the planes of the aabb on this axis
+            has_contribution &= end_point(i) > aabb.min(i);
+            has_contribution &= end_point(i) < aabb.max(i);
+        }
+    }
+
+    return has_contribution;
+}
+
 template <
     int RcMode=0,
     typename Bc,
@@ -453,24 +480,24 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
     JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
-    JasUnpack(args, mip_chain);
+    JasUnpack(args, mip_chain, periodic);
     JasUnpack(casc_state_bc, state, bc);
     constexpr bool dynamic = (RcMode & RC_DYNAMIC);
     constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>;
     constexpr bool dynamic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
-    bool start_clipped;
+    int start_clipped_axis;
     MRIdxGen idx_gen(args.mr_block_map);
     auto s = MultiLevelDDA<BLOCK_SIZE, ENTRY_SIZE>(idx_gen);
-    const bool marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped);
+    bool marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
     RadianceInterval<Alo> result{
         .I = FP(0.0),
         .tau = FP(0.0)
     };
     // NOTE(cmo): always_sample_bc is a problem with LS
     constexpr bool always_sample_bc = (RcMode & RC_SAMPLE_BC) && LAST_CASCADE_TO_INFTY && !(RcMode & RC_LINE_SWEEP);
-    const bool ray_starts_outside = (RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped);
+    const bool ray_starts_outside = (RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped_axis != -1);
     if (always_sample_bc || ray_starts_outside) {
         // NOTE(cmo): Check the ray is going up along z.
         if ((ray.dir(1) > FP(0.0)) && la != -1) {
@@ -483,128 +510,196 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             result.I = I_sample;
         }
     }
+
+    // NOTE(cmo): if we have any periodic boundaries, we may still need to
+    // integrate along a ray even if the ray lies outside of the primary domain
+    // (i.e. !marcher).
+    const auto& aabb = args.mr_block_map.block_map.bbox;
+    bool has_ext_contrib = segment_has_external_periodic_contribution<NUM_DIM>(
+        aabb,
+        periodic,
+        ray_seg
+    );
+
+    if (!marcher && has_ext_contrib) {
+        // NOTE(cmo): Wrap the segment end point into the domain and compute the adjusted start point
+        auto end_point = ray_seg(ray_seg.t1);
+        for (int i = 0; i < NUM_DIM; ++i) {
+            if (periodic(i)) {
+                end_point(i) = (end_point(i) < FP(0.0) ? aabb.min(i) : aabb.max(i)) + std::fmod(end_point(i), aabb.max(i) - aabb.min(i));
+            }
+        }
+        ray_seg = RaySegment<NUM_DIM>(
+            end_point - ray_seg.d * (ray_seg.t1 - ray_seg.t0),
+            ray_seg.d,
+            ray_seg.t0,
+            ray_seg.t1
+        );
+        marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
+    }
+
     if (!marcher) {
         return result;
     }
 
+    RadianceInterval<Alo> trace_result{
+        .I = FP(0.0),
+        .tau = FP(0.0)
+    };
+
+    int num_wraps = 0;
     // NOTE(cmo): one_m_edt is also the ALO -- divide by chi_s for PsiStar_lambda_omegahat
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
     // NOTE(cmo): implicit assumption muy != 1.0
     const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
     fp_t lambda;
-    if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
-        lambda = dyn_state.adata.wavelength(la);
-    }
-    do {
-        one_m_edt = FP(0.0);
-        if (s.can_sample()) {
-            i32 u = s.curr_coord(0);
-            i32 v = s.curr_coord(1);
-            i64 ks = idx_gen.idx(s.current_mip_level, Coord2{.x = u, .z = v});
-
-            if constexpr (dynamic_interp) {
-                const fp_t vel = (
-                    mip_chain.vx(ks) * mu(0)
-                    + mip_chain.vy(ks) * mu(1)
-                    + mip_chain.vz(ks) * mu(2)
-                );
-                auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
-                eta_s = contrib.eta;
-                chi_s = contrib.chi + FP(1e-15);
-            } else if constexpr (dynamic_cav) {
-                JasUnpack(dyn_state, active_set, profile, adata);
-                i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
-                eta_s = mip_chain.emis.get_data()[ks_wave];
-                chi_s = mip_chain.opac.get_data()[ks_wave] + FP(1e-15);
-
-                const fp_t vel = (
-                    mip_chain.vx.get_data()[ks] * mu(0)
-                    + mip_chain.vy.get_data()[ks] * mu(1)
-                    + mip_chain.vz.get_data()[ks] * mu(2)
-                );
-                CavEmisOpacState emis_opac_state {
-                    .ks = ks,
-                    .krl = 0,
-                    .wave = wave,
-                    .lambda = lambda,
-                    .vel = vel,
-                    .phi = profile
-                };
-
-                // pls do this in registers
-                #pragma unroll
-                for (int kri = 0; kri < CORE_AND_VOIGT_MAX_LINES; ++kri) {
-                    i32 krl = active_set(kri);
-                    if (krl < 0) {
-                        break;
-                    }
-
-                    emis_opac_state.krl = krl;
-                    i32 kr = mip_chain.cav_data.active_set_mapping(krl);
-                    EmisOpac eta_chi = mip_chain.cav_data.emis_opac(
-                        emis_opac_state
-                    );
-                    eta_s += eta_chi.eta;
-                    chi_s += eta_chi.chi;
-                }
-            } else {
-                eta_s = mip_chain.emis(ks, wave);
-                chi_s = mip_chain.opac(ks, wave) + FP(1e-15);
-                if constexpr (dynamic) {
-                    const SparseAtmosphere& atmos = dyn_state.atmos;
-                    if (
-                        mip_chain.classic_data.dynamic_opac(ks, wave)
-                        && dyn_state.active_set.extent(0) > 0
-                    ) {
-                        fp_t vel = (
-                            atmos.vx.get_data()[ks] * mu(0)
-                            + atmos.vy.get_data()[ks] * mu(1)
-                            + atmos.vz.get_data()[ks] * mu(2)
-                        );
-                        AtmosPointParams local_atmos{
-                            .temperature = atmos.temperature.get_data()[ks],
-                            .ne = atmos.ne.get_data()[ks],
-                            .vturb = atmos.vturb.get_data()[ks],
-                            .nhtot = atmos.nh_tot.get_data()[ks],
-                            .vel = vel,
-                            .nh0 = dyn_state.nh0.get_data()[ks]
-                        };
-                        auto lines = emis_opac(
-                            EmisOpacState<fp_t>{
-                                .adata = dyn_state.adata,
-                                .profile = dyn_state.profile,
-                                .la = la,
-                                .n = dyn_state.n,
-                                .k = ks,
-                                .atmos = local_atmos,
-                                .active_set = dyn_state.active_set,
-                                .mode = EmisOpacMode::DynamicOnly
-                            }
-                        );
-
-                        eta_s += lines.eta;
-                        chi_s += lines.chi;
-                    }
-                }
-            }
-
-            if constexpr (EXTRA_SAFE_SOURCE_FN) {
-                chi_s += (std::abs(chi_s) < FP(1e-15)) * FP(1e-15);
-            }
-            fp_t tau = chi_s * s.dt * distance_scale;
-            fp_t source_fn = eta_s / chi_s;
-
-            fp_t tau_mu = tau * inv_sin_theta;
-            fp_t edt = std::exp(-tau_mu);
-            one_m_edt = -std::expm1(-tau_mu);
-            result.tau += tau_mu;
-            result.I = result.I * edt + source_fn * one_m_edt;
+    while (marcher && num_wraps < MAX_PERIODIC_WRAPS && trace_result.tau < PERIODIC_TAU_CUT) {
+        if constexpr (dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
+            lambda = dyn_state.adata.wavelength(la);
         }
-    } while(s.step_through_grid());
+        RadianceInterval<Alo> current_interval{
+            .I = FP(0.0),
+            .tau = FP(0.0)
+        };
+        do {
+            one_m_edt = FP(0.0);
+            if (s.can_sample()) {
+                i32 u = s.curr_coord(0);
+                i32 v = s.curr_coord(1);
+                i64 ks = idx_gen.idx(s.current_mip_level, Coord2{.x = u, .z = v});
 
-    if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
-        result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
+                if constexpr (dynamic_interp) {
+                    const fp_t vel = (
+                        mip_chain.vx(ks) * mu(0)
+                        + mip_chain.vy(ks) * mu(1)
+                        + mip_chain.vz(ks) * mu(2)
+                    );
+                    auto contrib = mip_chain.dir_data.sample(ks, wave, vel);
+                    eta_s = contrib.eta;
+                    chi_s = contrib.chi + FP(1e-15);
+                } else if constexpr (dynamic_cav) {
+                    JasUnpack(dyn_state, active_set, profile, adata);
+                    i64 ks_wave = ks * mip_chain.emis.extent(1) + wave;
+                    eta_s = mip_chain.emis.get_data()[ks_wave];
+                    chi_s = mip_chain.opac.get_data()[ks_wave] + FP(1e-15);
+
+                    const fp_t vel = (
+                        mip_chain.vx.get_data()[ks] * mu(0)
+                        + mip_chain.vy.get_data()[ks] * mu(1)
+                        + mip_chain.vz.get_data()[ks] * mu(2)
+                    );
+                    CavEmisOpacState emis_opac_state {
+                        .ks = ks,
+                        .krl = 0,
+                        .wave = wave,
+                        .lambda = lambda,
+                        .vel = vel,
+                        .phi = profile
+                    };
+
+                    // pls do this in registers
+                    #pragma unroll
+                    for (int kri = 0; kri < CORE_AND_VOIGT_MAX_LINES; ++kri) {
+                        i32 krl = active_set(kri);
+                        if (krl < 0) {
+                            break;
+                        }
+
+                        emis_opac_state.krl = krl;
+                        i32 kr = mip_chain.cav_data.active_set_mapping(krl);
+                        EmisOpac eta_chi = mip_chain.cav_data.emis_opac(
+                            emis_opac_state
+                        );
+                        eta_s += eta_chi.eta;
+                        chi_s += eta_chi.chi;
+                    }
+                } else {
+                    eta_s = mip_chain.emis(ks, wave);
+                    chi_s = mip_chain.opac(ks, wave) + FP(1e-15);
+                    if constexpr (dynamic) {
+                        const SparseAtmosphere& atmos = dyn_state.atmos;
+                        if (
+                            mip_chain.classic_data.dynamic_opac(ks, wave)
+                            && dyn_state.active_set.extent(0) > 0
+                        ) {
+                            fp_t vel = (
+                                atmos.vx.get_data()[ks] * mu(0)
+                                + atmos.vy.get_data()[ks] * mu(1)
+                                + atmos.vz.get_data()[ks] * mu(2)
+                            );
+                            AtmosPointParams local_atmos{
+                                .temperature = atmos.temperature.get_data()[ks],
+                                .ne = atmos.ne.get_data()[ks],
+                                .vturb = atmos.vturb.get_data()[ks],
+                                .nhtot = atmos.nh_tot.get_data()[ks],
+                                .vel = vel,
+                                .nh0 = dyn_state.nh0.get_data()[ks]
+                            };
+                            auto lines = emis_opac(
+                                EmisOpacState<fp_t>{
+                                    .adata = dyn_state.adata,
+                                    .profile = dyn_state.profile,
+                                    .la = la,
+                                    .n = dyn_state.n,
+                                    .k = ks,
+                                    .atmos = local_atmos,
+                                    .active_set = dyn_state.active_set,
+                                    .mode = EmisOpacMode::DynamicOnly
+                                }
+                            );
+
+                            eta_s += lines.eta;
+                            chi_s += lines.chi;
+                        }
+                    }
+                }
+
+                if constexpr (EXTRA_SAFE_SOURCE_FN) {
+                    chi_s += (std::abs(chi_s) < FP(1e-15)) * FP(1e-15);
+                }
+                fp_t tau = chi_s * s.dt * distance_scale;
+                fp_t source_fn = eta_s / chi_s;
+
+                fp_t tau_mu = tau * inv_sin_theta;
+                fp_t edt = std::exp(-tau_mu);
+                one_m_edt = -std::expm1(-tau_mu);
+                current_interval.tau += tau_mu;
+                current_interval.I = current_interval.I * edt + source_fn * one_m_edt;
+            }
+        } while(s.step_through_grid());
+
+        // NOTE(cmo): These are back-to-front traces, but the intervals connect front-to-back. This is messy.
+        trace_result.I += std::exp(-trace_result.tau) * current_interval.I;
+        trace_result.tau += current_interval.tau;
+
+        // NOTE(cmo): The ALO should get computed at the end of the first trace (since that has to end at the probe in question)
+        if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
+            if (num_wraps == 0) {
+                result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
+            }
+        }
+
+        num_wraps += 1;
+        // NOTE(cmo): If our escape axis isn't periodic or we're done, then leave
+        if (!periodic(start_clipped_axis) || start_clipped_axis == -1 || ray_seg.t1 - s.t < FP(0.5)) {
+            break;
+        }
+        // NOTE(cmo): Compute new ray segment
+        auto new_origin = ray_seg(s.t);
+        new_origin(start_clipped_axis) -= s.step(start_clipped_axis) * (aabb.max(start_clipped_axis) - aabb.min(start_clipped_axis));
+        ray_seg = RaySegment<NUM_DIM>(
+            new_origin,
+            ray_seg.d,
+            FP(0.0),
+            ray_seg.t1 - s.t
+        );
+        marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
     }
+
+    // NOTE(cmo): Merge boundary into trace result
+    result.I = result.I * std::exp(-trace_result.tau) + trace_result.I;
+    result.tau = trace_result.tau;
+
     return result;
 }
 

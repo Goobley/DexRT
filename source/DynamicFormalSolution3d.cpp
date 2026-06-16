@@ -330,10 +330,10 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
 
     MRIdxGen3d idx_gen(mr_block_map);
     auto s = MultiLevelDDA<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3>(idx_gen);
-    bool start_clipped;
-    const bool marcher = s.init(ray, args.max_mip_to_sample, &start_clipped);
+    int start_clipped_axis;
+    const bool marcher = s.init(ray, args.max_mip_to_sample, &start_clipped_axis);
     constexpr bool always_sample_bc = (RcMode & RC_SAMPLE_BC) && LAST_CASCADE_TO_INFTY && !(RcMode & RC_LINE_SWEEP);
-    const bool ray_starts_outside = (RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped);
+    const bool ray_starts_outside = (RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped_axis != -1);
     if (always_sample_bc || ray_starts_outside) {
         // NOTE(cmo): Check the ray is going up along z.
         if ((ray.d(2) > FP(0.0)) && la != -1) {

@@ -226,6 +226,10 @@ void init_state (State* state, const DexrtConfig& config) {
     state->config = config;
     setup_comm(state);
 
+    for (int i = 0; i < NUM_DIM; ++i) {
+        state->periodic(i) = config.periodic.axis[i];
+    }
+
     CascadeRays c0_rays;
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
         c0_rays = init_atmos_atoms(state, config);

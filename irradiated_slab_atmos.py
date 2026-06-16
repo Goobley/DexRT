@@ -1,11 +1,13 @@
 import netCDF4 as ncdf
 import lightweaver as lw
 import promweaver as pw
+from dexrt.config_schemas import DexrtNonLteConfig, AtomicModelConfig
+from dexrt import write_config
 
 if __name__ == '__main__':
-    atmos = ncdf.Dataset("build/atmos.nc", "w", format="NETCDF4")
+    atmos = ncdf.Dataset("slab/atmos.nc", "w", format="NETCDF4")
 
-    bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["Ca"])
+    bc_ctx = pw.compute_falc_bc_ctx(active_atoms=["H", "Ca"])
     tabulated = pw.tabulate_bc(bc_ctx)
 
     mu_dim = atmos.createDimension("prom_bc_mu", tabulated["mu_grid"].shape[0])
@@ -27,8 +29,8 @@ if __name__ == '__main__':
         ).value
 
 
-    atmos_size = 512
-    atmos_size_x = 768
+    atmos_size = 256
+    atmos_size_x = 256
     x_dim = atmos.createDimension("x", atmos_size_x)
     z_dim = atmos.createDimension("z", atmos_size)
     index_order = ("z", "x")
@@ -44,16 +46,16 @@ if __name__ == '__main__':
     altitude = atmos.createVariable("offset_z", "f4")
     offset_x = atmos.createVariable("offset_x", "f4")
 
-    atmos_size_m = 10.0e6
+    atmos_size_m = 0.5e6
     scale[...] = atmos_size_m / atmos_size
-    altitude[...] = 30.0e6
+    altitude[...] = 10.0e6
     offset_x[...] = -0.5 * atmos_size_m * atmos_size_x / atmos_size
-    temp_val = 5000.0
+    temp_val = 7000.0
     temperature[...] = temp_val
-    pres_val = 0.1
+    pres_val = 0.05
     pressure[...] = pres_val
     # NOTE(cmo): Approximate ionisation fraction
-    X = 0.1
+    X = 0.2
     nh_val = pres_val / (lw.KBoltzmann * temp_val * (1.0 + X))
     nh_tot[...] = nh_val
     ne[...] = X * nh_val
@@ -64,3 +66,16 @@ if __name__ == '__main__':
     vz[...] = 0.0
 
     atmos.close()
+
+    schema = DexrtNonLteConfig(
+        atmos_path="atmos.nc",
+        rad_loss="None",
+        conserve_charge=True,
+        conserve_pressure=True,
+        atoms=dict(
+            H=AtomicModelConfig(path="H_6.yaml"),
+            Ca=AtomicModelConfig(path="CaII.yaml"),
+        ),
+        boundary_type="Promweaver",
+    )
+    write_config(schema, "slab/dexrt.yaml")

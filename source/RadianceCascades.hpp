@@ -16,6 +16,7 @@ struct RaymarchParams {
     int la;
     vec3 offset; // (0,0,0) corner offset from (0,0,0) in m
     int max_mip_to_sample;
+    yakl::SArray<bool, 1, NUM_DIM> periodic; // whether each axis is periodic
     const BlockMap<BLOCK_SIZE>& block_map;
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const MultiResMipChain& mip_chain;
@@ -48,6 +49,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
             .la = params.la,
             .offset = params.offset,
             .max_mip_to_sample = params.max_mip_to_sample,
+            .periodic = params.periodic,
             .block_map = params.block_map,
             .mr_block_map = params.mr_block_map,
             .mip_chain = params.mip_chain,
@@ -61,11 +63,11 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        BilinearCorner base = bilinear_corner(this_probe.coord);
-        vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau, upper_dims);
+        BilinearCorner base = bilinear_corner(this_probe.coord, upper_dims.num_probes, params.periodic);
+        vec4 weights = bilinear_weights(base);
         for (int bilin = 0; bilin < 4; ++bilin) {
-            ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, bilin);
+            ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, params.periodic, bilin);
             for (
                 int upper_ray_idx = upper_ray_start_idx;
                 upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
@@ -108,12 +110,12 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        BilinearCorner base = bilinear_corner(this_probe.coord);
-        vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau);
         CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(casc_state.state.upper_dims);
+        BilinearCorner base = bilinear_corner(this_probe.coord, upper_rays.num_probes, params.periodic);
+        vec4 weights = bilinear_weights(base);
         for (int bilin = 0; bilin < 4; ++bilin) {
-            ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+            ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, params.periodic, bilin);
             ProbeIndex upper_centre_probe{
                 .coord = base.corner + bilin_offset,
                 .dir = upper_ray_start_idx + num_rays_per_ray / 2,
@@ -143,6 +145,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
                     .la = params.la,
                     .offset = params.offset,
                     .max_mip_to_sample = params.max_mip_to_sample,
+                    .periodic = params.periodic,
                     .block_map = params.block_map,
                     .mr_block_map = params.mr_block_map,
                     .mip_chain = params.mip_chain,
@@ -187,6 +190,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
                 .la = params.la,
                 .offset = params.offset,
                 .max_mip_to_sample = params.max_mip_to_sample,
+                .periodic = params.periodic,
                 .block_map = params.block_map,
                 .mr_block_map = params.mr_block_map,
                 .mip_chain = params.mip_chain,
@@ -267,6 +271,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
             .la = params.la,
             .offset = params.offset,
             .max_mip_to_sample = params.max_mip_to_sample,
+            .periodic = params.periodic,
             .block_map = params.block_map,
             .mr_block_map = params.mr_block_map,
             .mip_chain = params.mip_chain,
@@ -279,9 +284,10 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
 
     RadianceInterval<Alo> interp{};
     if (casc_state.state.upper_I.initialized()) {
-        BilinearCorner base = bilinear_corner(this_probe.coord);
-        vec4 weights = bilinear_weights(base);
         JasUnpack(casc_state.state, upper_I, upper_tau);
+        CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(casc_state.state.upper_dims);
+        BilinearCorner base = bilinear_corner(this_probe.coord, upper_rays.num_probes, params.periodic);
+        vec4 weights = bilinear_weights(base);
         ProbeIndex prev_probe(this_probe);
         prev_probe.dir -= 1;
         if (prev_probe.dir < 0) {
@@ -309,9 +315,8 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
         vec2 cone_start_pos = ray.start + FP(0.5) * (prev_ray.end - ray.start);
         vec2 cone_end_pos = ray.start + FP(0.5) * (next_ray.end - ray.start);
 
-        CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(casc_state.state.upper_dims);
         for (int bilin = 0; bilin < 4; ++bilin) {
-            ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+            ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, params.periodic, bilin);
             ProbeIndex upper_probe{
                 .coord = base.corner + bilin_offset,
                 .dir = 0,
@@ -369,6 +374,7 @@ YAKL_INLINE RadianceInterval<Alo> march_parallax_fix_inner(
             .la = params.la,
             .offset = params.offset,
             .max_mip_to_sample = params.max_mip_to_sample,
+            .periodic = params.periodic,
             .block_map = params.block_map,
             .mr_block_map = params.mr_block_map,
             .mip_chain = params.mip_chain,
@@ -459,7 +465,7 @@ inline void parallax_fix_inner_merge(
     const CascadeRays& rays,
     const CascadeCalcSubset& subset
 ) {
-    JasUnpack(state, mr_block_map);
+    JasUnpack(state, mr_block_map, periodic);
     JasUnpack(subset, la_start, la_end, subset_idx);
     const int cascade_idx = dev_casc_state.n;
     CascadeRaysSubset ray_subset = nth_rays_subset<RcMode>(rays, subset_idx);
@@ -501,17 +507,18 @@ inline void parallax_fix_inner_merge(
                 const int num_rays_per_ray = upper_texels_per_ray<RcMode>(dev_casc_state.n);
                 const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
-                RadianceInterval<DexEmpty> ri{};
-                BilinearCorner base = bilinear_corner(probe_idx.coord);
-                vec4 weights = bilinear_weights(base);
                 JasUnpack(dev_casc_state, upper_I, upper_tau);
 
                 CascadeRays upper_rays = cascade_storage_to_rays<RcMode>(dev_casc_state.upper_dims);
                 const int upper_ray_start_idx = upper_ray_idx(probe_idx.dir, dev_casc_state.n);
                 const int upper_ray_mid_idx = upper_ray_start_idx + num_rays_per_ray / 2;
 
+                RadianceInterval<DexEmpty> ri{};
+                BilinearCorner base = bilinear_corner(probe_idx.coord, upper_rays.num_probes, periodic);
+                vec4 weights = bilinear_weights(base);
+
                 for (int bilin = 0; bilin < 4; ++bilin) {
-                    ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, bilin);
+                    ivec2 bilin_offset = bilinear_offset(base, upper_rays.num_probes, periodic, bilin);
                     ProbeIndex upper_probe{
                         .coord = base.corner + bilin_offset,
                         .dir = upper_ray_mid_idx,
@@ -620,7 +627,7 @@ void cascade_i_25d(
     const CascadeCalcSubset& subset,
     const MultiResMipChain& mip_chain = MultiResMipChain()
 ) {
-    JasUnpack(state, atmos, incl_quad, adata, pops);
+    JasUnpack(state, atmos, incl_quad, adata, pops, periodic);
     JasUnpack(subset, la_start, la_end, subset_idx);
     const auto& profile = state.phi;
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
@@ -724,6 +731,7 @@ void cascade_i_25d(
                         .la = la,
                         .offset = offset,
                         .max_mip_to_sample = max_mip_to_sample,
+                        .periodic = periodic,
                         .block_map = block_map,
                         .mr_block_map = mr_block_map,
                         .mip_chain = mip_chain,

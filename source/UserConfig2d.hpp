@@ -118,6 +118,11 @@ constexpr bool LAST_CASCADE_TO_INFTY = true;
 // huge models.
 constexpr fp_t LAST_CASCADE_MAX_DIST = FP(2e4);
 
+// Maximum number of grid wraparounds when using periodic boundaries
+constexpr int MAX_PERIODIC_WRAPS = 16;
+// Optical depth to stop accumulating at when wrapping around periodic boundaries
+constexpr fp_t PERIODIC_TAU_CUT = FP(10.0);
+
 // Whether to use preaveraging (i.e. each texel of the cascade stores the
 // contributions for cascade i-1 already averaged). Don't do this -- it's not
 // compatible with the full non-LTE solution!

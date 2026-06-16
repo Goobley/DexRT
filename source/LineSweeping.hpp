@@ -83,6 +83,7 @@ inline void compute_line_sweep_samples(
         mip_chain.max_mip_factor
     );
     const auto& dir_set_desc = ls_data.dir_set_desc;
+    const yakl::SArray<bool, 1, NUM_DIM> periodic(false);
 
     // Do a normal cascade-like dispatch that traces from the previous probe to each probe (ensuring to extend to capture the bc for first_sample). N.B. The line sweep rays are already inverted!
     dex_parallel_for(
@@ -159,6 +160,7 @@ inline void compute_line_sweep_samples(
                         .la = la,
                         .offset = offset,
                         .max_mip_to_sample = max_mip_to_sample,
+                        .periodic = periodic,
                         .block_map = block_map,
                         .mr_block_map = mr_block_map,
                         .mip_chain = mip_chain,
@@ -397,6 +399,7 @@ inline void interpolate_line_sweep_samples_to_cascade(
     int wave
 ) {
     // Do the bilinear interpolation
+    JasUnpack(state, periodic);
     JasUnpack(subset, subset_idx);
     JasUnpack(casc_state, line_sweep_data);
 
@@ -554,12 +557,12 @@ inline void interpolate_line_sweep_samples_to_cascade(
                 const int upper_ray_start_idx = upper_ray_idx(probe_idx.dir, dev_casc_state.n);
                 const int num_rays_per_ray = upper_texels_per_ray<RcMode>(dev_casc_state.n);
                 const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
-                BilinearCorner base = bilinear_corner(probe_idx.coord);
+                BilinearCorner base = bilinear_corner(probe_idx.coord, upper_dims.num_probes, periodic);
                 vec4 weights = bilinear_weights(base);
 
                 RadianceInterval<DexEmpty> upper;
                 for (int bilin = 0; bilin < 4; ++bilin) {
-                    ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, bilin);
+                    ivec2 bilin_offset = bilinear_offset(base, upper_dims.num_probes, periodic, bilin);
                     for (
                         int upper_ray_idx = upper_ray_start_idx;
                         upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;

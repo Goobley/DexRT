@@ -1068,9 +1068,9 @@ struct MultiLevelDDA {
     YAKL_INLINE MultiLevelDDA(MultiLevelIndexGen<BlockSize, EntrySize, NumDim>& idx_gen_) : idx_gen(idx_gen_) {};
 
     YAKL_INLINE
-    bool init(const RaySegment<NumDim>& ray_, i32 max_mip_level_, bool* start_clipped=nullptr) {
+    bool init(const RaySegment<NumDim>& ray_, i32 max_mip_level_, int* start_clipped_axis=nullptr) {
         ray = ray_;
-        if (!ray.clip(idx_gen.block_map.bbox, start_clipped)) {
+        if (!ray.clip(idx_gen.block_map.bbox, start_clipped_axis)) {
             return false;
         }
 

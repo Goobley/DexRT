@@ -178,6 +178,8 @@ struct GridBbox {
 struct IntersectionResult {
     /// i.e. at least partially inside.
     bool intersects;
+    int start_clip_axis;
+    int end_clip_axis;
     fp_t t0;
     fp_t t1;
 };
@@ -226,6 +228,8 @@ struct RaySegment {
     YAKL_INLINE IntersectionResult intersects(const GridBbox<NumDim>& bbox, fp_t shrink_bbox=FP(1e-4)) const {
         fp_t t0_ = t0;
         fp_t t1_ = t1;
+        int start_clip_axis = -1;
+        int end_clip_axis = -1;
 
         for (int ax = 0; ax < NumDim; ++ax) {
             fp_t a = fp_t(bbox.min(ax)) + shrink_bbox;
@@ -233,6 +237,8 @@ struct RaySegment {
             if (a >= b) {
                 return IntersectionResult{
                     .intersects = false,
+                    .start_clip_axis = start_clip_axis,
+                    .end_clip_axis = end_clip_axis,
                     .t0 = t0_,
                     .t1 = t1_
                 };
@@ -248,13 +254,17 @@ struct RaySegment {
 
             if (a > t0_) {
                 t0_ = a;
+                start_clip_axis = ax;
             }
             if (b < t1_) {
                 t1_ = b;
+                end_clip_axis = ax;
             }
             if (t0_ > t1_) {
                 return IntersectionResult{
                     .intersects = false,
+                    .start_clip_axis = start_clip_axis,
+                    .end_clip_axis = end_clip_axis,
                     .t0 = t0_,
                     .t1 = t1_
                 };
@@ -262,20 +272,22 @@ struct RaySegment {
         }
         return IntersectionResult{
             .intersects = true,
+            .start_clip_axis = start_clip_axis,
+            .end_clip_axis = end_clip_axis,
             .t0 = t0_,
             .t1 = t1_
         };
     }
 
-    YAKL_INLINE bool clip(const GridBbox<NumDim>& bbox, bool* start_clipped=nullptr, fp_t shrink_bbox=FP(1e-4)) {
+    YAKL_INLINE bool clip(const GridBbox<NumDim>& bbox, int* clipped_start_axis=nullptr, fp_t shrink_bbox=FP(1e-4)) {
         IntersectionResult result = intersects(bbox, shrink_bbox);
-        if (start_clipped) {
-            *start_clipped = false;
+        if (clipped_start_axis) {
+            *clipped_start_axis = -1;
         }
 
         if (result.intersects) {
-            if (start_clipped && result.t0 > t0) {
-                *start_clipped = true;
+            if (clipped_start_axis && result.t0 > t0) {
+                *clipped_start_axis = result.start_clip_axis;
             }
 
             t0 = result.t0;
