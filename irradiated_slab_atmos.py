@@ -50,13 +50,15 @@ if __name__ == '__main__':
     scale[...] = atmos_size_m / atmos_size
     altitude[...] = 10.0e6
     offset_x[...] = -0.5 * atmos_size_m * atmos_size_x / atmos_size
-    temp_val = 7000.0
-    temperature[...] = temp_val
+    temp_val = 11000.0
+    temperature[...] = 5e5
+    temperature[64:192, :] = temp_val
+
     pres_val = 0.05
     pressure[...] = pres_val
     # NOTE(cmo): Approximate ionisation fraction
-    X = 0.2
-    nh_val = pres_val / (lw.KBoltzmann * temp_val * (1.0 + X))
+    X = 0.6
+    nh_val = pres_val / (lw.KBoltzmann * temperature[...] * (1.0 + X))
     nh_tot[...] = nh_val
     ne[...] = X * nh_val
     vturb[...] = 5e3
@@ -73,7 +75,7 @@ if __name__ == '__main__':
         conserve_charge=True,
         conserve_pressure=True,
         atoms=dict(
-            H=AtomicModelConfig(path="H_6.yaml"),
+            # H=AtomicModelConfig(path="H_6.yaml"),
             Ca=AtomicModelConfig(path="CaII.yaml"),
         ),
         boundary_type="Promweaver",

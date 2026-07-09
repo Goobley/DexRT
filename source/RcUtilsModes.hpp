@@ -247,16 +247,19 @@ struct BilinearCorner {
 
 YAKL_INLINE BilinearCorner bilinear_corner(
     ivec2 probe_coord,
-    ivec2 num_probes,
+    ivec2 num_probes_upper,
     yakl::SArray<bool, 1, NUM_DIM> periodic
 ) {
     BilinearCorner result;
     #pragma unroll
     for (int i = 0; i < NUM_DIM; ++i) {
         result.corner(i) = std::max(int((probe_coord(i) - 1) / 2), 0);
-        if (periodic(i) && probe_coord(i) == 0) {
-            result.corner(i) = std::max((num_probes(i) - 2) / 2, 0);
+        if (periodic(i)) {
+            result.corner(i) = result.corner(i) % num_probes_upper(i);
+        } else {
+            result.corner(i) = std::max(result.corner(i), 0);
         }
+
         // NOTE(cmo): Weights for this corner
         if (probe_coord(i) == 0 && !periodic(i)) {
             // NOTE(cmo): Clamp first row/col
@@ -277,92 +280,31 @@ YAKL_INLINE vec4 bilinear_weights(const BilinearCorner& bilin) {
     return result;
 }
 
-template <int u, int v>
-YAKL_INLINE ivec2 bilinear_offset() {
-    ivec2 result;
-    result(0) = u;
-    result(1) = v;
-    return result;
-};
-
 YAKL_INLINE ivec2 bilinear_offset(
     const BilinearCorner& bilin,
     const ivec2& num_probes,
     yakl::SArray<bool, 1, NUM_DIM> periodic,
     int sample
 ) {
-    // const bool u0 = bilin.corner(0) == 0;
-    const bool u0 = false; // NOTE(cmo): Handled by initial weight
-    const bool u_max = bilin.corner(0) == (num_probes(0) - 1);
-    const bool u_clamp = (u0 || u_max);
-    const bool u_wrap = u_clamp && periodic(0);
+    // NOTE(cmo): Basic case -- inside the grid
+    ivec2 result;
+    result(0) = sample & 0b01;
+    result(1) = (sample & 0b10) >> 1;
+    // NOTE(cmo): Only need to handle clamp/periodicity if our corner is on the boundary
+    #pragma unroll
+    for (int i = 0; i < NUM_DIM; ++i) {
+        if ( !(bilin.corner(i) == 0 || bilin.corner(i) == (num_probes(i) - 1)) ) {
+            continue;
+        }
 
-    // const bool v0 = bilin.corner(1) == 0;
-    const bool v0 = false; // NOTE(cmo): Handled by initial weight
-    const bool v_max = bilin.corner(1) == (num_probes(1) - 1);
-    const bool v_clamp = (v0 || v_max);
-    const bool v_wrap = u_clamp && periodic(1);
-    switch (sample) {
-        case 0: {
-            return bilinear_offset<0, 0>();
-        } break;
-        case 1: {
-            if (u_clamp) {
-                if (u_wrap) {
-                    ivec2 result;
-                    result(0) = (bilin.corner(0) + 1) % num_probes(0) - bilin.corner(0);
-                    result(1) = 0;
-                    return result;
-                }
-                return bilinear_offset<0, 0>();
-            } else {
-                return bilinear_offset<1, 0>();
-            }
-        } break;
-        case 2: {
-            if (v_clamp) {
-                if (v_wrap) {
-                    ivec2 result;
-                    result(0) = 0;
-                    result(1) = (bilin.corner(1) + 1) % num_probes(1) - bilin.corner(1);
-                    return result;
-                }
-                return bilinear_offset<0, 0>();
-            } else {
-                return bilinear_offset<0, 1>();
-            }
-        } break;
-        case 3: {
-            if (!(u_wrap || v_wrap)) {
-                if (u_clamp && v_clamp) {
-                    return bilinear_offset<0, 0>();
-                } else if (u_clamp) {
-                    return bilinear_offset<0, 1>();
-                } else if (v_clamp) {
-                    return bilinear_offset<1, 0>();
-                } else {
-                    return bilinear_offset<1, 1>();
-                }
-            } else if (u_wrap && v_wrap) {
-                ivec2 result;
-                result(0) = (bilin.corner(0) + 1) % num_probes(0) - bilin.corner(0);
-                result(1) = (bilin.corner(1) + 1) % num_probes(1) - bilin.corner(1);
-                return result;
-            } else if (u_wrap) {
-                ivec2 result;
-                result(0) = (bilin.corner(0) + 1) % num_probes(0) - bilin.corner(0);
-                result(1) = 0;
-                return result;
-            } else if (v_wrap) {
-                ivec2 result;
-                result(0) = 0;
-                result(1) = (bilin.corner(1) + 1) % num_probes(1) - bilin.corner(1);
-                return result;
-            }
-        } break;
+        if (periodic(i)) {
+            int target_idx = (bilin.corner(i) + 1) % num_probes(i);
+            result(i) = target_idx - bilin.corner(i);
+        } else {
+            result(i) = 0;
+        }
     }
-    assert(false);
-    return bilinear_offset<0, 0>();
+    return result;
 }
 
 /// The index of the desired _ray_ within the cascade, irrespective of storage layout.

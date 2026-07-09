@@ -654,7 +654,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         auto end_point = ray_seg(ray_seg.t1);
         for (int i = 0; i < NUM_DIM; ++i) {
             if (periodic(i)) {
-                end_point(i) = (end_point(i) < FP(0.0) ? aabb.min(i) : aabb.max(i)) + std::fmod(end_point(i), aabb.max(i) - aabb.min(i));
+                end_point(i) = (end_point(i) < FP(0.0) ? aabb.max(i) : aabb.min(i)) + std::fmod(end_point(i), aabb.max(i) - aabb.min(i));
             }
         }
         ray_seg = RaySegment<NUM_DIM>(
