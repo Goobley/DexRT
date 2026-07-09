@@ -12,6 +12,7 @@ struct DexrtOutputConfig {
     bool sparse = false;
     bool wavelength = true;
     bool J = true;
+    bool rad_loss = true;
     bool pops = true;
     bool lte_pops = true;
     bool ne = true;
@@ -39,6 +40,12 @@ struct DexrtPeriodicConfig {
     bool axis[3] = {false, false, false};
 };
 
+enum class RadLossType {
+    None,
+    PerWavelength,
+    Integrated
+};
+
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_gb = FP(4.0);
@@ -61,6 +68,7 @@ struct DexrtConfig {
     int snapshot_frequency = 0;
     int initial_lambda_iterations = 2;
     int max_cascade = 5;
+    RadLossType rad_loss = RadLossType::None;
     DexrtMipConfig mip_config;
     DexrtNgConfig ng;
     DexrtPeriodicConfig periodic;
@@ -138,6 +146,19 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
             throw std::runtime_error(fmt::format("Unexpected boundary condition type: {}", mode));
         }
     }
+
+    if (file["rad_loss"]) {
+        std::string mode = file["rad_loss"].as<std::string>();
+        if (mode == "None") {
+            config.rad_loss = RadLossType::None;
+        } else if (mode == "PerWavelength") {
+            config.rad_loss = RadLossType::PerWavelength;
+        } else if (mode == "Integrated") {
+            config.rad_loss = RadLossType::Integrated;
+        } else {
+            throw std::runtime_error(fmt::format("Unexpected radiative loss type: {}", mode));
+        }
+    }
 }
 
 inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
@@ -194,6 +215,9 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     if (output["J"]) {
         out.J = output["J"].as<bool>();
     }
+    if (output["rad_loss"]) {
+        out.rad_loss = output["rad_loss"].as<bool>();
+    }
     if (output["pops"]) {
         out.pops = output["pops"].as<bool>();
     }
@@ -219,6 +243,7 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     if (config.mode == DexrtMode::GivenFs) {
         out.ne = false;
         out.nh_tot = false;
+        out.rad_loss = false;
         out.pops = false;
         out.lte_pops = false;
         out.active = false;
@@ -226,11 +251,13 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     } else if (config.mode == DexrtMode::Lte) {
         out.ne = false;
         out.nh_tot = false;
+        out.rad_loss = out.rad_loss && (config.rad_loss != RadLossType::None);
         out.lte_pops = false;
         out.psi_star = false;
         out.active = true;
     } else if (config.mode == DexrtMode::NonLte) {
         out.active = true;
+        out.rad_loss = out.rad_loss && (config.rad_loss != RadLossType::None);
         if (!(config.conserve_charge || config.conserve_pressure)) {
             out.ne = false;
             out.nh_tot = false;

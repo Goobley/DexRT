@@ -43,7 +43,12 @@ typedef f64 StatEqPrecision;
 
 // Set the precision used in the accumulation of the Gamma matrix. Single
 // precision is usually fine.
-typedef fp_t GammaFp;
+// typedef fp_t GammaFp;
+typedef f64 GammaFp;
+
+// Set the precision used in the accumulation of the radiative losses
+// typedef fp_t RadLossFp;
+typedef f64 RadLossFp;
 
 /*== 2D Config ===============================================================*/
 // To consider a flatland setup (no inclination rays), uncomment the #define
