@@ -1078,7 +1078,7 @@ struct MultiLevelDDA {
 
         constexpr fp_t eps = FP(1e-6);
         ray.update_origin(ray.t0);
-        if (std::abs(ray.t1 - ray.t0) < FP(1e-4)) {
+        if (std::abs(ray.t1 - ray.t0) < FP(1e-2)) {
             // NOTE(cmo): Ray length has collapsed to essentially 0
             return false;
         }
@@ -1121,6 +1121,9 @@ struct MultiLevelDDA {
             next_intersection();
             if (++steps > max_steps) {
 #ifdef DEXRT_DEBUG
+                auto start = ray_(ray_.t0);
+                auto end = ray_(ray_.t1);
+                printf("[%d, %d], <%f, %f> -> <%f, %f> @ [%f, %f]\n", curr_coord(0), curr_coord(1), start(0), start(1), end(0), end(1), ray.d(0), ray.d(1));
                 yakl::yakl_throw("Failed to walk into grid");
 #endif
                 return false;

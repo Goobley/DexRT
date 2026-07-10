@@ -676,6 +676,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     };
 
     int num_wraps = 0;
+    fp_t t_remaining = ray_seg.t1 - ray_seg.t0;
     // NOTE(cmo): one_m_edt is also the ALO -- divide by chi_s for PsiStar_lambda_omegahat
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
     // NOTE(cmo): implicit assumption muy != 1.0
@@ -733,21 +734,29 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             }
         }
 
-        num_wraps += 1;
         // NOTE(cmo): If our escape axis isn't periodic or we're done, then leave
-        if (!periodic(start_clipped_axis) || start_clipped_axis == -1 || ray_seg.t1 - s.t < FP(0.5)) {
+        fp_t t_traversed = s.t - s.ray.t0;
+        if (
+            !periodic(start_clipped_axis) ||
+            start_clipped_axis == -1 ||
+            (t_remaining - t_traversed) < FP(0.2)
+        ) {
             break;
         }
-        // NOTE(cmo): Compute new ray segment
-        auto new_origin = ray_seg(s.t);
-        new_origin(start_clipped_axis) -= s.step(start_clipped_axis) * (aabb.max(start_clipped_axis) - aabb.min(start_clipped_axis));
-        ray_seg = RaySegment<NUM_DIM>(
-            new_origin,
-            ray_seg.d,
-            FP(0.0),
-            ray_seg.t1 - s.t
-        );
-        marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
+        // NOTE(cmo): Compute new ray segment.
+        do {
+            num_wraps += 1;
+            t_remaining -= s.t - s.ray.t0;
+            auto new_end = s.ray(s.ray.t0);
+            new_end(start_clipped_axis) += s.step(start_clipped_axis) * (aabb.max(start_clipped_axis) - aabb.min(start_clipped_axis));
+            ray_seg = RaySegment<NUM_DIM>(
+                new_end - ray_seg.d * t_remaining,
+                ray_seg.d,
+                FP(0.0),
+                t_remaining
+            );
+            marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
+        } while((s.ray.t1 - s.ray.t0) < FP(1e-2));
     }
 
     // NOTE(cmo): Merge boundary into trace result

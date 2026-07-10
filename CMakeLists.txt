@@ -50,6 +50,7 @@ list(APPEND DEX_2D_SOURCE_FILES
     "source/DynamicFormalSolution.cpp"
     "source/CascadeState.cpp"
     "source/PromweaverBoundary.cpp"
+    "source/PlaneBoundary.cpp"
     "source/MiscSparse.cpp"
     "source/Collisions.cpp"
     "source/ProfileNormalisation.cpp"
@@ -84,6 +85,7 @@ list(APPEND DEX_3D_SOURCE_FILES
     "source/MiscSparse.cpp"
     "source/Populations.cpp"
     "source/PromweaverBoundary.cpp"
+    "source/PlaneBoundary.cpp"
     "source/ProfileNormalisation.cpp"
     "source/Collisions.cpp"
     "source/NgAcceleration.cpp"
@@ -93,12 +95,14 @@ list(APPEND DEX_3D_SOURCE_FILES
 list(APPEND DEX_RAY_SOURCE_FILES
     "source/dexrt_ray.cpp"
     "source/PromweaverBoundary.cpp"
+    "source/PlaneBoundary.cpp"
     "source/MiscSparse.cpp"
     "source/BlockMap.cpp"
 )
 list(APPEND DEX_RAY_3D_SOURCE_FILES
     "source/dexrt_ray_3d.cpp"
     "source/PromweaverBoundary.cpp"
+    "source/PlaneBoundary.cpp"
     "source/MiscSparse.cpp"
     "source/BlockMap.cpp"
 )

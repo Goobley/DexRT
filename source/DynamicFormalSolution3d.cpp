@@ -23,6 +23,12 @@ PwBc<> get_bc(const DeviceBoundaries& bounds) {
     return bounds.pw_bc;
 }
 
+template <>
+KOKKOS_INLINE_FUNCTION
+PlaneBc<> get_bc(const DeviceBoundaries& bounds) {
+    return bounds.plane_bc;
+}
+
 template <typename DynamicState=void>
 KOKKOS_INLINE_FUNCTION
 DynamicState get_dyn_state_3d(
@@ -685,7 +691,8 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
     DeviceBoundaries boundaries_h{
         .boundary = state.boundary,
         .zero_bc = state.zero_bc,
-        .pw_bc = state.pw_bc
+        .pw_bc = state.pw_bc,
+        .plane_bc = state.plane_bc
     };
     auto offset = get_offsets(atmos);
 
@@ -756,6 +763,9 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
                     } break;
                     case BoundaryType::Promweaver:{
                         dispatch(PwBc<>{}, dyn_state);
+                    } break;
+                    case BoundaryType::Plane:{
+                        dispatch(PlaneBc<>{}, dyn_state);
                     } break;
                     default: {
                         Kokkos::abort("Unknown BC type");

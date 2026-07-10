@@ -5,6 +5,7 @@
 #include "Voigt.hpp"
 #include "LteHPops.hpp"
 #include "PromweaverBoundary.hpp"
+#include "PlaneBoundary.hpp"
 #include "ZeroBoundary.hpp"
 #include "BoundaryType.hpp"
 #include "BlockMap.hpp"
@@ -43,6 +44,7 @@ struct State {
     yakl::Array<RadLossFp, 2, yakl::memHost> rad_loss_cpu; /// [num_wave || 1, ks] per wavelength if not pre-integrated.
     std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
     PwBc<> pw_bc;
+    PlaneBc<> plane_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;
 #ifdef DEXRT_USE_MAGMA

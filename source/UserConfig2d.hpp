@@ -79,7 +79,7 @@ constexpr bool STORE_TAU_CASCADES = false;
 // Whether to store all cascades, e.g. for saving or debugging, or simply
 // "ping-pong" between two cascades, merging as we go between cascade i+1 and i.
 // Can be a significant memory saving
-constexpr bool PINGPONG_BUFFERS = true;
+constexpr bool PINGPONG_BUFFERS = false;
 
 // The wavelength batch is typically set based on the warp size and number of
 // inclinations, but can be overridden here. Override not well tested.
@@ -102,9 +102,9 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(1.5);
+constexpr fp_t PROBE0_LENGTH = FP(3.0);
 // The number of rays to trace on cascade 0
-constexpr int PROBE0_NUM_RAYS = 4;
+constexpr int PROBE0_NUM_RAYS = 8;
 
 // The angular branching and interval length factor to use for each cascade
 // (i.e. num_rays_i = PROBE0_NUM_RAYS * 2^(CASCADE_BRANCHING_FACTOR * i))
@@ -135,7 +135,7 @@ constexpr bool PREAVERAGE = false;
 // Whether to treat the subset of each cascade associated with each ray of C0
 // separately. This is a good default with good memory savings, but is
 // incompatible with the parallax fixes.
-constexpr bool DIR_BY_DIR = true;
+constexpr bool DIR_BY_DIR = false;
 
 constexpr const char* RcConfigurationNames[4] = {
     "Vanilla",

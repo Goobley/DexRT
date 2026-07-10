@@ -142,6 +142,8 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
             config.boundary = BoundaryType::Zero;
         } else if (mode == "Promweaver") {
             config.boundary = BoundaryType::Promweaver;
+        } else if (mode == "Plane") {
+            config.boundary = BoundaryType::Plane;
         } else {
             throw std::runtime_error(fmt::format("Unexpected boundary condition type: {}", mode));
         }

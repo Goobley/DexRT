@@ -253,7 +253,7 @@ YAKL_INLINE BilinearCorner bilinear_corner(
     BilinearCorner result;
     #pragma unroll
     for (int i = 0; i < NUM_DIM; ++i) {
-        result.corner(i) = std::max(int((probe_coord(i) - 1) / 2), 0);
+        result.corner(i) = int((probe_coord(i) - 1) / 2);
         if (periodic(i)) {
             result.corner(i) = result.corner(i) % num_probes_upper(i);
         } else {
@@ -300,7 +300,7 @@ YAKL_INLINE ivec2 bilinear_offset(
         if (periodic(i)) {
             int target_idx = (bilin.corner(i) + 1) % num_probes(i);
             result(i) = target_idx - bilin.corner(i);
-        } else {
+        } else if (bilin.corner(i) == (num_probes(i) - 1)) {
             result(i) = 0;
         }
     }

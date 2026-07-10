@@ -72,7 +72,8 @@ inline void compute_line_sweep_samples(
     DeviceBoundaries boundaries_h{
         .boundary = state.boundary,
         .zero_bc = state.zero_bc,
-        .pw_bc = state.pw_bc
+        .pw_bc = state.pw_bc,
+        .plane_bc = state.plane_bc
     };
     auto offset = get_offsets(atmos);
 
@@ -175,6 +176,9 @@ inline void compute_line_sweep_samples(
                     } break;
                     case BoundaryType::Promweaver: {
                         dispatch_raymarch(PwBc<>{});
+                    } break;
+                    case BoundaryType::Plane: {
+                        dispatch_raymarch(PlaneBc<>{});
                     } break;
                     default: {
                         yakl::yakl_throw("Unknown BC type");

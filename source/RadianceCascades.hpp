@@ -668,7 +668,8 @@ void cascade_i_25d(
     DeviceBoundaries boundaries_h{
         .boundary = state.boundary,
         .zero_bc = state.zero_bc,
-        .pw_bc = state.pw_bc
+        .pw_bc = state.pw_bc,
+        .plane_bc = state.plane_bc
     };
     auto offset = get_offsets(atmos);
 
@@ -765,6 +766,9 @@ void cascade_i_25d(
                             } break;
                             case BoundaryType::Promweaver: {
                                 dispatch_outer(PwBc<>{});
+                            } break;
+                            case BoundaryType::Plane: {
+                                dispatch_outer(PlaneBc<>{});
                             } break;
                             default: {
                                 yakl::yakl_throw("Unknown BC type");

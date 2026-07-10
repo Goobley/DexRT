@@ -34,6 +34,7 @@ struct State3d {
     Fp2dHost J_cpu; /// [num_wave, ks] -- The full J in host memory, if we're paging after each batch.
     std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
     PwBc<> pw_bc;
+    PlaneBc<> plane_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;
 

@@ -8,6 +8,7 @@ struct DeviceBoundaries {
     BoundaryType boundary;
     ZeroBc zero_bc;
     PwBc<> pw_bc;
+    PlaneBc<> plane_bc;
 };
 
 template <typename Bc=void>
@@ -40,6 +41,18 @@ CascadeStateAndBc<PwBc<>> get_bc<PwBc<>>(
     return CascadeStateAndBc<PwBc<>> {
         .state = casc_state,
         .bc = boundaries.pw_bc
+    };
+}
+
+template <>
+YAKL_INLINE
+CascadeStateAndBc<PlaneBc<>> get_bc<PlaneBc<>>(
+    const DeviceCascadeState& casc_state,
+    const DeviceBoundaries& boundaries
+) {
+    return CascadeStateAndBc<PlaneBc<>> {
+        .state = casc_state,
+        .bc = boundaries.plane_bc
     };
 }
 

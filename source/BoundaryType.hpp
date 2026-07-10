@@ -4,6 +4,7 @@
 enum class BoundaryType {
     Zero,
     Promweaver,
+    Plane,
 };
 
 #else
