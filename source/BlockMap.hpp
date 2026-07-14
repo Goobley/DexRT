@@ -1079,7 +1079,7 @@ struct MultiLevelDDA {
         constexpr fp_t eps = FP(1e-6);
         ray.update_origin(ray.t0);
         t = ray.t0;
-        if (std::abs(ray.t1 - ray.t0) < FP(1e-2)) {
+        if (std::abs(ray.t1 - ray.t0) < FP(1e-3)) {
             // NOTE(cmo): Ray length has collapsed to essentially 0
             return false;
         }

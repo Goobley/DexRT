@@ -676,6 +676,12 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         for (int i = 0; i < NUM_DIM; ++i) {
             if (periodic(i)) {
                 end_point(i) = (end_point(i) < FP(0.0) ? aabb.max(i) : aabb.min(i)) + std::fmod(end_point(i), aabb.max(i) - aabb.min(i));
+                // NOTE(cmo): In case we're right on the boundary (technically
+                // there is a contribution, but the ray length for this wrap has
+                // collapsed, force a wrap now).
+                if (std::abs(end_point(i) - aabb.min(i)) < FP(1e-3) || std::abs(end_point(i) - aabb.max(i)) < FP(1e-3)) {
+                    end_point(i) += std::copysign(FP(1.0), ray_seg.d(i)) * (aabb.max(i) - aabb.min(i));
+                }
             }
         }
         ray_seg = RaySegment<NUM_DIM>(
@@ -780,7 +786,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         }
 
         // NOTE(cmo): If our escape axis isn't periodic or we're done, then leave
-        fp_t t_traversed = s.t - s.ray.t0;
+        fp_t t_traversed = s.ray.t0 - s.ray.t0;
         bool escape = false;
         if (check_ray_done(t_traversed)) {
             escape = true;
@@ -792,7 +798,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                     printf("Collapsed\n");
                 }
                 num_wraps += 1;
-                t_remaining -= s.t - s.ray.t0;
+                t_remaining -= s.ray.t1 - s.ray.t0;
                 auto new_end = s.ray(s.ray.t0);
                 new_end(start_clipped_axis) += s.step(start_clipped_axis) * (aabb.max(start_clipped_axis) - aabb.min(start_clipped_axis));
                 ray_seg = RaySegment<NUM_DIM>(

@@ -8,7 +8,6 @@
 #include "UserConfig2d.hpp"
 #include "UserConfig3d.hpp"
 
-#define KOKKOS_ENABLE_DEBUG
 #ifdef KOKKOS_ENABLE_DEBUG
 #define DEXRT_DEBUG
 #endif

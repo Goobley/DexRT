@@ -38,7 +38,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri;
     bool print_debug = (
-        this_probe.coord(0) == 0 && this_probe.coord(1) == 65 && this_probe.incl == 0 && this_probe.wave == 1 && this_probe.dir == 23
+        this_probe.coord(0) == 0 && this_probe.coord(1) == 15 && this_probe.incl == 0 && this_probe.wave == 1 && this_probe.dir == 255
     );
     ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
         Raymarch2dArgs<Bc, DynamicState>{
