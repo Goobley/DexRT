@@ -248,11 +248,12 @@ struct BilinearCorner {
 YAKL_INLINE BilinearCorner bilinear_corner(
     ivec2 probe_coord,
     ivec2 num_probes_upper,
-    yakl::SArray<bool, 1, NUM_DIM> periodic
+    yakl::SArray<bool, 1, 2> periodic
 ) {
+    constexpr int num_dim = 2;
     BilinearCorner result;
     #pragma unroll
-    for (int i = 0; i < NUM_DIM; ++i) {
+    for (int i = 0; i < num_dim; ++i) {
         // NOTE(cmo): Similarly to the block map, we use a right shift here to
         // avoid -1/2 = 0, instead -1 >> 1 = -1
         result.corner(i) = (probe_coord(i) - 1) >> 1;
@@ -287,16 +288,17 @@ YAKL_INLINE vec4 bilinear_weights(const BilinearCorner& bilin) {
 YAKL_INLINE ivec2 bilinear_offset(
     const BilinearCorner& bilin,
     const ivec2& num_probes,
-    yakl::SArray<bool, 1, NUM_DIM> periodic,
+    yakl::SArray<bool, 1, 2> periodic,
     int sample
 ) {
+    constexpr int num_dim = 2;
     // NOTE(cmo): Basic case -- inside the grid
     ivec2 result;
     result(0) = sample & 0b01;
     result(1) = (sample & 0b10) >> 1;
     // NOTE(cmo): Only need to handle clamp/periodicity if our corner is on the boundary
     #pragma unroll
-    for (int i = 0; i < NUM_DIM; ++i) {
+    for (int i = 0; i < num_dim; ++i) {
         // NOTE(cmo): We only need to clamp the offset corners.
         if (
             result(i) == 0 ||

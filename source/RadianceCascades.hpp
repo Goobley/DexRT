@@ -16,7 +16,7 @@ struct RaymarchParams {
     int la;
     vec3 offset; // (0,0,0) corner offset from (0,0,0) in m
     int max_mip_to_sample;
-    yakl::SArray<bool, 1, NUM_DIM> periodic; // whether each axis is periodic
+    yakl::SArray<bool, 1, 2> periodic; // whether each axis is periodic
     const BlockMap<BLOCK_SIZE>& block_map;
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const MultiResMipChain& mip_chain;
@@ -635,7 +635,7 @@ void cascade_i_25d(
     typedef typename RcDynamicState<RcMode>::type DynamicState;
 
     bool any_periodic = false;
-    for (int i = 0; i < NUM_DIM; ++i) {
+    for (int i = 0; i < get_dexrt_dimensionality(); ++i) {
         any_periodic |= periodic(i);
     }
 

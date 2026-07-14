@@ -84,7 +84,7 @@ inline void compute_line_sweep_samples(
         mip_chain.max_mip_factor
     );
     const auto& dir_set_desc = ls_data.dir_set_desc;
-    const yakl::SArray<bool, 1, NUM_DIM> periodic(false);
+    const yakl::SArray<bool, 1, 2> periodic(false);
 
     // Do a normal cascade-like dispatch that traces from the previous probe to each probe (ensuring to extend to capture the bc for first_sample). N.B. The line sweep rays are already inverted!
     dex_parallel_for(

@@ -20,6 +20,7 @@ struct State3d {
     MultiResBlockMap<BLOCK_SIZE_3D, ENTRY_SIZE_3D, 3> mr_block_map;
     GivenEmisOpac3d given_state;
     SparseAtmosphere atmos;
+    yakl::SArray<bool, 1, 3> periodic; // Could be better located
     AtomicData<fp_t, yakl::memDevice> adata;
     std::vector<CompAtom<fp_t, yakl::memDevice>> atoms;
     std::vector<CompAtom<fp_t, yakl::memDevice>> atoms_with_gamma;

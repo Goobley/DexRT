@@ -24,7 +24,7 @@ struct State {
     CascadeStorage c0_size;
     GivenEmisOpac given_state;
     SparseAtmosphere atmos;
-    yakl::SArray<bool, 1, NUM_DIM> periodic; // Could be better located
+    yakl::SArray<bool, 1, 2> periodic; // Could be better located
     MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE> mr_block_map;
     yakl::Array<i32, 3, yakl::memDevice> max_block_mip;
     InclQuadrature incl_quad;

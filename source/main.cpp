@@ -259,7 +259,7 @@ void init_state (State* state, const DexrtConfig& config) {
     state->config = config;
     setup_comm(state);
 
-    for (int i = 0; i < NUM_DIM; ++i) {
+    for (int i = 0; i < get_dexrt_dimensionality(); ++i) {
         state->periodic(i) = config.periodic.axis[i];
     }
 

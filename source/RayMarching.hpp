@@ -431,7 +431,7 @@ struct Raymarch2dArgs {
     int la;
     vec3 offset;
     int max_mip_to_sample;
-    yakl::SArray<bool, 1, NUM_DIM> periodic;
+    yakl::SArray<bool, 1, 2> periodic;
     const BlockMap<BLOCK_SIZE>& block_map;
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const MultiResMipChain& mip_chain;
@@ -645,7 +645,8 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
     // integrate along a ray even if the ray lies outside of the primary domain
     // (i.e. !marcher).
     const auto& aabb = args.mr_block_map.block_map.bbox;
-    bool has_ext_contrib = segment_has_external_periodic_contribution<NUM_DIM>(
+    constexpr int num_dim = 2;
+    bool has_ext_contrib = segment_has_external_periodic_contribution<num_dim>(
         aabb,
         periodic,
         ray_seg
@@ -658,7 +659,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
         // segment, i.e. the upper bound of the integral stored into the probe
         // (the near point). This is due to the back-to-front integration.
         auto end_point = ray_seg(ray_seg.t1);
-        for (int i = 0; i < NUM_DIM; ++i) {
+        for (int i = 0; i < num_dim; ++i) {
             if (periodic(i)) {
                 end_point(i) = (
                     end_point(i) < FP(0.0) ? aabb.max(i) : aabb.min(i)
@@ -671,7 +672,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
                 }
             }
         }
-        ray_seg = RaySegment<NUM_DIM>(
+        ray_seg = RaySegment<num_dim>(
             end_point - ray_seg.d * (ray_seg.t1 - ray_seg.t0),
             ray_seg.d,
             ray_seg.t0,
@@ -780,7 +781,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
                 // Wrap over the periodic axis
                 auto new_end = s.ray(s.ray.t0);
                 new_end(start_clipped_axis) += s.step(start_clipped_axis) * (aabb.max(start_clipped_axis) - aabb.min(start_clipped_axis));
-                ray_seg = RaySegment<NUM_DIM>(
+                ray_seg = RaySegment<num_dim>(
                     new_end - ray_seg.d * t_remaining,
                     ray_seg.d,
                     FP(0.0),
