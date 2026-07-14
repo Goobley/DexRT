@@ -310,7 +310,7 @@ YAKL_INLINE ivec2 bilinear_offset(
         if (periodic(i)) {
             const int target_idx = 0;
             result(i) = target_idx - bilin.corner(i);
-        } else if (bilin.corner(i) == (num_probes(i) - 1)) {
+        } else {
             // NOTE(cmo): Don't need to do this clamp on the 0 side as this
             // is taken care of by the weight
             result(i) = 0;

@@ -174,6 +174,10 @@ void init_state(State3d* state, const DexrtConfig& config) {
     state->config = config;
     setup_comm(state);
 
+    for (int i = 0; i < get_dexrt_dimensionality(); ++i) {
+        state->periodic(i) = config.periodic.axis[i];
+    }
+
     CascadeRays3d c0_rays;
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
         c0_rays = init_atmos_atoms(state, config);

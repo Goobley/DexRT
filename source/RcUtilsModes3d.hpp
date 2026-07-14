@@ -213,17 +213,31 @@ struct TrilinearCorner {
     vec3 frac;
 };
 
-YAKL_INLINE TrilinearCorner trilinear_corner(ivec3 probe_coord) {
+YAKL_INLINE TrilinearCorner trilinear_corner(
+    ivec3 probe_coord,
+    ivec3 num_probes_upper,
+    yakl::SArray<bool, 1, 3> periodic
+) {
     TrilinearCorner result;
     #pragma unroll
     for (int i = 0; i < 3; ++i) {
-        result.corner(i) = std::max(int((probe_coord(i) - 1) / 2), 0);
+        // NOTE(cmo): Similarly to the block map, we use a right shift here to
+        // avoid -1/2 = 0, instead -1 >> 1 = -1
+        result.corner(i) = (probe_coord(i) - 1) >> 1;
+        if (periodic(i)) {
+            if (result.corner(i) < 0) {
+                result.corner(i) += num_probes_upper(i);
+            }
+        } else {
+            result.corner(i) = std::max(result.corner(i), 0);
+        }
+
         // NOTE(cmo): Weights for this corner
-        if (probe_coord(i) == 0) {
-            // NOTE(cmo): Clamp first row/col/layer
+        if (!periodic(i) && probe_coord(i) == 0) {
+            // NOTE(cmo): Clamp first row/col
             result.frac(i) = FP(1.0);
         } else {
-            result.frac(i) = FP(0.25) + FP(0.5) * (probe_coord(i) & 1);
+            result.frac(i) = FP(0.25) + FP(0.5) * (probe_coord(i) % 2);
         }
     }
     return result;
@@ -231,11 +245,13 @@ YAKL_INLINE TrilinearCorner trilinear_corner(ivec3 probe_coord) {
 
 YAKL_INLINE vec<8> trilinear_weights(const TrilinearCorner& tri) {
     vec<8> result;
+    // NOTE(cmo): pack to be in binary ordering for u, v, w so we
+    // can do the binary unpack in trilinear_coord
     result(0) = tri.frac(0) * tri.frac(1) * tri.frac(2); // u_bc, v_bc, w_bc
     result(1) = (FP(1.0) - tri.frac(0)) * tri.frac(1) * tri.frac(2); // u_uc, v_bc, w_bc
     result(2) = tri.frac(0) * (FP(1.0) - tri.frac(1)) * tri.frac(2); // u_bc, v_uc, w_bc
-    result(3) = tri.frac(0) * tri.frac(1) * (FP(1.0) - tri.frac(2)); // u_bc, v_bc, w_uc
-    result(4) = (FP(1.0) - tri.frac(0)) * (FP(1.0) - tri.frac(1)) * tri.frac(2); // u_uc, v_uc, w_bc
+    result(3) = (FP(1.0) - tri.frac(0)) * (FP(1.0) - tri.frac(1)) * tri.frac(2); // u_uc, v_uc, w_bc
+    result(4) = tri.frac(0) * tri.frac(1) * (FP(1.0) - tri.frac(2)); // u_bc, v_bc, w_uc
     result(5) = (FP(1.0) - tri.frac(0)) * tri.frac(1) * (FP(1.0) - tri.frac(2)); // u_uc, v_bc, w_uc
     result(6) = tri.frac(0) * (FP(1.0) - tri.frac(1)) * (FP(1.0) - tri.frac(2)); // u_bc, v_uc, w_uc
     result(7) = (FP(1.0) - tri.frac(0)) * (FP(1.0) - tri.frac(1)) * (FP(1.0) - tri.frac(2)); // u_uc, v_uc, w_uc
@@ -243,59 +259,37 @@ YAKL_INLINE vec<8> trilinear_weights(const TrilinearCorner& tri) {
     return result;
 }
 
-YAKL_INLINE ivec3 trilinear_coord(const TrilinearCorner& trilin, const ivec3& num_probes, int sample) {
+YAKL_INLINE ivec3 trilinear_coord(
+    const TrilinearCorner& trilin,
+    const ivec3& num_probes,
+    yakl::SArray<bool, 1, 3> periodic,
+    int sample
+) {
     ivec3 coord;
 
-    switch (sample) {
-        case 0: {
-            coord(0) = trilin.corner(0);
-            coord(1) = trilin.corner(1);
-            coord(2) = trilin.corner(2);
-        } break;
-        case 1: {
-            coord(0) = trilin.corner(0) + 1;
-            coord(1) = trilin.corner(1);
-            coord(2) = trilin.corner(2);
-        } break;
-        case 2: {
-            coord(0) = trilin.corner(0);
-            coord(1) = trilin.corner(1) + 1;
-            coord(2) = trilin.corner(2);
+    #pragma unroll
+    for (int i = 0; i < 3; ++i) {
+        // NOTE(cmo): This is computing the offset on top of the corner
+        int offset = ((sample >> i) & 1);
+        coord(i) = trilin.corner(i) + offset;
 
-        } break;
-        case 3: {
-            coord(0) = trilin.corner(0);
-            coord(1) = trilin.corner(1);
-            coord(2) = trilin.corner(2) + 1;
-        } break;
-        case 4: {
-            coord(0) = trilin.corner(0) + 1;
-            coord(1) = trilin.corner(1) + 1;
-            coord(2) = trilin.corner(2);
+        // NOTE(cmo): Only need to handle clamp/periodicity if our corner is on the boundary
+        if (
+            offset == 0 ||
+            trilin.corner(i) != (num_probes(i) - 1)
+        ) {
+            continue;
+        }
 
-        } break;
-        case 5: {
-            coord(0) = trilin.corner(0) + 1;
-            coord(1) = trilin.corner(1);
-            coord(2) = trilin.corner(2) + 1;
-        } break;
-        case 6: {
-            coord(0) = trilin.corner(0);
-            coord(1) = trilin.corner(1) + 1;
-            coord(2) = trilin.corner(2) + 1;
-        } break;
-        case 7: {
-            coord(0) = trilin.corner(0) + 1;
-            coord(1) = trilin.corner(1) + 1;
-            coord(2) = trilin.corner(2) + 1;
-        } break;
-        default: {
-            assert(false);
+        if (periodic(i)) {
+            coord(i) = 0;
+        } else {
+            // NOTE(cmo): Don't need to do this clamp on the 0 side as this
+            // is taken care of by the weight
+            coord(i) = trilin.corner(i);
         }
     }
-    coord(0) = std::min(coord(0), num_probes(0) - 1);
-    coord(1) = std::min(coord(1), num_probes(1) - 1);
-    coord(2) = std::min(coord(2), num_probes(2) - 1);
+
     return coord;
 }
 
