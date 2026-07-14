@@ -37,9 +37,6 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
 ) {
     ray = invert_direction(ray);
     RadianceInterval<Alo> ri;
-    bool print_debug = (
-        this_probe.coord(0) == 0 && this_probe.coord(1) == 15 && this_probe.incl == 0 && this_probe.wave == 1 && this_probe.dir == 255
-    );
     ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
         Raymarch2dArgs<Bc, DynamicState>{
             .casc_state_bc = casc_state,
@@ -56,8 +53,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
             .block_map = params.block_map,
             .mr_block_map = params.mr_block_map,
             .mip_chain = params.mip_chain,
-            .dyn_state = params.dyn_state,
-            .print_debug = print_debug
+            .dyn_state = params.dyn_state
         }
     );
 
@@ -638,6 +634,11 @@ void cascade_i_25d(
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
     typedef typename RcDynamicState<RcMode>::type DynamicState;
 
+    bool any_periodic = false;
+    for (int i = 0; i < NUM_DIM; ++i) {
+        any_periodic |= periodic(i);
+    }
+
     CascadeIdxs lookup = cascade_indices(casc_state, cascade_idx);
     Fp1d i_cascade_i = casc_state.i_cascades[lookup.i];
     Fp1d tau_cascade_i = casc_state.tau_cascades[lookup.i];
@@ -750,13 +751,23 @@ void cascade_i_25d(
 
                     auto dispatch_outer = [&]<typename BcType>(BcType bc_type){
                         auto casc_and_bc = get_bc<BcType>(dev_casc_state, boundaries);
-                        ri = march_and_merge_dispatch<RcMode>(
-                            casc_and_bc,
-                            casc_rays,
-                            probe_idx,
-                            ray,
-                            params
-                        );
+                        if (any_periodic) {
+                            ri = march_and_merge_dispatch<RcMode | RC_PERIODIC>(
+                                casc_and_bc,
+                                casc_rays,
+                                probe_idx,
+                                ray,
+                                params
+                            );
+                        } else {
+                            ri = march_and_merge_dispatch<RcMode>(
+                                casc_and_bc,
+                                casc_rays,
+                                probe_idx,
+                                ray,
+                                params
+                            );
+                        }
                     };
 
                     if constexpr (RcMode & RC_SAMPLE_BC) {
@@ -812,7 +823,10 @@ void cascade_i_25d(
                 parallax_fix_inner_merge<RcMode>(state, dev_casc_state, probe_coord_lookup, ray_set, subset);
             }
         }
-    } else if (RAYMARCH_TYPE == RaymarchType::LineSweep) {
+    } else if constexpr (RAYMARCH_TYPE == RaymarchType::LineSweep) {
+        if (any_periodic) {
+            throw std::runtime_error("Periodic line sweeping not supported");
+        }
         for (int wave = 0; wave < wave_batch; ++wave) {
             compute_line_sweep_samples<RcMode>(state, casc_state, cascade_idx, subset, wave, mip_chain);
             interpolate_line_sweep_samples_to_cascade<RcMode>(state, casc_state, cascade_idx, subset, wave);

@@ -436,7 +436,6 @@ struct Raymarch2dArgs {
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const MultiResMipChain& mip_chain;
     const DynamicState& dyn_state;
-    bool print_debug = false;
 };
 
 YAKL_INLINE RaySegment<2> ray_seg_from_ray_props(const RayProps& ray) {
@@ -605,25 +604,15 @@ template <
     typename DynamicState,
     typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>
 >
-YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
+YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
     const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
     JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
     JasUnpack(args, mip_chain, periodic);
     JasUnpack(casc_state_bc, state, bc);
-    JasUnpack(args, print_debug);
-    // constexpr bool dynamic = (RcMode & RC_DYNAMIC);
-    // constexpr bool dynamic_interp = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicInterpState>;
-    // constexpr bool dynamic_cav = dynamic && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>;
-
-    // bool any_periodic = false;
-    // for (int i = 0; i < NUM_DIM; ++i) {
-    //     any_periodic |= periodic(i);
-    // }
-    const bool any_periodic = false;
 
     RaySegment ray_seg = ray_seg_from_ray_props(ray);
-    int start_clipped_axis;
+    int start_clipped_axis; // set to 0, 1, 2 if clipped on that axis, else -1
     MRIdxGen idx_gen(args.mr_block_map);
     auto s = MultiLevelDDA<BLOCK_SIZE, ENTRY_SIZE>(idx_gen);
     bool marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
@@ -631,24 +620,16 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         .I = FP(0.0),
         .tau = FP(0.0)
     };
-    if (print_debug) {
-        auto start = ray_seg(ray_seg.t0);
-        auto end = ray_seg(ray_seg.t1);
-        fp_t len = std::sqrt(square(end(0) - start(0)) + square(end(1) - start(1)));
-        printf("[%f, %f] -> [%f, %f] (%f)\n", start(0), start(1), end(0), end(1), len);
-        start = s.ray(s.ray.t0);
-        end = s.ray(s.ray.t1);
-        len = std::sqrt(square(end(0) - start(0)) + square(end(1) - start(1)));
-        printf("%s marcher. [%f, %f] -> [%f, %f] (%f)\n", marcher ? "have" : "no", start(0), start(1), end(0), end(1), len);
-    }
     // NOTE(cmo): always_sample_bc is a problem with LS
-    const bool always_sample_bc = (
-        (RcMode & RC_SAMPLE_BC) && LAST_CASCADE_TO_INFTY && !(RcMode & RC_LINE_SWEEP) // constexpr
-        && !any_periodic
+    // Yes, it is sort of strange to apply "always sample" to periodic cases,
+    // but if after enough wraps we haven't accumulated enough opacity to block
+    // the boundary, then sampling it is probably the wiser choice.
+    constexpr bool always_sample_bc = (
+        (RcMode & RC_SAMPLE_BC) && LAST_CASCADE_TO_INFTY && !(RcMode & RC_LINE_SWEEP)
     );
     const bool ray_starts_outside = (RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped_axis != -1);
     if (always_sample_bc || ray_starts_outside) {
-        // NOTE(cmo): Check the ray is going up along z.
+        // NOTE(cmo): Check the ray is going up along z -- this should probably get converted to a per-bc function
         if ((ray.dir(1) > FP(0.0)) && la != -1) {
             vec3 pos;
             pos(0) = ray.centre(0) * distance_scale + offset(0);
@@ -671,11 +652,17 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     );
 
     if (!marcher && has_ext_contrib) {
-        // NOTE(cmo): Wrap the segment end point into the domain and compute the adjusted start point
+        // NOTE(cmo): Wrap the segment end point into the domain and compute the
+        // adjusted start point
+        // In all that follows, the end point refers to the head of the ray
+        // segment, i.e. the upper bound of the integral stored into the probe
+        // (the near point). This is due to the back-to-front integration.
         auto end_point = ray_seg(ray_seg.t1);
         for (int i = 0; i < NUM_DIM; ++i) {
             if (periodic(i)) {
-                end_point(i) = (end_point(i) < FP(0.0) ? aabb.max(i) : aabb.min(i)) + std::fmod(end_point(i), aabb.max(i) - aabb.min(i));
+                end_point(i) = (
+                    end_point(i) < FP(0.0) ? aabb.max(i) : aabb.min(i)
+                ) + std::fmod(end_point(i), aabb.max(i) - aabb.min(i));
                 // NOTE(cmo): In case we're right on the boundary (technically
                 // there is a contribution, but the ray length for this wrap has
                 // collapsed, force a wrap now).
@@ -691,14 +678,10 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             ray_seg.t1
         );
         marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
-        if (print_debug) {
-            auto start = s.ray(s.ray.t0);
-            auto end = s.ray(s.ray.t1);
-            fp_t len = std::sqrt(square(end(0) - start(0)) + square(end(1) - start(1)));
-            printf("ext_contrib. [%f, %f] -> [%f, %f] (%f)\n", start(0), start(1), end(0), end(1), len);
-        }
     }
 
+    // NOTE(cmo): If, after all that, we failed to initialise a valid trace,
+    // then it's incredibly likely that there isn't one.
     if (!marcher) {
         return result;
     }
@@ -708,15 +691,13 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         .tau = FP(0.0)
     };
 
-
     int num_wraps = 0;
     fp_t t_remaining = ray_seg.t1 - ray_seg.t0;
 
     constexpr fp_t min_seg_length = FP(0.1);
     auto check_ray_done = [&](fp_t t_traversed) {
-        if (print_debug) {
-            printf("Check: %d, %d (%f)\n", !periodic(start_clipped_axis), start_clipped_axis == -1, t_remaining);
-        }
+        // NOTE(cmo): The check order is important here to avoid reading before the start of periodic's data.
+        // If the ray wasn't clipped, then we should have arrived at its termination on this traversal.
         return (
             start_clipped_axis == -1 ||
             !periodic(start_clipped_axis) ||
@@ -769,14 +750,11 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             }
         } while(s.step_through_grid());
 
-        // NOTE(cmo): These are back-to-front traces, but the intervals connect front-to-back. This is messy.
-        fp_t prev_tr_I = trace_result.I;
-        fp_t prev_tr_tau = trace_result.tau;
+        // NOTE(cmo): These are back-to-front traces, but the intervals connect
+        // front-to-back. This is messy, but it's how it fits in the current
+        // framework -- performance doesn't seem as bad as anticipated.
         trace_result.I += std::exp(-trace_result.tau) * current_interval.I;
         trace_result.tau += current_interval.tau;
-        if (print_debug) {
-            printf("Merging: (I, tau): (%f, %e) + (%f, %e) -> (%f, %e)\n", prev_tr_I, prev_tr_tau, current_interval.I, current_interval.tau, trace_result.I, trace_result.tau);
-        }
 
         // NOTE(cmo): The ALO should get computed at the end of the first trace (since that has to end at the probe in question)
         if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
@@ -791,14 +769,15 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
         if (check_ray_done(t_traversed)) {
             escape = true;
         } else {
-            // NOTE(cmo): Compute new ray segment.
+            // NOTE(cmo): Compute new ray segment. If the ray collapses to ~0
+            // length because it hits a tiny corner of the grid then we cycle
+            // immediately onto the segment (having checked that it also exists
+            // through a periodic boundary and not a fixed one)
             int inner_loops = 0;
             do {
-                if (print_debug && inner_loops >= 1) {
-                    printf("Collapsed\n");
-                }
                 num_wraps += 1;
                 t_remaining -= s.ray.t1 - s.ray.t0;
+                // Wrap over the periodic axis
                 auto new_end = s.ray(s.ray.t0);
                 new_end(start_clipped_axis) += s.step(start_clipped_axis) * (aabb.max(start_clipped_axis) - aabb.min(start_clipped_axis));
                 ray_seg = RaySegment<NUM_DIM>(
@@ -808,21 +787,13 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
                     t_remaining
                 );
                 marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
+                // Check if the ray will escape after this wrap, and if it's
+                // also short enough to not bother with
                 if (
                     (start_clipped_axis == -1 || !periodic(start_clipped_axis))
                     && (s.ray.t1 - s.ray.t0 < min_seg_length)
                 ) {
                     escape = true;
-                }
-                if (print_debug) {
-                    auto start = s.ray(s.ray.t0);
-                    auto end = s.ray(s.ray.t1);
-                    fp_t len = std::sqrt(square(end(0) - start(0)) + square(end(1) - start(1)));
-                    printf("wrap %d. (%s marcher) [%f, %f] -> [%f, %f] (%f): (%s)\n", num_wraps, marcher ? "valid" : "invalid", start(0), start(1), end(0), end(1), len, escape ? "escape" : "no escape");
-                    start = ray_seg(ray_seg.t0);
-                    end = ray_seg(ray_seg.t1);
-                    len = std::sqrt(square(end(0) - start(0)) + square(end(1) - start(1)));
-                    printf("wrap %d (calc). [%f, %f] -> [%f, %f] (%f)\n", num_wraps, start(0), start(1), end(0), end(1), len);
                 }
                 inner_loops += 1;
             } while(!escape && (s.ray.t1 - s.ray.t0) < FP(1e-2) && num_wraps < MAX_PERIODIC_WRAPS);
@@ -835,8 +806,102 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     // NOTE(cmo): Merge boundary into trace result
     result.I = result.I * std::exp(-trace_result.tau) + trace_result.I;
     result.tau = trace_result.tau;
-    if (print_debug) {
-        printf("Final (I, tau): (%f, %e)\n", result.I, result.tau);
+
+    return result;
+}
+
+template <
+    int RcMode=0,
+    typename Bc,
+    typename DynamicState,
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>
+>
+YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
+    const Raymarch2dArgs<Bc, DynamicState>& args
+) {
+    if constexpr (RcMode & RC_PERIODIC) {
+        return multi_level_dda_raymarch_2d_periodic<RcMode>(args);
+    }
+
+    JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
+    JasUnpack(args, mip_chain, periodic);
+    JasUnpack(casc_state_bc, state, bc);
+
+    RaySegment ray_seg = ray_seg_from_ray_props(ray);
+    int start_clipped_axis;
+    MRIdxGen idx_gen(args.mr_block_map);
+    auto s = MultiLevelDDA<BLOCK_SIZE, ENTRY_SIZE>(idx_gen);
+    bool marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped_axis);
+    RadianceInterval<Alo> result{
+        .I = FP(0.0),
+        .tau = FP(0.0)
+    };
+    // NOTE(cmo): always_sample_bc is a problem with LS
+    constexpr bool always_sample_bc = (
+        (RcMode & RC_SAMPLE_BC) && LAST_CASCADE_TO_INFTY && !(RcMode & RC_LINE_SWEEP)
+    );
+    const bool ray_starts_outside = (RcMode & RC_SAMPLE_BC) && (!marcher || start_clipped_axis != -1);
+    if (always_sample_bc || ray_starts_outside) {
+        // NOTE(cmo): Check the ray is going up along z.
+        if ((ray.dir(1) > FP(0.0)) && la != -1) {
+            vec3 pos;
+            pos(0) = ray.centre(0) * distance_scale + offset(0);
+            pos(1) = offset(1);
+            pos(2) = ray.centre(1) * distance_scale + offset(2);
+
+            fp_t I_sample = sample_boundary(bc, la, pos, mu);
+            result.I = I_sample;
+        }
+    }
+
+    if (!marcher) {
+        return result;
+    }
+
+    // NOTE(cmo): one_m_edt is also the ALO -- divide by chi_s for PsiStar_lambda_omegahat
+    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
+    // NOTE(cmo): implicit assumption muy != 1.0
+    const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
+    fp_t lambda;
+    if constexpr ((RcMode & RC_DYNAMIC) && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
+        lambda = dyn_state.adata.wavelength(la);
+    }
+    do {
+        one_m_edt = FP(0.0);
+        if (s.can_sample()) {
+            i32 u = s.curr_coord(0);
+            i32 v = s.curr_coord(1);
+            i64 ks = idx_gen.idx(s.current_mip_level, Coord2{.x = u, .z = v});
+
+            EmisOpac emis_opac = sample_emis_opac(SampleEmisOpacArgs<DynamicState> {
+                .ks=ks,
+                .wave=wave,
+                .la=la,
+                .lambda=lambda,
+                .mu=mu,
+                .mip_chain=mip_chain,
+                .dyn_state=dyn_state
+            });
+            eta_s = emis_opac.eta;
+            chi_s = emis_opac.chi + FP(1e-15);
+
+            if constexpr (EXTRA_SAFE_SOURCE_FN) {
+                chi_s += (std::abs(chi_s) < FP(1e-15)) * FP(1e-15);
+            }
+            fp_t tau = chi_s * s.dt * distance_scale;
+            fp_t source_fn = eta_s / chi_s;
+
+            fp_t tau_mu = tau * inv_sin_theta;
+            fp_t edt = std::exp(-tau_mu);
+            one_m_edt = -std::expm1(-tau_mu);
+            result.tau += tau_mu;
+            result.I = result.I * edt + source_fn * one_m_edt;
+        }
+    } while(s.step_through_grid());
+
+    // NOTE(cmo): The ALO should get computed at the end of the first trace (since that has to end at the probe in question)
+    if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
+        result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
     }
 
     return result;
