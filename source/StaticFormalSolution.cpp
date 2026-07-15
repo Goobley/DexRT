@@ -8,9 +8,13 @@
 #include "RcUtilsModes.hpp"
 #include "MergeToJ.hpp"
 
+// NOTE(cmo): Needed to pass an integer into a lambda as a template param
+template <int N>
+using Constant = std::integral_constant<int, N>;
+
 void static_formal_sol_given_rc(const State& state, const CascadeState& casc_state, bool lambda_iterate, int la_start, int la_end) {
     assert(state.config.mode == DexrtMode::GivenFs);
-    JasUnpack(state, mr_block_map);
+    JasUnpack(state, mr_block_map, periodic);
     JasUnpack(casc_state, mip_chain);
     const auto& block_map = mr_block_map.block_map;
 
@@ -55,6 +59,38 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
     });
     constexpr int RcStorage = RC_flags_storage_2d();
 
+    bool any_periodic = false;
+    for (int i = 0; i < get_dexrt_dimensionality(); ++i) {
+        any_periodic |= periodic(i);
+    }
+
+    auto dispatch_cascade_i = [&]<int RcMode>(
+        Constant<RcMode>,
+        const State& state,
+        const CascadeState& casc_state,
+        int casc_idx,
+        const CascadeCalcSubset& subset,
+        const MultiResMipChain& mip_chain
+    ) {
+        if (any_periodic) {
+            return cascade_i_25d<RcMode | RC_PERIODIC>(
+                state,
+                casc_state,
+                casc_idx,
+                subset,
+                mip_chain
+            );
+        } else {
+            return cascade_i_25d<RcMode>(
+                state,
+                casc_state,
+                casc_idx,
+                subset,
+                mip_chain
+            );
+        }
+    };
+
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
@@ -65,7 +101,8 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         };
         mip_chain.compute_subset_mips(state, subset);
 
-        cascade_i_25d<RcModeBc>(
+        dispatch_cascade_i(
+            Constant<RcModeBc>{},
             state,
             casc_state,
             casc_state.num_cascades,
@@ -74,7 +111,8 @@ void static_formal_sol_given_rc(const State& state, const CascadeState& casc_sta
         );
         yakl::fence();
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 0; --casc_idx) {
-            cascade_i_25d<RcModeNoBc>(
+            dispatch_cascade_i(
+                Constant<RcModeNoBc>{},
                 state,
                 casc_state,
                 casc_idx,

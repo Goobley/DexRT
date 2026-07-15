@@ -177,6 +177,7 @@ void init_state(State3d* state, const DexrtConfig& config) {
     for (int i = 0; i < get_dexrt_dimensionality(); ++i) {
         state->periodic(i) = config.periodic.axis[i];
     }
+    fmt::println("Periodic {} {} {}", state->periodic(0), state->periodic(1), state->periodic(2));
 
     CascadeRays3d c0_rays;
     if (config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte) {
@@ -448,7 +449,7 @@ void save_results(const State3d& state, const CascadeState3d& casc_state, i32 nu
 
     add_netcdf_attributes(state, nc, num_iter);
     const auto& block_map = state.mr_block_map.block_map;
-    bool sparse_J = (state.J.extent(1) == state.atmos.temperature.extent(0));
+    bool sparse_J = (state.J.extent(1) == state.atmos.temperature.extent(0)) && state.config.sparse_calculation;
 
     auto maybe_rehydrate_and_write = [&](
         auto arr,
@@ -466,11 +467,14 @@ void save_results(const State3d& state, const CascadeState3d& casc_state, i32 nu
         }
     };
 
+    fmt::println("A");
     if (out_cfg.J && !NO_J_3D) {
         if (config.store_J_on_cpu) {
             if (sparse_J) {
+    fmt::println("B");
                 maybe_rehydrate_and_write(state.J_cpu, "J", {"wavelength"});
             } else {
+    fmt::println("C");
                 nc.write(
                     state.J_cpu.reshape(
                         state.J_cpu.extent(0),
@@ -484,8 +488,10 @@ void save_results(const State3d& state, const CascadeState3d& casc_state, i32 nu
             }
         } else {
             if (sparse_J) {
+    fmt::println("D");
                 maybe_rehydrate_and_write(state.J, "J", {"wavelength"});
             } else {
+    fmt::println("E");
                 nc.write(
                     state.J.reshape(
                         state.J.extent(0),
@@ -499,27 +505,35 @@ void save_results(const State3d& state, const CascadeState3d& casc_state, i32 nu
             }
         }
     }
+    fmt::println("F");
     if (out_cfg.wavelength && state.adata.wavelength.initialized()) {
         nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
     }
-    if (out_cfg.pops && state.pops.initialized()) {
-        maybe_rehydrate_and_write(state.pops, "pops", {"level"});
-    }
-    if (out_cfg.lte_pops) {
-        Fp2d lte_pops = state.pops.createDeviceObject();
-        compute_lte_pops(&state, lte_pops);
-        yakl::fence();
-        maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});
-    }
-    if (out_cfg.ne && state.atmos.ne.initialized()) {
-        maybe_rehydrate_and_write(state.atmos.ne, "ne", {});
-    }
-    if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
-        maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
-    }
-    if (out_cfg.psi_star && casc_state.psi_star.initialized()) {
-        nc.write(casc_state.psi_star, "psi_star", {"casc_shape"});
-    }
+    // fmt::println("G");
+    // fmt::println("{} {}", state.pops.extent(0), state.pops.extent(1));
+    // if (out_cfg.pops && state.pops.initialized()) {
+    //     maybe_rehydrate_and_write(state.pops, "pops", {"level"});
+    // }
+    // fmt::println("H");
+    // if (out_cfg.lte_pops) {
+    //     Fp2d lte_pops = state.pops.createDeviceObject();
+    //     compute_lte_pops(&state, lte_pops);
+    //     yakl::fence();
+    //     maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});
+    // }
+    // fmt::println("I");
+    // if (out_cfg.ne && state.atmos.ne.initialized()) {
+    //     maybe_rehydrate_and_write(state.atmos.ne, "ne", {});
+    // }
+    // fmt::println("J");
+    // if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
+    //     maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
+    // }
+    // fmt::println("K");
+    // if (out_cfg.psi_star && casc_state.psi_star.initialized()) {
+    //     nc.write(casc_state.psi_star, "psi_star", {"casc_shape"});
+    // }
+    fmt::println("L");
     for (int casc : out_cfg.cascades) {
         // NOTE(cmo): The validity of these + necessary warning were checked/output in the config parsing step
         std::string name = fmt::format("I_C{}", casc);
@@ -895,6 +909,7 @@ int main(int argc, char** argv) {
                 }
                 first_iter = false;
             }
+            fmt::println("Mode: {}, sparse {}, dense {}", int(state.config.mode), state.config.sparse_calculation, state.config.final_dense_fs);
             if (state.config.mode == DexrtMode::NonLte && state.config.sparse_calculation && state.config.final_dense_fs) {
                 state.config.sparse_calculation = false;
                 allocate_J(&state);

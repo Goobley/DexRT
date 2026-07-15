@@ -710,10 +710,10 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
     // NOTE(cmo): implicit assumption muy != 1.0
     const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
     fp_t lambda;
+    if constexpr ((RcMode & RC_DYNAMIC) && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
+        lambda = dyn_state.adata.wavelength(la);
+    }
     while (marcher && num_wraps < MAX_PERIODIC_WRAPS && trace_result.tau < PERIODIC_TAU_CUT) {
-        if constexpr ((RcMode & RC_DYNAMIC) && std::is_same_v<DynamicState, Raymarch2dDynamicCoreAndVoigtState>) {
-            lambda = dyn_state.adata.wavelength(la);
-        }
         RadianceInterval<Alo> current_interval{
             .I = FP(0.0),
             .tau = FP(0.0)
@@ -765,7 +765,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
         }
 
         // NOTE(cmo): If our escape axis isn't periodic or we're done, then leave
-        fp_t t_traversed = s.ray.t0 - s.ray.t0;
+        fp_t t_traversed = s.ray.t1 - s.ray.t0;
         bool escape = false;
         if (check_ray_done(t_traversed)) {
             escape = true;
@@ -774,7 +774,6 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
             // length because it hits a tiny corner of the grid then we cycle
             // immediately onto the segment (having checked that it also exists
             // through a periodic boundary and not a fixed one)
-            int inner_loops = 0;
             do {
                 num_wraps += 1;
                 t_remaining -= s.ray.t1 - s.ray.t0;
@@ -796,7 +795,6 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d_periodic(
                 ) {
                     escape = true;
                 }
-                inner_loops += 1;
             } while(!escape && (s.ray.t1 - s.ray.t0) < FP(1e-2) && num_wraps < MAX_PERIODIC_WRAPS);
         }
         if (escape) {

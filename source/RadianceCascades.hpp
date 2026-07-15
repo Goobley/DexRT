@@ -751,23 +751,13 @@ void cascade_i_25d(
 
                     auto dispatch_outer = [&]<typename BcType>(BcType bc_type){
                         auto casc_and_bc = get_bc<BcType>(dev_casc_state, boundaries);
-                        if (any_periodic) {
-                            ri = march_and_merge_dispatch<RcMode | RC_PERIODIC>(
-                                casc_and_bc,
-                                casc_rays,
-                                probe_idx,
-                                ray,
-                                params
-                            );
-                        } else {
-                            ri = march_and_merge_dispatch<RcMode>(
-                                casc_and_bc,
-                                casc_rays,
-                                probe_idx,
-                                ray,
-                                params
-                            );
-                        }
+                        ri = march_and_merge_dispatch<RcMode>(
+                            casc_and_bc,
+                            casc_rays,
+                            probe_idx,
+                            ray,
+                            params
+                        );
                     };
 
                     if constexpr (RcMode & RC_SAMPLE_BC) {

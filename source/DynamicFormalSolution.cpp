@@ -536,6 +536,10 @@ void compute_rad_loss(
     yakl::fence();
 }
 
+// NOTE(cmo): Needed to pass an integer into a lambda as a template param
+template <int N>
+using Constant = std::integral_constant<int, N>;
+
 void dynamic_formal_sol_rc(
     const State& state,
     const CascadeState& casc_state,
@@ -581,6 +585,38 @@ void dynamic_formal_sol_rc(
         .dir_by_dir = DIR_BY_DIR
     });
     constexpr int RcStorage = RC_flags_storage_2d();
+    bool any_periodic = false;
+    for (int i = 0; i < get_dexrt_dimensionality(); ++i) {
+        any_periodic |= state.periodic(i);
+    }
+
+    auto dispatch_cascade_i = [&]<int RcMode>(
+        Constant<RcMode>,
+        const State& state,
+        const CascadeState& casc_state,
+        int casc_idx,
+        const CascadeCalcSubset& subset,
+        const MultiResMipChain& mip_chain
+    ) {
+        if (any_periodic) {
+            return cascade_i_25d<RcMode | RC_PERIODIC>(
+                state,
+                casc_state,
+                casc_idx,
+                subset,
+                mip_chain
+            );
+        } else {
+            return cascade_i_25d<RcMode>(
+                state,
+                casc_state,
+                casc_idx,
+                subset,
+                mip_chain
+            );
+        }
+    };
+
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
@@ -594,7 +630,9 @@ void dynamic_formal_sol_rc(
         };
         mip_chain.fill_subset_mip0_atomic(state, subset, lte_scratch);
         mip_chain.compute_subset_mips(state, subset);
-        cascade_i_25d<RcModeBc>(
+        // TODO(cmo): Push periodic down from here
+        dispatch_cascade_i(
+            Constant<RcModeBc>{},
             state,
             casc_state,
             casc_state.num_cascades,
@@ -602,7 +640,8 @@ void dynamic_formal_sol_rc(
             mip_chain
         );
         for (int casc_idx = casc_state.num_cascades - 1; casc_idx >= 1; --casc_idx) {
-            cascade_i_25d<RcModeNoBc>(
+            dispatch_cascade_i(
+                Constant<RcModeNoBc>{},
                 state,
                 casc_state,
                 casc_idx,
@@ -611,7 +650,8 @@ void dynamic_formal_sol_rc(
             );
         }
         if (casc_state.psi_star.initialized() && !lambda_iterate) {
-            cascade_i_25d<RcModeAlo>(
+            dispatch_cascade_i(
+                Constant<RcModeAlo>{},
                 state,
                 casc_state,
                 0,
@@ -619,7 +659,8 @@ void dynamic_formal_sol_rc(
                 mip_chain
             );
         } else {
-            cascade_i_25d<RcModeNoBc>(
+            dispatch_cascade_i(
+                Constant<RcModeNoBc>{},
                 state,
                 casc_state,
                 0,

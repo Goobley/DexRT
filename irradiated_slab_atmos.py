@@ -51,9 +51,8 @@ if __name__ == '__main__':
     altitude[...] = 10.0e6
     offset_x[...] = -0.5 * atmos_size_m * atmos_size_x / atmos_size
     temp_val = 11000.0
-    temperature[...] = 5e5
+    temperature[...] = 500e3
     temperature[64:192, :] = temp_val
-
     pres_val = 0.05
     pressure[...] = pres_val
     # NOTE(cmo): Approximate ionisation fraction
@@ -69,15 +68,15 @@ if __name__ == '__main__':
 
     atmos.close()
 
-    schema = DexrtNonLteConfig(
-        atmos_path="atmos.nc",
-        rad_loss="None",
-        conserve_charge=True,
-        conserve_pressure=True,
-        atoms=dict(
-            # H=AtomicModelConfig(path="H_6.yaml"),
-            Ca=AtomicModelConfig(path="CaII.yaml"),
-        ),
-        boundary_type="Promweaver",
-    )
-    write_config(schema, "slab/dexrt.yaml")
+    # schema = DexrtNonLteConfig(
+    #     atmos_path="atmos.nc",
+    #     rad_loss="None",
+    #     conserve_charge=True,
+    #     conserve_pressure=True,
+    #     atoms=dict(
+    #         # H=AtomicModelConfig(path="H_6.yaml"),
+    #         Ca=AtomicModelConfig(path="CaII.yaml"),
+    #     ),
+    #     boundary_type="Promweaver",
+    # )
+    # write_config(schema, "slab/dexrt.yaml")
