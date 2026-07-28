@@ -1,6 +1,7 @@
 #if !defined(DEXRT_DEXRT_CONFIG_HPP)
 #define DEXRT_DEXRT_CONFIG_HPP
 #include <string>
+#include <utility>
 #include <vector>
 #include "Config.hpp"
 #include "Types.hpp"
@@ -20,6 +21,12 @@ struct DexrtOutputConfig {
     bool max_mip_level = true;
     bool psi_star = false;
     bool active = true;
+    /// Per-transition radiative rates, accumulated with psi_star = 0 [s-1]
+    bool radiative_rates = false;
+    /// Per-transition collisional rates, computed at output time [s-1]
+    bool collisional_rates = false;
+    /// Energy absorbed/emitted by each continuum transition [kW m-3]
+    bool cont_energy_balance = false;
     std::vector<int> cascades;
 };
 
@@ -238,6 +245,15 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     if (output["psi_star"]) {
         out.psi_star = output["psi_star"].as<bool>();
     }
+    if (output["radiative_rates"]) {
+        out.radiative_rates = output["radiative_rates"].as<bool>();
+    }
+    if (output["collisional_rates"]) {
+        out.collisional_rates = output["collisional_rates"].as<bool>();
+    }
+    if (output["cont_energy_balance"]) {
+        out.cont_energy_balance = output["cont_energy_balance"].as<bool>();
+    }
     if (output["cascades"]) {
         for (const auto& c : output["cascades"]) {
             out.cascades.push_back(c.as<int>());
@@ -268,6 +284,25 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
             out.nh_tot = false;
         }
     }
+    // NOTE(claude): The rate diagnostics hang off the Gamma accumulation, which
+    // only exists in NonLte mode -- collisional_rates additionally borrows the
+    // Gamma buffer itself at output time.
+    if (config.mode != DexrtMode::NonLte) {
+        const std::pair<const char*, bool> rate_diags[] = {
+            {"radiative_rates", out.radiative_rates},
+            {"collisional_rates", out.collisional_rates},
+            {"cont_energy_balance", out.cont_energy_balance},
+        };
+        for (const auto& [name, requested] : rate_diags) {
+            if (requested) {
+                throw std::runtime_error(fmt::format(
+                    "output.{} requested, but this is only available in \"non_lte\" mode.",
+                    name
+                ));
+            }
+        }
+    }
+
     if (out.cascades.size() > 0) {
         if constexpr (DIR_BY_DIR) {
             fmt::println(stderr, "Cascade output requested, but DIR_BY_DIR is enabled, only the entries corresponding to the final direction of C0 will be output.");

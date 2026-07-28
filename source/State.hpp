@@ -10,6 +10,7 @@
 #include "BlockMap.hpp"
 #include "DexrtConfig.hpp"
 #include "MpiWrapper.hpp"
+#include "RateDiagnostics.hpp"
 
 #include <fmt/core.h>
 
@@ -41,6 +42,7 @@ struct State {
     yakl::Array<RadLossFp, 2, yakl::memDevice> rad_loss; /// [wave_batch || 1, ks] follows same logic as J, but also can be pre-integrated (i.e. all wavelength bins integrated)
     yakl::Array<RadLossFp, 2, yakl::memHost> rad_loss_cpu; /// [num_wave || 1, ks] per wavelength if not pre-integrated.
     std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
+    RateDiagnostics rate_diag; /// Optional per-transition output diagnostics
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;

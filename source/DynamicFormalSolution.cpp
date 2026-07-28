@@ -11,6 +11,12 @@
 #include "DirectionalEmisOpacInterp.hpp"
 #include "Mipmaps.hpp"
 
+/// NOTE(claude): The rate diagnostics (state.rate_diag) are only accumulated in
+/// dynamic_compute_gamma_nonatomic, which is the variant dynamic_compute_gamma
+/// currently dispatches to. If the switch at the bottom of this file is flipped
+/// back, they come out zeroed until the same accumulation is added here. The
+/// weighting carries over unchanged: wlamu * uv.V is the number rate integrand
+/// here too, so the energy terms still just pick up a factor of h nu.
 void dynamic_compute_gamma_atomic(
     const State& state,
     const CascadeState& casc_state,
@@ -186,6 +192,7 @@ void dynamic_compute_gamma_nonatomic(
 ) {
     JasUnpack(subset, la_start, la_end, subset_idx);
     JasUnpack(state, phi, pops, adata, wphi, mr_block_map);
+    const auto& level_stage_idx = state.rate_diag.level_stage_idx;
     using namespace ConstantsFP;
     const auto flat_atmos = flatten<const fp_t>(state.atmos);
 
@@ -228,6 +235,12 @@ void dynamic_compute_gamma_nonatomic(
         const auto& psi_star = casc_state.psi_star;
         const auto& I = casc_state.i_cascades[0];
         const auto& incl_quad = state.incl_quad;
+        // NOTE(claude): Optional diagnostics -- these stay default constructed
+        // (and every use of them guarded by initialized()) unless requested.
+        const auto& diag = state.rate_diag;
+        const GammaMat rad_rates = diag.radiative_rates.empty() ? GammaMat() : diag.radiative_rates[ia];
+        const ContEnergyMat cont_absorb = diag.cont_energy_absorb.empty() ? ContEnergyMat() : diag.cont_energy_absorb[ia];
+        const ContEnergyMat cont_emit = diag.cont_energy_emit.empty() ? ContEnergyMat() : diag.cont_energy_emit[ia];
 
         dex_parallel_for(
             "compute Gamma",
@@ -335,6 +348,24 @@ void dynamic_compute_gamma_nonatomic(
                                     .j = l.j,
                                     .k = ks
                                 });
+
+                                if (rad_rates.initialized()) {
+                                    // NOTE(claude): psi_star = 0 removes
+                                    // preconditioning leaving the true
+                                    // radiative rates.
+                                    add_to_gamma<false>(GammaAccumState{
+                                        .eta = eta,
+                                        .chi = chi,
+                                        .uv = uv,
+                                        .I = intensity,
+                                        .psi_star = FP(0.0),
+                                        .wlamu = wlamu,
+                                        .Gamma = rad_rates,
+                                        .i = l.i,
+                                        .j = l.j,
+                                        .k = ks
+                                    });
+                                }
                             }
                             const int kr_base_c = adata.cont_start(ia);
                             const int max_cont = kr_base_c + adata.num_cont(ia);
@@ -372,18 +403,54 @@ void dynamic_compute_gamma_nonatomic(
                                 }
                                 chi += FP(1e-20);
 
+                                const fp_t cont_wlamu = wl_ray_weights(wave) * incl_quad.wmuy(theta_idx);
                                 add_to_gamma<false>(GammaAccumState{
                                     .eta = eta,
                                     .chi = chi,
                                     .uv = uv,
                                     .I = intensity,
                                     .psi_star = psi_star_entry,
-                                    .wlamu = wl_ray_weights(wave) * incl_quad.wmuy(theta_idx),
+                                    .wlamu = cont_wlamu,
                                     .Gamma = Gamma,
                                     .i = cont.i,
                                     .j = cont.j,
                                     .k = ks
                                 });
+
+                                if (rad_rates.initialized()) {
+                                    add_to_gamma<false>(GammaAccumState{
+                                        .eta = eta,
+                                        .chi = chi,
+                                        .uv = uv,
+                                        .I = intensity,
+                                        .psi_star = FP(0.0),
+                                        .wlamu = cont_wlamu,
+                                        .Gamma = rad_rates,
+                                        .i = cont.i,
+                                        .j = cont.j,
+                                        .k = ks
+                                    });
+                                }
+
+                                if (cont_absorb.initialized()) {
+                                    // NOTE(claude): cont_wlamu * uv.V is the
+                                    // number rate integrand, 4pi sigma dlambda
+                                    // / (h nu), under either setting of
+                                    // include_4pi_hc: the 4pi/hc sits in V when
+                                    // it is dropped from the weights, and in
+                                    // wl_ray_weights when it is not. So
+                                    // multiplying through by h nu leaves the
+                                    // energy rate, 4pi sigma I dlambda, either
+                                    // way. Times the population to make it
+                                    // volumetric.
+                                    const fp_t hnu = hc_kJ_nm / adata.wavelength(la);
+                                    const fp_t w = cont_wlamu * hnu;
+                                    const int c = level_stage_idx(offset + cont.j);
+                                    const fp_t ni = pops(offset + cont.i, ks);
+                                    const fp_t nj = pops(offset + cont.j, ks);
+                                    cont_absorb(c, cont.i, ks) += w * ni * uv.Vij * intensity;
+                                    cont_emit(c, cont.i, ks) += w * nj * (uv.Uji + uv.Vji * intensity);
+                                }
                             }
                         }
                     }

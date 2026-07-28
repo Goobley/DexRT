@@ -121,6 +121,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     GammaAtomsAndMapping gamma_atoms = extract_atoms_with_gamma_and_mapping(atomic_data.device, atomic_data.host);
     state.atoms_with_gamma = gamma_atoms.atoms;
     state.atoms_with_gamma_mapping = gamma_atoms.mapping;
+    state.rate_diag.init_stage_index(state.adata_host);
 
     i32 max_mip_level = 0;
     for (int i = 0; i <= config.max_cascade; ++i) {
@@ -151,6 +152,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
                 decltype(state.Gamma)::value_type("Gamma", n_level, n_level, num_active_cells)
             );
         }
+        state.rate_diag.allocate(state.adata_host, config.output, num_active_cells);
         state.wphi = Fp2d("wphi", state.adata.lines.extent(0), num_active_cells);
     }
 
@@ -807,7 +809,7 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
     );
 }
 
-void save_results(const State& state, const CascadeState& casc_state, i32 num_iter) {
+void save_results(State& state, const CascadeState& casc_state, i32 num_iter) {
     const auto& config = state.config;
     const auto& out_cfg = config.output;
     if (state.mpi_state.rank != 0) {
@@ -904,6 +906,23 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     if (out_cfg.sparse) {
         nc.write(block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
     }
+
+    const std::vector<GammaMat>* collisional = nullptr;
+    if (out_cfg.collisional_rates) {
+        // NOTE(claude): Refills Gamma with the raw collisional rates (no
+        // fixup_gamma, so the diagonal stays zero). Gamma is not read again.
+        compute_collisions_to_gamma(&state);
+        collisional = &state.Gamma;
+    }
+    write_rate_diagnostics(
+        state,
+        nc,
+        RateDiagOutputOpts{
+            .sparse = out_cfg.sparse
+        },
+        collisional
+    );
+
     nc.close();
 }
 
@@ -1064,6 +1083,7 @@ int main(int argc, char** argv) {
                         }
                         yakl::fence();
                     }
+                    state.rate_diag.zero();
 
                     bool print_worst_wphi = first_iter;
                     compute_profile_normalisation(state, casc_state, print_worst_wphi);
@@ -1148,6 +1168,9 @@ int main(int argc, char** argv) {
 
                     state.println("Final FS (dense)");
                     compute_nh0(state);
+                    // NOTE(claude): Unlike Gamma (which is not read again), the
+                    // diagnostics are written out, so must be zeroed.
+                    state.rate_diag.zero();
                     state.J = FP(0.0);
                     if (config.store_J_on_cpu) {
                         state.J_cpu = FP(0.0);
@@ -1221,6 +1244,7 @@ int main(int argc, char** argv) {
                 wave_dist.wait_for_all(state.mpi_state);
             }
             wave_dist.reduce_J(&state);
+            wave_dist.reduce_rate_diagnostics(&state);
             yakl::timer_stop("DexRT");
             save_results(state, casc_state, num_iter);
         }

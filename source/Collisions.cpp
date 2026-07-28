@@ -21,7 +21,11 @@ void compute_collisions_to_gamma(State_t* state, const ComputeCollisionsOptions&
     yakl::fence();
 
     for (int ia = 0; ia < state->atoms_with_gamma.size(); ++ia) {
-        auto& Gamma = Gamma_store[ia];
+        // NOTE(claude): Gamma is indexed by position in adata everywhere else
+        // (allocation, stat_eq, time_dep, InitialPops, the formal solvers), so
+        // the mapping has to be applied here too -- as it already is for
+        // n_star_slice below. These only coincide when every atom has a Gamma.
+        auto& Gamma = Gamma_store[state->atoms_with_gamma_mapping[ia]];
         auto& atom = state->atoms_with_gamma[ia];
         const auto n_star_slice = slice_pops(
             n_star,

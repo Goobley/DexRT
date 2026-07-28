@@ -243,6 +243,35 @@ struct WavelengthDistributor {
 #endif
     }
 
+    /// The rate diagnostics are zeroed on every rank at the start of each formal
+    /// solution and only ever accumulate that rank's own wavelength batches, so
+    /// unlike Gamma they need reducing once, after the final iteration.
+    template <typename State>
+    inline void reduce_rate_diagnostics(State* state) {
+#ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
+        auto reduce = [&](auto* ptr, i64 size, auto mpi_type) {
+            if (state->mpi_state.rank == 0) {
+                MPI_Reduce(MPI_IN_PLACE, ptr, size, mpi_type, MPI_SUM, 0, state->mpi_state.comm);
+            } else {
+                MPI_Reduce(ptr, ptr, size, mpi_type, MPI_SUM, 0, state->mpi_state.comm);
+            }
+        };
+        const auto& diag = state->rate_diag;
+        // NOTE(cmo): The vectors containing these arrays are empty if the
+        // diagnostic is not requested, so these loop will do nothing.
+        for (const auto& arr : diag.radiative_rates) {
+            reduce(arr.data(), arr.size(), get_GammaFpMpi());
+        }
+        for (const auto& arr : diag.cont_energy_absorb) {
+            reduce(arr.data(), arr.size(), get_RadLossFpMpi());
+        }
+        for (const auto& arr : diag.cont_energy_emit) {
+            reduce(arr.data(), arr.size(), get_RadLossFpMpi());
+        }
+#endif
+    }
+
     template <typename State>
     inline void update_pops(State* state) {
 #ifdef HAVE_MPI
