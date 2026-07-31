@@ -21,7 +21,7 @@ struct DexrtOutputConfig {
     bool max_mip_level = true;
     bool psi_star = false;
     bool active = true;
-    /// Per-transition radiative rates, accumulated with psi_star = 0 [s-1]
+    /// Per-transition radiative rates [s-1]
     bool radiative_rates = false;
     /// Per-transition collisional rates, computed at output time [s-1]
     bool collisional_rates = false;

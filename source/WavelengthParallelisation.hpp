@@ -171,7 +171,7 @@ struct WavelengthDistributor {
             } else {
                 MPI_Reduce(
                     state->Gamma[ia].data(),
-                    state->Gamma[ia].data(),
+                    nullptr,
                     state->Gamma[ia].size(),
                     get_GammaFpMpi(),
                     MPI_SUM,
@@ -202,7 +202,7 @@ struct WavelengthDistributor {
         } else {
             MPI_Reduce(
                 J_ptr,
-                J_ptr,
+                nullptr,
                 J_size,
                 get_FpMpi(),
                 MPI_SUM,
@@ -232,7 +232,7 @@ struct WavelengthDistributor {
         } else {
             MPI_Reduce(
                 rad_loss_ptr,
-                rad_loss_ptr,
+                nullptr,
                 rad_loss_size,
                 get_RadLossFpMpi(),
                 MPI_SUM,
@@ -254,7 +254,7 @@ struct WavelengthDistributor {
             if (state->mpi_state.rank == 0) {
                 MPI_Reduce(MPI_IN_PLACE, ptr, size, mpi_type, MPI_SUM, 0, state->mpi_state.comm);
             } else {
-                MPI_Reduce(ptr, ptr, size, mpi_type, MPI_SUM, 0, state->mpi_state.comm);
+                MPI_Reduce(ptr, nullptr, size, mpi_type, MPI_SUM, 0, state->mpi_state.comm);
             }
         };
         const auto& diag = state->rate_diag;
