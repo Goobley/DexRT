@@ -1,8 +1,14 @@
+// NOTE(claude): Must precede any JasPP include. Needed so Kokkos::sort (in
+// compute_active_probe_lists) compiles: the sort previously failed due to the
+// (unused) If/Then/Else JasPP FIF macros, which JASNAH_NO_FIF disables (same
+// workaround as DexInterface.cpp).
+#define JASNAH_NO_FIF
 #include "MiscSparse.hpp"
 #include "RcUtilsModes.hpp"
 #include "State.hpp"
 #include "RcUtilsModes3d.hpp"
 #include "State3d.hpp"
+#include "Kokkos_Sort.hpp"
 
 SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLOCK_SIZE>& block_map) {
     i64 num_active_cells = block_map.get_num_active_cells();
@@ -364,32 +370,21 @@ template yakl::Array<f64, 3, yakl::memHost> rehydrate_sparse_quantity(
 );
 
 std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(const State& state, int max_cascades) {
-    // TODO(cmo): This is a poor strategy for 3D, but simple for now. To be done properly in parallel we need to do some stream compaction. e.g. thrust::copy_if
-    // Really this function is backwards. We can loop over each probe of i+1 and
-    // check the dependents in i, in parallel. The merge process remains the
-    // same.
-    JasUnpack(state, mr_block_map);
+    // NOTE(claude): Each probe of C(n) gathers -- it reads its 2x2 footprint of
+    // dependents in C(n-1) (the block map itself for C1) with no atomics, so the
+    // whole cascade is embarrassingly parallel. Compaction and Morton sort are
+    // then done on device (the Kokkos::sort/copy_if the 3D path avoided was a
+    // JasPP FIF preprocessor issue, since resolved via JASNAH_NO_FIF). This
+    // mirrors the 3D implementation below.
+    JasUnpack(state, mr_block_map, c0_size);
     std::vector<yakl::Array<i32, 2, yakl::memDevice>> probes_to_compute;
     probes_to_compute.reserve(max_cascades + 1);
 
-    yakl::Array<u64, 2, yakl::memDevice> prev_active("active c0", state.atmos.num_z, state.atmos.num_x);
-    prev_active = 0;
-    yakl::fence();
-    dex_parallel_for(
-        mr_block_map.block_map.loop_bounds(),
-        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
-            IdxGen idx_gen(mr_block_map);
-            Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-            prev_active(coord.z, coord.x) = 1;
-        }
-    );
-    yakl::fence();
-    u64 num_active = mr_block_map.get_num_active_cells();
-
-    auto prev_active_h = prev_active.createHostCopy();
-    yakl::fence();
+    i64 num_active = mr_block_map.get_num_active_cells();
+    i64 total_num_probes = i64(c0_size.num_probes(0)) * c0_size.num_probes(1);
     yakl::Array<i32, 2, yakl::memDevice> probes_to_compute_c0("c0 to compute", num_active, 2);
     dex_parallel_for(
+        "Compute C0 active",
         mr_block_map.block_map.loop_bounds(),
         YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
             IdxGen idx_gen(mr_block_map);
@@ -399,86 +394,130 @@ std::vector<yakl::Array<i32, 2, yakl::memDevice>> compute_active_probe_lists(con
             probes_to_compute_c0(ks, 1) = coord.z;
         }
     );
+    yakl::fence();
     probes_to_compute.emplace_back(probes_to_compute_c0);
     state.println(
         "C0 Active Probes {}/{} ({}%)",
         num_active,
-        prev_active.extent(0)*prev_active.extent(1),
-        fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
+        total_num_probes,
+        fp_t(num_active) / fp_t(total_num_probes) * FP(100.0)
     );
 
+    // NOTE(claude): The active mask of the previous cascade. Only built for C1
+    // onwards -- C1 reads the block map directly (via has_leaves).
+    yakl::Array<i8, 2, yakl::memDevice> prev_active;
 
     for (int cascade_idx = 1; cascade_idx <= max_cascades; ++cascade_idx) {
+        CascadeStorage prev_dims = cascade_size(state.c0_size, cascade_idx - 1);
         CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
-        yakl::Array<u64, 2, yakl::memDevice> curr_active(
-            "casc_active",
+        yakl::Array<i8, 2, yakl::memDevice> next_probes(
+            "cn active",
             dims.num_probes(1),
             dims.num_probes(0)
         );
-        curr_active = 0;
+        next_probes = i8(0);
         yakl::fence();
-        auto my_atomic_max = YAKL_LAMBDA (u64& ref, unsigned long long int val) {
-            Kokkos::atomic_max(
-                reinterpret_cast<unsigned long long int*>(&ref),
-                val
-            );
-        };
         dex_parallel_for(
-            FlatLoop<2>(prev_active.extent(0), prev_active.extent(1)),
-            YAKL_LAMBDA (int z, int x) {
-                int z_bc = std::max(int((z - 1) / 2), 0);
-                int x_bc = std::max(int((x - 1) / 2), 0);
-                const bool z_clamp = (z_bc == 0) || (z_bc == (curr_active.extent(0) - 1));
-                const bool x_clamp = (x_bc == 0) || (x_bc == (curr_active.extent(1) - 1));
+            "Compute Cn active",
+            FlatLoop<2>(dims.num_probes(1), dims.num_probes(0)),
+            KOKKOS_LAMBDA (int zn, int xn) {
+                int zp = 2 * zn;
+                int xp = 2 * xn;
+                IdxGen idx_gen(mr_block_map);
 
-                if (!prev_active(z, x)) {
-                    return;
-                }
+                auto check_lower_cascade = [&]() -> bool {
+                    // NOTE(cmo): On each axis, check in range [x0 - 1, x0 + 2]. If any
+                    // are active, this one is also active.
+                    for (int z = zp - 1; z < zp + 3; ++z) {
+                        for (int x = xp - 1; x < xp + 3; ++x) {
+                            // NOTE(cmo): clamp access
+                            Coord2 coord {
+                                .x = std::min(std::max(x, 0), prev_dims.num_probes(0) - 1),
+                                .z = std::min(std::max(z, 0), prev_dims.num_probes(1) - 1)
+                            };
 
-                // NOTE(cmo): Atomically set the (up-to) 4 valid
-                // probes for this active probe of cascade_idx-1
-                my_atomic_max(curr_active(z_bc, x_bc), 1);
-                if (!x_clamp) {
-                    my_atomic_max(curr_active(z_bc, x_bc+1), 1);
-                }
-                if (!z_clamp) {
-                    my_atomic_max(curr_active(z_bc+1, x_bc), 1);
-                }
-                if (!(z_clamp || x_clamp)) {
-                    my_atomic_max(curr_active(z_bc+1, x_bc+1), 1);
+                            // NOTE(cmo): Special handling for C1 to leverage the blockmap over C0
+                            if (cascade_idx == 1) {
+                                if (idx_gen.has_leaves(coord)) {
+                                    return true;
+                                }
+                            } else {
+                                if (prev_active(coord.z, coord.x)) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                };
+
+                if (check_lower_cascade()) {
+                    next_probes(zn, xn) = 1;
                 }
             }
         );
         yakl::fence();
-        i64 num_active = yakl::intrinsics::sum(curr_active);
-        auto curr_active_h = curr_active.createHostCopy();
-        yakl::fence();
-        yakl::Array<u32, 1, yakl::memHost> probes_to_compute_morton("probes to compute morton", num_active);
-        i32 idx = 0;
-        for (int z = 0; z < curr_active_h.extent(0); ++z) {
-            for (int x = 0; x < curr_active_h.extent(1); ++x) {
-                if (curr_active_h(z, x)) {
-                    probes_to_compute_morton(idx++) = encode_morton(Coord2{.x = x, .z = z});
+
+        i64 num_active_cn;
+        dex_parallel_reduce(
+            "Compute number Cn active",
+            FlatLoop<2>(dims.num_probes(1), dims.num_probes(0)),
+            KOKKOS_LAMBDA (int zn, int xn, i64& acc) {
+                if (next_probes(zn, xn)) {
+                    acc += 1;
                 }
+            },
+            Kokkos::Sum<i64>(num_active_cn)
+        );
+
+        // NOTE(claude): Stream-compact the active probes to their Morton codes
+        // and sort on device. The natural u32 order is Morton order, so no
+        // comparator is needed; launching in Morton order keeps probes close to
+        // tile order.
+        const i32 nx = dims.num_probes(0);
+        yakl::Array<u32, 1, yakl::memDevice> candidate_morton("candidate probe morton", next_probes.size());
+        dex_parallel_for(
+            FlatLoop<2>(dims.num_probes(1), dims.num_probes(0)),
+            YAKL_LAMBDA (int zn, int xn) {
+                candidate_morton(zn * nx + xn) = encode_morton(Coord2{.x = xn, .z = zn});
             }
-        }
-        // NOTE(cmo): These are now being launched in morton order... should be close to tile order
-        std::sort(probes_to_compute_morton.begin(), probes_to_compute_morton.end());
-        yakl::Array<i32, 2, yakl::memHost> probes_to_compute_h("probes to compute", num_active, 2);
-        for (int idx = 0; idx < num_active; ++idx) {
-            Coord2 coord = decode_morton<2>(probes_to_compute_morton(idx));
-            probes_to_compute_h(idx, 0) = coord.x;
-            probes_to_compute_h(idx, 1) = coord.z;
-        }
-        auto probes_to_compute_ci = probes_to_compute_h.createDeviceCopy();
+        );
+        yakl::fence();
+
+        yakl::Array<u32, 1, yakl::memDevice> active_morton("active probe morton", num_active_cn);
+        Kokkos::Experimental::copy_if(
+            "Compact active probes",
+            DefaultExecutionSpace{},
+            KView<u32*>(candidate_morton.data(), candidate_morton.size()),
+            KView<u32*>(active_morton.data(), active_morton.size()),
+            KOKKOS_LAMBDA (const u32& code) {
+                Coord2 coord = decode_morton<2>(code);
+                return bool(next_probes(coord.z, coord.x));
+            }
+        );
+        Kokkos::fence();
+
+        Kokkos::sort(KView<u32*>(active_morton.data(), active_morton.size()));
+        Kokkos::fence();
+
+        yakl::Array<i32, 2, yakl::memDevice> probes_to_compute_ci("probes to compute", num_active_cn, 2);
+        dex_parallel_for(
+            FlatLoop<1>(num_active_cn),
+            YAKL_LAMBDA (i64 idx) {
+                Coord2 coord = decode_morton<2>(active_morton(idx));
+                probes_to_compute_ci(idx, 0) = coord.x;
+                probes_to_compute_ci(idx, 1) = coord.z;
+            }
+        );
+        yakl::fence();
         probes_to_compute.emplace_back(probes_to_compute_ci);
-        prev_active = curr_active;
+        prev_active = next_probes;
         state.println(
             "C{} Active Probes {}/{} ({}%)",
             cascade_idx,
-            num_active,
-            prev_active.extent(0)*prev_active.extent(1),
-            fp_t(num_active) / fp_t(prev_active.extent(0)*prev_active.extent(1)) * FP(100.0)
+            num_active_cn,
+            next_probes.size(),
+            fp_t(num_active_cn) / fp_t(next_probes.size()) * FP(100.0)
         );
     }
     return probes_to_compute;
