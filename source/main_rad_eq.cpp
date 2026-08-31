@@ -15,6 +15,7 @@
 #include "DynamicFormalSolution.hpp"
 #include "ChargeConservation.hpp"
 #include "PressureConservation.hpp"
+#include "EnergyConservation.hpp"
 #include "ProfileNormalisation.hpp"
 #include "PromweaverBoundary.hpp"
 #include "DexrtConfig.hpp"
@@ -36,6 +37,47 @@
 int get_dexrt_dimensionality() {
     return 2;
 }
+
+/// How the gas is allowed to respond as it radiates. Follows directly from the
+/// conservation flags in the config: conserve_energy integrates the provided
+/// e_int at fixed density, conserve_pressure lets nh_tot adjust at fixed
+/// pressure, and charge conservation alone leaves the density fixed.
+enum class RadEqPath {
+    Isochoric,
+    Isobaric,
+    EnergyConserving
+};
+
+constexpr const char* RadEqPathNames[] = {
+    "isochoric (fixed density)",
+    "isobaric (fixed pressure)",
+    "energy conserving (e_int, fixed density)"
+};
+
+/// Number of radiative equilibrium timesteps to take.
+constexpr int RAD_EQ_NUM_STEPS = 200;
+/// Iteration limit for each non-LTE solve inside the time loop (the initial
+/// solve uses the value from the config).
+constexpr int RAD_EQ_MAX_ITER = 50;
+/// Timestep as a fraction of the shortest characteristic cooling time...
+constexpr fp_t RAD_EQ_CFL = FP(0.007);
+/// ... capped here.
+constexpr fp_t RAD_EQ_MAX_DELTA_T = FP(50.0);
+/// The population tolerance is tightened as the cooling time shortens:
+/// pop_tol = min(RAD_EQ_MAX_POP_TOL, RAD_EQ_POP_TOL_SCALE / (0.01 * t_cv))
+constexpr fp_t RAD_EQ_MAX_POP_TOL = FP(5e-4);
+constexpr fp_t RAD_EQ_POP_TOL_SCALE = FP(1e-2);
+/// Cells losing less than this (W/m3) can't meaningfully constrain the timestep.
+constexpr fp_t RAD_EQ_MIN_RAD_LOSS = FP(1e-12);
+/// Most of the energy a cell can lose in one step, as a fraction of what it
+/// holds. Relative because the absolute scale of e_int is problem dependent
+/// (~0.1 J/m3 in a prominence, but far larger in the photosphere). The CFL
+/// condition on delta_t should keep this from ever binding.
+constexpr fp_t RAD_EQ_MAX_E_INT_LOSS_FRAC = FP(0.9);
+/// Floor on temperature (K), matching min_temperature in EnergyConservation.hpp.
+constexpr fp_t RAD_EQ_MIN_TEMPERATURE = FP(1e3);
+/// Losses come out of the formal solver in kW/m3.
+constexpr fp_t RAD_LOSS_TO_SI = FP(1e3);
 
 void allocate_J(State* state) {
     JasUnpack((*state), config, mr_block_map, c0_size, adata);
@@ -220,10 +262,17 @@ void finalize_state(State* state) {
 #endif
 }
 
-/// Loads the populations, ne, and nh_tot from restart_path. Returns the current
-/// iteration number.  Will crash/throw exception if file can't be found or
-/// dimensions are wrong etc.
-int handle_restart(State* st, const std::string& restart_path) {
+struct RestartState {
+    int num_iter;
+    f64 current_time;
+    /// Index of the radiative equilibrium step that was in progress.
+    int rad_eq_step;
+};
+
+/// Loads the populations, ne, nh_tot, and (if present) the evolved thermal
+/// state from restart_path. Returns the current iteration number and time.
+/// Will crash/throw exception if file can't be found or dimensions are wrong etc.
+RestartState handle_restart(State* st, const std::string& restart_path) {
     State& state(*st);
     yakl::SimpleNetCDF nc;
     nc.open(restart_path, yakl::NETCDF_MODE_READ);
@@ -244,6 +293,18 @@ int handle_restart(State* st, const std::string& restart_path) {
     if (nc.varExists("nh_tot")) {
         nc.read(state.atmos.nh_tot, "nh_tot");
     }
+    if (nc.varExists("temperature")) {
+        nc.read(state.atmos.temperature, "temperature");
+    }
+    if (nc.varExists("pressure")) {
+        nc.read(state.atmos.pressure, "pressure");
+    }
+    if (nc.varExists("e_int")) {
+        if (!state.atmos.e_int.initialized()) {
+            throw std::runtime_error("Restart file contains e_int, but the atmosphere does not; are these from the same setup?");
+        }
+        nc.read(state.atmos.e_int, "e_int");
+    }
 
     int ncid = nc.file.ncid;
     int num_iter = 0;
@@ -251,13 +312,25 @@ int handle_restart(State* st, const std::string& restart_path) {
     if (ierr != NC_NOERR) {
         throw std::runtime_error(fmt::format("Unable to get num_iter from restart file: {}", nc_strerror(ierr)));
     }
+    // NOTE(cmo): Snapshots from before the rad_eq time loop was made restartable
+    // don't carry a time, so start them from 0.
+    f64 current_time = 0.0;
+    nc_get_att_double(ncid, NC_GLOBAL, "current_time", &current_time);
+    // NOTE(cmo): -1 means the snapshot predates the time loop (or the attribute,
+    // for older files), so we resume at step 0.
+    int rad_eq_step = -1;
+    nc_get_att_int(ncid, NC_GLOBAL, "rad_eq_step", &rad_eq_step);
 
-    return num_iter;
+    return RestartState{
+        .num_iter = num_iter,
+        .current_time = current_time,
+        .rad_eq_step = rad_eq_step
+    };
 }
 
 /// Dump a snapshot. File name determined automatically (e.g. main output
 /// dexrt_output.nc -> dexrt_output_snapshot.nc)
-void save_snapshot(const State& state, int num_iter) {
+void save_snapshot(const State& state, int num_iter, f64 current_time, int rad_eq_step) {
     if (state.mpi_state.rank != 0) {
         return;
     }
@@ -282,6 +355,14 @@ void save_snapshot(const State& state, int num_iter) {
     if (ierr != NC_NOERR) {
         throw std::runtime_error(fmt::format("Unable to write num_iter to snapshot file: {}", nc_strerror(ierr)));
     }
+    ierr = nc_put_att_double(ncid, NC_GLOBAL, "current_time", NC_DOUBLE, 1, &current_time);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to write current_time to snapshot file: {}", nc_strerror(ierr)));
+    }
+    ierr = nc_put_att_int(ncid, NC_GLOBAL, "rad_eq_step", NC_INT, 1, &rad_eq_step);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to write rad_eq_step to snapshot file: {}", nc_strerror(ierr)));
+    }
 
     nc.write(state.pops, "pops", {"level", "ks"});
     if (state.config.conserve_charge) {
@@ -289,6 +370,13 @@ void save_snapshot(const State& state, int num_iter) {
     }
     if (state.config.conserve_pressure) {
         nc.write(state.atmos.nh_tot, "nh_tot", {"ks"});
+    }
+    // NOTE(cmo): The evolved thermal state is the result of a rad_eq run, so it
+    // always needs to come back on restart.
+    nc.write(state.atmos.temperature, "temperature", {"ks"});
+    nc.write(state.atmos.pressure, "pressure", {"ks"});
+    if (state.config.conserve_energy) {
+        nc.write(state.atmos.e_int, "e_int", {"ks"});
     }
 }
 
@@ -805,6 +893,13 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
         maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
     }
+    if (out_cfg.temperature && state.atmos.temperature.initialized()) {
+        maybe_rehydrate_and_write(state.atmos.temperature, "temperature", {});
+        maybe_rehydrate_and_write(state.atmos.pressure, "pressure", {});
+    }
+    if (state.atmos.e_int.initialized()) {
+        maybe_rehydrate_and_write(state.atmos.e_int, "e_int", {});
+    }
     if (out_cfg.psi_star && casc_state.psi_star.initialized()) {
         nc.write(casc_state.psi_star, "psi_star", {"casc_shape"});
     }
@@ -832,16 +927,19 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
 struct ActualSubiterations {
     bool actually_conserve_charge;
     bool actually_conserve_pressure;
+    bool actually_conserve_energy;
 };
 
 int iterate_non_lte(
     WavelengthDistributor& wave_dist,
     State& state,
     const CascadeState& casc_state,
-    const ActualSubiterations& opts
+    const ActualSubiterations& opts,
+    f64 current_time,
+    int rad_eq_step
 ) {
     JasUnpack(state, config);
-    JasUnpack(opts, actually_conserve_charge, actually_conserve_pressure);
+    JasUnpack(opts, actually_conserve_charge, actually_conserve_pressure, actually_conserve_energy);
     const int initial_lambda_iterations = config.initial_lambda_iterations;
     const int max_iters = config.max_iter;
     const fp_t non_lte_tol = config.pop_tol;
@@ -932,6 +1030,10 @@ int iterate_non_lte(
                 fp_t nh_tot_update = simple_conserve_pressure(&state);
                 max_change = std::max(nh_tot_update, max_change);
             }
+            if (actually_conserve_energy) {
+                fp_t temp_update = simple_conserve_energy(&state);
+                max_change = std::max(temp_update, max_change);
+            }
             if (actually_conserve_pressure) {
                 wave_dist.update_nh_tot(&state);
             }
@@ -948,30 +1050,47 @@ int iterate_non_lte(
             (state.config.snapshot_frequency != 0) &&
             (i % state.config.snapshot_frequency == 0)
         ) {
-            save_snapshot(state, i);
+            save_snapshot(state, i, current_time, rad_eq_step);
         }
         first_iter = false;
     }
     return i;
 }
 
-fp_t min_characteristic_cooling_time(const State& state) {
+fp_t min_characteristic_cooling_time(const State& state, bool conserving_energy) {
     JasUnpack(state, atmos, pops, adata, rad_loss);
 
     constexpr fp_t gamma = (FP(5.0) / FP(3.0));
     constexpr fp_t igm1 = FP(1.0) / (gamma - FP(1.0));
     using namespace ConstantsFP;
 
+    // NOTE(claude): When we're conserving energy, e_int is the reservoir we're
+    // actually draining, so use it directly rather than reconstructing an
+    // estimate from the pressure and populations. On the other paths e_int is
+    // never advanced, so an atmosphere that happens to provide it would give us
+    // a stale reservoir that drifts further from the gas on every step.
+    const bool have_e_int = conserving_energy && atmos.e_int.initialized();
+
     fp_t result;
     dex_parallel_reduce(
         "Max characteristic cooling",
         FlatLoop<1>(pops.extent(1)),
         KOKKOS_LAMBDA (i64 ks, fp_t& running_min) {
-            fp_t e_int = igm1 * atmos.pressure(ks);
-            for (int i = 0; i < adata.energy.extent(0); ++i) {
-                e_int += pops(i, ks) * adata.energy(i) * eV;
+            const fp_t L = std::abs(rad_loss(0, ks) * RAD_LOSS_TO_SI);
+            if (L < RAD_EQ_MIN_RAD_LOSS) {
+                return;
             }
-            fp_t cooling_time = e_int / std::abs(rad_loss(0, ks) * 1e3);
+
+            fp_t e_int;
+            if (have_e_int) {
+                e_int = atmos.e_int(ks);
+            } else {
+                e_int = igm1 * atmos.pressure(ks);
+                for (int i = 0; i < adata.energy.extent(0); ++i) {
+                    e_int += pops(i, ks) * adata.energy(i) * eV;
+                }
+            }
+            fp_t cooling_time = e_int / L;
             running_min = std::min(running_min, cooling_time);
         },
         Kokkos::Min<fp_t>(result)
@@ -1023,32 +1142,82 @@ void dump_properties(const State& state, int iter, fp_t time) {
 
     nc.write(time, "time");
     nc.write(state.atmos.temperature, "temperature", {"ks"});
+    nc.write(state.atmos.pressure, "pressure", {"ks"});
     nc.write(state.atmos.ne, "ne", {"ks"});
+    nc.write(state.atmos.nh_tot, "nh_tot", {"ks"});
+    if (state.atmos.e_int.initialized()) {
+        nc.write(state.atmos.e_int, "e_int", {"ks"});
+    }
     nc.write(state.rad_loss, "rad_loss", {"0", "ks"});
     nc.write(state.pops, "pops", {"level", "ks"});
 }
 
-void update_temperature(const State& state, fp_t delta_t) {
+void update_temperature_explicit(const State& state, fp_t delta_t, bool isobaric) {
     JasUnpack(state, atmos, rad_loss);
-    const fp_t threshold = state.config.threshold_temperature;
+    // 1/c_p vs 1/c_v, in units of T/P.
+    const fp_t inv_heat_capacity = isobaric ? (FP(2.0) / FP(5.0)) : (FP(2.0) / FP(3.0));
+    const fp_t min_temperature = RAD_EQ_MIN_TEMPERATURE;
 
     fp_t max_temp_change;
     dex_parallel_reduce(
         "Update temperature (rad loss)",
         FlatLoop<1>(rad_loss.extent(1)),
         KOKKOS_LAMBDA (i64 ks, fp_t& running_max) {
-            const fp_t L = rad_loss(0, ks) * 1e3; // Calculated in kW/m3
+            const fp_t L = rad_loss(0, ks) * RAD_LOSS_TO_SI;
             const fp_t T = atmos.temperature(ks);
 
-            const fp_t temperature_update = (FP(2.0) / FP(5.0)) * L * T / atmos.pressure(ks) * delta_t;
-            if (threshold > FP(0.0) && T < threshold) {
-                atmos.temperature(ks) -= temperature_update;
-                running_max = std::max(running_max, std::abs(temperature_update));
+            const fp_t temperature_update = inv_heat_capacity * L * T / atmos.pressure(ks) * delta_t;
+            const fp_t new_temperature = std::max(T - temperature_update, min_temperature);
+            atmos.temperature(ks) = new_temperature;
+            if (!isobaric) {
+                atmos.pressure(ks) *= new_temperature / T;
             }
+            running_max = std::max(running_max, std::abs(new_temperature - T));
         },
         Kokkos::Max<fp_t>(max_temp_change)
     );
     fmt::println("Max temperature change: {} K", max_temp_change);
+}
+
+void advance_e_int(const State& state, fp_t delta_t) {
+    JasUnpack(state, atmos, rad_loss);
+    using namespace ConstantsFP;
+    const fp_t total_abund = state.config.total_abund;
+    const fp_t min_temperature = RAD_EQ_MIN_TEMPERATURE;
+    const fp_t min_e_int_frac = FP(1.0) - RAD_EQ_MAX_E_INT_LOSS_FRAC;
+
+    fp_t max_frac_change;
+    dex_parallel_reduce(
+        "Advance e_int (rad loss)",
+        FlatLoop<1>(rad_loss.extent(1)),
+        KOKKOS_LAMBDA (i64 ks, fp_t& running_max) {
+            const fp_t L = rad_loss(0, ks) * RAD_LOSS_TO_SI;
+            const fp_t e_int = atmos.e_int(ks);
+            const fp_t delta_e = L * delta_t;
+
+            const fp_t min_e_int = min_e_int_frac * e_int;
+            fp_t new_e_int = e_int - delta_e;
+            if (new_e_int < min_e_int) {
+                new_e_int = min_e_int;
+            }
+            atmos.e_int(ks) = new_e_int;
+            running_max = std::max(running_max, std::abs(FP(1.0) - new_e_int / e_int));
+
+            const fp_t T = atmos.temperature(ks);
+            const fp_t N = total_abund * atmos.nh_tot(ks) + atmos.ne(ks);
+            const fp_t new_temperature = std::max(
+                T - (FP(2.0) / FP(3.0)) * L * T / atmos.pressure(ks) * delta_t,
+                min_temperature
+            );
+            atmos.temperature(ks) = new_temperature;
+            atmos.pressure(ks) = N * k_B * new_temperature;
+        },
+        Kokkos::Max<fp_t>(max_frac_change)
+    );
+    fmt::println("Max fractional e_int change: {}", max_frac_change);
+    if (max_frac_change >= RAD_EQ_MAX_E_INT_LOSS_FRAC) {
+        fmt::println("  !! e_int loss was limited -- delta_t is too large for the losses !!");
+    }
 }
 
 int main(int argc, char** argv) {
@@ -1075,9 +1244,11 @@ int main(int argc, char** argv) {
     }
     config.rad_loss = RadLossType::Integrated;
     config.final_dense_fs = false;
+    config.limit_line_edge_bins = true;
     fmt::println("Setting required config vars for rad_eq:");
     fmt::println("rad_loss = \"Integrated\"");
     fmt::println("final_dense_fs = false");
+    fmt::println("limit_line_edge_bins = true");
 
     Kokkos::initialize(argc, argv);
     yakl::init(
@@ -1087,9 +1258,10 @@ int main(int argc, char** argv) {
 
     {
         State state;
-        // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if
-        // not using an atmosphere
         init_state(&state, config);
+        if (state.mpi_state.num_ranks > 1) {
+            throw std::runtime_error("dexrt_rad_eq does not yet support multiple MPI ranks: rad_loss is not reduced across them.");
+        }
         CascadeState casc_state;
         casc_state.init(state, config.max_cascade);
         yakl::timer_start("DexRT");
@@ -1117,6 +1289,26 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Cannot enable pressure conservation without charge conservation.");
         }
         const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
+        const bool conserve_energy = config.conserve_energy;
+        if (conserve_energy && !conserve_charge) {
+            throw std::runtime_error("Cannot enable energy conservation without charge conservation.");
+        }
+        const bool actually_conserve_energy = actually_conserve_charge && conserve_energy;
+        if (actually_conserve_energy && !state.atmos.e_int.initialized()) {
+            throw std::runtime_error(
+                fmt::format(
+                    "Energy conservation requires an \"e_int\" variable in the atmosphere ({}), which does not provide one.",
+                    config.atmos_path
+                )
+            );
+        }
+        RadEqPath rad_eq_path = RadEqPath::Isochoric;
+        if (actually_conserve_energy) {
+            rad_eq_path = RadEqPath::EnergyConserving;
+        } else if (actually_conserve_pressure) {
+            rad_eq_path = RadEqPath::Isobaric;
+        }
+        state.println("Radiative equilibrium path: {}", RadEqPathNames[int(rad_eq_path)]);
         const int initial_lambda_iterations = config.initial_lambda_iterations;
         const int max_iters = config.max_iter;
 
@@ -1166,35 +1358,61 @@ int main(int argc, char** argv) {
             set_initial_pops_special(&state);
         }
 
+        f64 current_time = 0.0;
+        // NOTE(claude): The step a snapshot was taken during: its e_int advance and
+        // time increment have already been applied, so we resume on the step
+        // after it, and the solve below finishes converging that step.
+        int snapshot_step = -1;
         if (do_restart) {
-            i = handle_restart(&state, *restart_path);
+            RestartState restart = handle_restart(&state, *restart_path);
+            i = restart.num_iter;
+            current_time = restart.current_time;
+            snapshot_step = restart.rad_eq_step;
+            state.println(
+                "Resuming at step {} (t = {:.6g} s)",
+                snapshot_step + 1,
+                current_time
+            );
         }
+        const int first_step = snapshot_step + 1;
 
-        // NOTE(cmo): Setup complete
+        // NOTE(claude): Perform initial iteration. On a cold start energy
+        // conservation is left off so this converges the populations at the
+        // temperature provided by the atmosphere, rather than remapping it onto
+        // the provided e_int. On a restart we're resuming mid-evolution, where
+        // the temperature is already the evolved one, so holding it fixed here
+        // would pull the state away from what we're continuing.
+        i = iterate_non_lte(
+            wave_dist,
+            state,
+            casc_state,
+            ActualSubiterations{
+                .actually_conserve_charge=actually_conserve_charge,
+                .actually_conserve_pressure=actually_conserve_pressure,
+                .actually_conserve_energy=do_restart && actually_conserve_energy
+            },
+            current_time,
+            snapshot_step
+        );
 
-        // NOTE(cmo): Perform initial iteration
-        i = iterate_non_lte(wave_dist, state, casc_state, ActualSubiterations{
-            .actually_conserve_charge=actually_conserve_charge,
-            .actually_conserve_pressure=actually_conserve_pressure
-        });
-
-        state.config.max_iter = 50;
+        state.config.max_iter = RAD_EQ_MAX_ITER;
 
         yakl::timer_start("Radiative Equilibrium");
 
-        f64 current_time = 0.0;
-        f64 delta_t = 10.0;
-        for (int ii = 0; ii < 200; ++ii) {
-            fp_t tcv = min_characteristic_cooling_time(state);
+        for (int ii = first_step; ii < RAD_EQ_NUM_STEPS; ++ii) {
+            fp_t tcv = min_characteristic_cooling_time(state, rad_eq_path == RadEqPath::EnergyConserving);
             fp_t mean_temp = mean_temperature(state);
-            fmt::println("\n~~~~~~~~~~~~ Step {}, t = {:.0f} s ~~~~~~~~~~~~~~", ii, current_time);
+            fmt::println("\n~~~~~~~~~~~~ Step {}, t = {:.6g} s ~~~~~~~~~~~~~~", ii, current_time);
             fmt::println("t_cv = {:e} s", tcv);
             fmt::println("mean temperature = {:e} K", mean_temp);
-            delta_t = std::min(0.007 * tcv, 50.0);
+            f64 delta_t = std::min(RAD_EQ_CFL * tcv, RAD_EQ_MAX_DELTA_T);
             dump_properties(state, ii, current_time);
-            update_temperature(state, delta_t);
-            // fp_t pop_tol = std::min(FP(9e-4), fp_t(FP(5e-2) / (FP(0.01) * tcv)));
-            fp_t pop_tol = std::min(FP(5e-4), fp_t(FP(1e-2) / (FP(0.01) * tcv)));
+            if (rad_eq_path == RadEqPath::EnergyConserving) {
+                advance_e_int(state, delta_t);
+            } else {
+                update_temperature_explicit(state, delta_t, rad_eq_path == RadEqPath::Isobaric);
+            }
+            fp_t pop_tol = std::min(RAD_EQ_MAX_POP_TOL, fp_t(RAD_EQ_POP_TOL_SCALE / (FP(0.01) * tcv)));
             fmt::println("delta_t: {}", delta_t);
             fmt::println("New tol = {:e}", pop_tol);
             fmt::println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
@@ -1202,11 +1420,19 @@ int main(int argc, char** argv) {
 
             state.config.pop_tol = pop_tol;
 
-            i = iterate_non_lte(wave_dist, state, casc_state, ActualSubiterations{
-                .actually_conserve_charge=actually_conserve_charge,
-                .actually_conserve_pressure=actually_conserve_pressure
-            });
             current_time += delta_t;
+            i = iterate_non_lte(
+                wave_dist,
+                state,
+                casc_state,
+                ActualSubiterations{
+                    .actually_conserve_charge=actually_conserve_charge,
+                    .actually_conserve_pressure=actually_conserve_pressure,
+                    .actually_conserve_energy=actually_conserve_energy
+                },
+                current_time,
+                ii
+            );
         }
         yakl::timer_stop("Radiative Equilibrium");
 
