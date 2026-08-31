@@ -76,7 +76,6 @@ struct DexrtConfig {
     bool conserve_charge = false;
     bool conserve_pressure = false;
     bool conserve_energy = false;
-    /// Total baryon abundance relative to H. See DEFAULT_TOTAL_ABUND.
     fp_t total_abund = DEFAULT_TOTAL_ABUND;
     int snapshot_frequency = 0;
     int initial_lambda_iterations = 2;
