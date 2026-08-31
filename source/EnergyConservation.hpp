@@ -19,6 +19,8 @@ inline fp_t simple_conserve_energy(State* state) {
         using namespace ConstantsFP;
         constexpr fp_t invgammam1 = FP(1.0) / (FP(5.0) / FP(3.0) - 1.0);
 
+        // NOTE(cmo): Set to 1.0 in the config to match mosscap, which only
+        // includes H for now.
         const fp_t total_abund = state->config.total_abund;
         JasUnpack((*state), pops, adata);
         const auto h_pops = slice_pops(pops, state->adata_host, 0);
