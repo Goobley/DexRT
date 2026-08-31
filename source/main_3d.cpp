@@ -743,6 +743,10 @@ int main(int argc, char** argv) {
             fp_t max_change = FP(1.0);
 
             const bool do_restart = bool(restart_path);
+            // NOTE(cmo): If the pops came from a file they're not LTE, so
+            // neither the LTE n_e/pressure loop (which drives them back to LTE
+            // through stat_eq) nor the special initial pops schemes should run.
+            const bool pops_provided = do_restart || (config.initial_pops_path.size() > 0);
             const bool conserve_charge = config.conserve_charge;
             const bool actually_conserve_charge = state.have_h && conserve_charge;
             if (!actually_conserve_charge && conserve_charge) {
@@ -758,7 +762,7 @@ int main(int argc, char** argv) {
 
             int i = 0;
 
-            if (actually_conserve_charge && !do_restart) {
+            if (actually_conserve_charge && !pops_provided) {
                 // TODO(cmo): Make all of these parameters configurable
                 state.println("-- Iterating LTE n_e/pressure --");
                 fp_t lte_max_change = FP(1.0);
@@ -787,7 +791,7 @@ int main(int argc, char** argv) {
                 state.println("Ran for {} iterations", lte_i);
             }
 
-            if (non_lte && !do_restart) {
+            if (non_lte && !pops_provided) {
                 set_initial_pops_special(&state);
             }
 
