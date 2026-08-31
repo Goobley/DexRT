@@ -9,6 +9,12 @@
 #include <fmt/core.h>
 #include <yaml-cpp/yaml.h>
 
+/// Total baryon abundance relative to H, i.e. sum_elem(n_elem) / n_H. Used to
+/// convert nh_tot into a total particle density in the conservation routines.
+/// Default from Asplund 2009 (as computed by Lightweaver); 1.1 is the
+/// traditional He-only value.
+constexpr fp_t DEFAULT_TOTAL_ABUND = FP(1.0861550335264554);
+
 struct DexrtOutputConfig {
     bool sparse = false;
     bool wavelength = true;
@@ -16,6 +22,7 @@ struct DexrtOutputConfig {
     bool rad_loss = true;
     bool pops = true;
     bool lte_pops = true;
+    bool temperature = true;
     bool ne = true;
     bool nh_tot = true;
     bool max_mip_level = true;
@@ -68,6 +75,9 @@ struct DexrtConfig {
     fp_t pop_tol = FP(1e-3);
     bool conserve_charge = false;
     bool conserve_pressure = false;
+    bool conserve_energy = false;
+    /// Total baryon abundance relative to H. See DEFAULT_TOTAL_ABUND.
+    fp_t total_abund = DEFAULT_TOTAL_ABUND;
     int snapshot_frequency = 0;
     int initial_lambda_iterations = 2;
     int max_cascade = 5;
@@ -87,6 +97,7 @@ inline void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
     config.pop_tol = FP(1.0);
     config.conserve_charge = false;
     config.conserve_pressure = false;
+    config.conserve_energy = false;
 }
 
 inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
@@ -190,6 +201,20 @@ inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     if (file["conserve_pressure"]) {
         config.conserve_pressure = file["conserve_pressure"].as<bool>();
     }
+    if (file["conserve_energy"]) {
+        config.conserve_energy = file["conserve_energy"].as<bool>();
+    }
+    if (config.conserve_pressure && config.conserve_energy) {
+        throw std::runtime_error("conserve_pressure and conserve_energy work in mutually exclusive ways.");
+    }
+    if (file["total_abund"]) {
+        config.total_abund = file["total_abund"].as<fp_t>();
+        if (config.total_abund <= FP(0.0)) {
+            throw std::runtime_error(
+                fmt::format("total_abund must be positive (got {}).", config.total_abund)
+            );
+        }
+    }
     if (file["snapshot_frequency"]) {
         config.snapshot_frequency = file["snapshot_frequency"].as<int>();
     }
@@ -236,6 +261,9 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     if (output["lte_pops"]) {
         out.lte_pops = output["lte_pops"].as<bool>();
     }
+    if (output["temperature"]) {
+        out.temperature = output["temperature"].as<bool>();
+    }
     if (output["ne"]) {
         out.ne = output["ne"].as<bool>();
     }
@@ -264,6 +292,7 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     if (config.mode == DexrtMode::GivenFs) {
         out.ne = false;
         out.nh_tot = false;
+        out.temperature = false;
         out.rad_loss = false;
         out.pops = false;
         out.lte_pops = false;
@@ -272,6 +301,7 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     } else if (config.mode == DexrtMode::Lte) {
         out.ne = false;
         out.nh_tot = false;
+        out.temperature = false;
         out.rad_loss = out.rad_loss && (config.rad_loss != RadLossType::None);
         out.lte_pops = false;
         out.psi_star = false;
@@ -279,9 +309,10 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     } else if (config.mode == DexrtMode::NonLte) {
         out.active = true;
         out.rad_loss = out.rad_loss && (config.rad_loss != RadLossType::None);
-        if (!(config.conserve_charge || config.conserve_pressure)) {
+        if (!(config.conserve_charge || config.conserve_pressure || config.conserve_energy)) {
             out.ne = false;
             out.nh_tot = false;
+            out.temperature = false;
         }
     }
     // NOTE(claude): The rate diagnostics hang off the Gamma accumulation, which

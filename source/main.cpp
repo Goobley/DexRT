@@ -15,6 +15,7 @@
 #include "DynamicFormalSolution.hpp"
 #include "ChargeConservation.hpp"
 #include "PressureConservation.hpp"
+#include "EnergyConservation.hpp"
 #include "ProfileNormalisation.hpp"
 #include "PromweaverBoundary.hpp"
 #include "DexrtConfig.hpp"
@@ -879,6 +880,9 @@ void save_results(State& state, const CascadeState& casc_state, i32 num_iter) {
         yakl::fence();
         maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});
     }
+    if (out_cfg.temperature&& state.atmos.temperature.initialized()) {
+        maybe_rehydrate_and_write(state.atmos.temperature, "temperature", {});
+    }
     if (out_cfg.ne && state.atmos.ne.initialized()) {
         maybe_rehydrate_and_write(state.atmos.ne, "ne", {});
     }
@@ -998,10 +1002,15 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("Charge conservation enabled without a model H!");
             }
             const bool conserve_pressure = config.conserve_pressure;
-            if (conserve_pressure && !conserve_charge) {
-                throw std::runtime_error("Cannot enable pressure conservation without charge conservation.");
+            const bool conserve_energy = config.conserve_energy;
+            if (
+                (conserve_pressure && !conserve_charge)
+                || (conserve_energy && !conserve_charge)
+            ) {
+                throw std::runtime_error("Cannot enable pressure or energy conservation without charge conservation.");
             }
             const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
+            const bool actually_conserve_energy = actually_conserve_charge && conserve_energy;
             const int initial_lambda_iterations = config.initial_lambda_iterations;
             const int max_iters = config.max_iter;
 
@@ -1017,6 +1026,8 @@ int main(int argc, char** argv) {
                 int i = 0;
                 if (actually_conserve_charge && !do_restart) {
                     // TODO(cmo): Make all of these parameters configurable
+                    // For now, let's also ignore energy conservation outside of
+                    // the main loop, and see how it does.
                     state.println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
@@ -1141,9 +1152,15 @@ int main(int argc, char** argv) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
                             max_change = std::max(nh_tot_update, max_change);
                         }
+                        if (actually_conserve_energy) {
+                            fp_t temp_update = simple_conserve_energy(&state);
+                            max_change = std::max(temp_update, max_change);
+                            wave_dist.update_temperature(&state);
+                        }
                         if (actually_conserve_pressure) {
                             wave_dist.update_nh_tot(&state);
                         }
+
                     }
                     if (config.ng.enable) {
                         accelerated = ng.accelerate(state, max_change);

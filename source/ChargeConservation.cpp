@@ -462,20 +462,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     // NOTE(cmo): GammaH_flat is how we access Gamma/C in the following
     const auto& GammaH_flat = state->Gamma[0];
 
-    fp_t total_abund = FP(0.0);
-    if constexpr (false) {
-        for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
-            total_abund += state->adata_host.abundance(ia);
-        }
-    } else {
-        // NOTE(cmo): From Asplund 2009/Lw calc
-        if (args.total_abund <= FP(0.0)) {
-            total_abund = FP(1.0861550335264554);
-            // NOTE(cmo): 1.1 is traditionally used to account for He, but it's all much of a muchness
-        } else {
-            total_abund = args.total_abund;
-        }
-    }
+    const fp_t total_abund = state->config.total_abund;
     constexpr fp_t ne_pert_size = FP(1e-2);
     constexpr bool iterative_improvement = true;
     constexpr int num_refinement_passes = 2;

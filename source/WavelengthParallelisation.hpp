@@ -296,6 +296,14 @@ struct WavelengthDistributor {
 #endif
     }
 
+    template <typename State>
+    inline void update_temperature(State* state) {
+#ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
+        MPI_Bcast(state->atmos.temperature.data(), state->atmos.temperature.size(), get_FpMpi(), 0, state->mpi_state.comm);
+#endif
+    }
+
 };
 
 

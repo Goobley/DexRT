@@ -102,9 +102,9 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(1.5);
+constexpr fp_t PROBE0_LENGTH = FP(3.0);
 // The number of rays to trace on cascade 0
-constexpr int PROBE0_NUM_RAYS = 4;
+constexpr int PROBE0_NUM_RAYS = 8;
 
 // The angular branching and interval length factor to use for each cascade
 // (i.e. num_rays_i = PROBE0_NUM_RAYS * 2^(CASCADE_BRANCHING_FACTOR * i))

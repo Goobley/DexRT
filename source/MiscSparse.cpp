@@ -30,6 +30,9 @@ SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLO
     result.vx = Fp1d("sparse vx", num_active_cells);
     result.vy = Fp1d("sparse vy", num_active_cells);
     result.vz = Fp1d("sparse vz", num_active_cells);
+    if (atmos.e_int.initialized()) {
+        result.e_int = Fp1d("sparse e_int", num_active_cells);
+    }
 
     dex_parallel_for(
         "Sparsify atmosphere",
@@ -48,6 +51,9 @@ SparseAtmosphere sparsify_atmosphere(const Atmosphere& atmos, const BlockMap<BLO
             result.vx(ks) = atmos.vx(coord.z, coord.x);
             result.vy(ks) = atmos.vy(coord.z, coord.x);
             result.vz(ks) = atmos.vz(coord.z, coord.x);
+            if (atmos.e_int.initialized()) {
+                result.e_int(ks) = atmos.e_int(coord.z, coord.x);
+            }
         }
     );
     yakl::fence();
@@ -77,6 +83,9 @@ SparseAtmosphere sparsify_atmosphere(
     result.vx = Fp1d("sparse vx", num_active_cells);
     result.vy = Fp1d("sparse vy", num_active_cells);
     result.vz = Fp1d("sparse vz", num_active_cells);
+    if (atmos.e_int.initialized()) {
+        result.e_int = Fp1d("sparse e_int", num_active_cells);
+    }
 
     auto copy_and_sparsify_field = [&](const Fp1d& dest, const Fp3dHost& source) {
         Fp3d src = source.createDeviceCopy();
@@ -101,6 +110,9 @@ SparseAtmosphere sparsify_atmosphere(
     copy_and_sparsify_field(result.vx, atmos.vx);
     copy_and_sparsify_field(result.vy, atmos.vy);
     copy_and_sparsify_field(result.vz, atmos.vz);
+    if (atmos.e_int.initialized()) {
+        copy_and_sparsify_field(result.e_int, atmos.e_int);
+    }
 
     Kokkos::fence();
     return result;

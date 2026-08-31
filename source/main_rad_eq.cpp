@@ -1028,7 +1028,7 @@ void dump_properties(const State& state, int iter, fp_t time) {
     nc.write(state.pops, "pops", {"level", "ks"});
 }
 
-void update_temperature(fp_t delta_t) {
+void update_temperature(const State& state, fp_t delta_t) {
     JasUnpack(state, atmos, rad_loss);
     const fp_t threshold = state.config.threshold_temperature;
 
@@ -1069,7 +1069,7 @@ int main(int argc, char** argv) {
 
     std::optional<std::string> restart_path = program.present("--restart-from");
 
-    DexrtConfig config = parse_dexrt_config(program.get<std::string>("--config"));
+    DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
     if (config.mode != DexrtMode::NonLte) {
         throw std::runtime_error("dexrt_rad_eq only supports non-lte problems.");
     }
