@@ -38,10 +38,6 @@ int get_dexrt_dimensionality() {
     return 2;
 }
 
-/// How the gas is allowed to respond as it radiates. Follows directly from the
-/// conservation flags in the config: conserve_energy integrates the provided
-/// e_int at fixed density, conserve_pressure lets nh_tot adjust at fixed
-/// pressure, and charge conservation alone leaves the density fixed.
 enum class RadEqPath {
     Isochoric,
     Isobaric,
@@ -59,10 +55,32 @@ constexpr int RAD_EQ_NUM_STEPS = 200;
 /// Iteration limit for each non-LTE solve inside the time loop (the initial
 /// solve uses the value from the config).
 constexpr int RAD_EQ_MAX_ITER = 50;
-/// Timestep as a fraction of the shortest characteristic cooling time...
-constexpr fp_t RAD_EQ_CFL = FP(0.007);
-/// ... capped here.
+/// First step is Euler, as a fraction of the shortest cooling time.
+constexpr fp_t RAD_EQ_EULER_CFL = FP(0.007);
+/// Backstop on the AB2 steps. Bounds how far the error controller can step, and
+/// keeps RAD_EQ_MAX_E_INT_LOSS_FRAC from ever binding.
+constexpr fp_t RAD_EQ_CFL_BACKSTOP = FP(0.1);
 constexpr fp_t RAD_EQ_MAX_DELTA_T = FP(50.0);
+constexpr fp_t RAD_EQ_RTOL = FP(1e-3);
+constexpr fp_t RAD_EQ_ATOL_FRAC = FP(1e-3);
+constexpr fp_t RAD_EQ_SAFETY = FP(0.9);
+constexpr fp_t RAD_EQ_MAX_GROWTH = FP(1.5);
+
+typedef yakl::Array<RadLossFp, 1, yakl::memDevice> RadLossArr;
+
+struct Ab2History {
+    RadLossArr loss_prev; /// L^{n-1}
+    RadLossArr loss_eff;  /// the AB2 combination fed to the updaters
+    f64 dt_prev = 0.0;
+    bool have_history = false;
+
+    void init(i64 num_active_cells) {
+        loss_prev = RadLossArr("L_prev", num_active_cells);
+        loss_eff = RadLossArr("L_eff", num_active_cells);
+        loss_prev = FP(0.0);
+        loss_eff = FP(0.0);
+    }
+};
 /// The population tolerance is tightened as the cooling time shortens:
 /// pop_tol = min(RAD_EQ_MAX_POP_TOL, RAD_EQ_POP_TOL_SCALE / (0.01 * t_cv))
 constexpr fp_t RAD_EQ_MAX_POP_TOL = FP(5e-4);
@@ -269,10 +287,7 @@ struct RestartState {
     int rad_eq_step;
 };
 
-/// Loads the populations, ne, nh_tot, and (if present) the evolved thermal
-/// state from restart_path. Returns the current iteration number and time.
-/// Will crash/throw exception if file can't be found or dimensions are wrong etc.
-RestartState handle_restart(State* st, const std::string& restart_path) {
+RestartState handle_restart(State* st, const std::string& restart_path, Ab2History* ab2) {
     State& state(*st);
     yakl::SimpleNetCDF nc;
     nc.open(restart_path, yakl::NETCDF_MODE_READ);
@@ -312,14 +327,20 @@ RestartState handle_restart(State* st, const std::string& restart_path) {
     if (ierr != NC_NOERR) {
         throw std::runtime_error(fmt::format("Unable to get num_iter from restart file: {}", nc_strerror(ierr)));
     }
-    // NOTE(cmo): Snapshots from before the rad_eq time loop was made restartable
-    // don't carry a time, so start them from 0.
     f64 current_time = 0.0;
     nc_get_att_double(ncid, NC_GLOBAL, "current_time", &current_time);
-    // NOTE(cmo): -1 means the snapshot predates the time loop (or the attribute,
-    // for older files), so we resume at step 0.
+
+    // -1 means the snapshot predates the time loop (or the attribute, for older
+    // files), so we resume at step 0.
     int rad_eq_step = -1;
     nc_get_att_int(ncid, NC_GLOBAL, "rad_eq_step", &rad_eq_step);
+
+    f64 dt_prev = 0.0;
+    if (nc.varExists("loss_prev") && nc_get_att_double(ncid, NC_GLOBAL, "dt_prev", &dt_prev) == NC_NOERR && dt_prev > 0.0) {
+        nc.read(ab2->loss_prev, "loss_prev");
+        ab2->dt_prev = dt_prev;
+        ab2->have_history = true;
+    }
 
     return RestartState{
         .num_iter = num_iter,
@@ -328,9 +349,7 @@ RestartState handle_restart(State* st, const std::string& restart_path) {
     };
 }
 
-/// Dump a snapshot. File name determined automatically (e.g. main output
-/// dexrt_output.nc -> dexrt_output_snapshot.nc)
-void save_snapshot(const State& state, int num_iter, f64 current_time, int rad_eq_step) {
+void save_snapshot(const State& state, int num_iter, f64 current_time, int rad_eq_step, const Ab2History& ab2) {
     if (state.mpi_state.rank != 0) {
         return;
     }
@@ -363,6 +382,13 @@ void save_snapshot(const State& state, int num_iter, f64 current_time, int rad_e
     if (ierr != NC_NOERR) {
         throw std::runtime_error(fmt::format("Unable to write rad_eq_step to snapshot file: {}", nc_strerror(ierr)));
     }
+    if (ab2.have_history) {
+        ierr = nc_put_att_double(ncid, NC_GLOBAL, "dt_prev", NC_DOUBLE, 1, &ab2.dt_prev);
+        if (ierr != NC_NOERR) {
+            throw std::runtime_error(fmt::format("Unable to write dt_prev to snapshot file: {}", nc_strerror(ierr)));
+        }
+        nc.write(ab2.loss_prev, "loss_prev", {"ks"});
+    }
 
     nc.write(state.pops, "pops", {"level", "ks"});
     if (state.config.conserve_charge) {
@@ -371,8 +397,6 @@ void save_snapshot(const State& state, int num_iter, f64 current_time, int rad_e
     if (state.config.conserve_pressure) {
         nc.write(state.atmos.nh_tot, "nh_tot", {"ks"});
     }
-    // NOTE(cmo): The evolved thermal state is the result of a rad_eq run, so it
-    // always needs to come back on restart.
     nc.write(state.atmos.temperature, "temperature", {"ks"});
     nc.write(state.atmos.pressure, "pressure", {"ks"});
     if (state.config.conserve_energy) {
@@ -380,9 +404,6 @@ void save_snapshot(const State& state, int num_iter, f64 current_time, int rad_e
     }
 }
 
-/// Load populations from the specified path (variable name "pops"). Will be
-/// assumed to be sparse if the ks dimension exists (e.g. from a previous run),
-/// or dense otherwise.
 void load_initial_pops(State* st, const std::string& initial_pops_path) {
     State& state(*st);
     yakl::SimpleNetCDF nc;
@@ -445,7 +466,6 @@ void load_initial_pops(State* st, const std::string& initial_pops_path) {
     }
 }
 
-/// Called to copy J from GPU to plane of host array if config.store_J_on_cpu
 void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
     int wave_batch = la_end - la_start;
     const Fp2dHost J_copy = state.J.createHostCopy();
@@ -457,7 +477,6 @@ void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
     }
 }
 
-/// Called to copy rad_loss from GPU to plane of host array if config.store_J_on_cpu
 void copy_rad_loss_plane_to_host(const State& state, int la_start, int la_end) {
     if (!state.rad_loss.initialized()) {
         return;
@@ -936,7 +955,8 @@ int iterate_non_lte(
     const CascadeState& casc_state,
     const ActualSubiterations& opts,
     f64 current_time,
-    int rad_eq_step
+    int rad_eq_step,
+    const Ab2History& ab2
 ) {
     JasUnpack(state, config);
     JasUnpack(opts, actually_conserve_charge, actually_conserve_pressure, actually_conserve_energy);
@@ -1050,7 +1070,7 @@ int iterate_non_lte(
             (state.config.snapshot_frequency != 0) &&
             (i % state.config.snapshot_frequency == 0)
         ) {
-            save_snapshot(state, i, current_time, rad_eq_step);
+            save_snapshot(state, i, current_time, rad_eq_step, ab2);
         }
         first_iter = false;
     }
@@ -1152,8 +1172,86 @@ void dump_properties(const State& state, int iter, fp_t time) {
     nc.write(state.pops, "pops", {"level", "ks"});
 }
 
-void update_temperature_explicit(const State& state, fp_t delta_t, bool isobaric) {
+void copy_current_loss(const State& state, const RadLossArr& dst) {
+    JasUnpack(state, rad_loss);
+    dex_parallel_for(
+        "Copy rad_loss",
+        FlatLoop<1>(rad_loss.extent(1)),
+        YAKL_LAMBDA (i64 ks) {
+            dst(ks) = rad_loss(0, ks);
+        }
+    );
+    yakl::fence();
+}
+
+/// Adams-Bashforth 2
+/// Reduces to the textbook (3/2, -1/2) when r == 1.
+/// Caunt & Korpi (2001), A&A 375, 1073 (astro-ph/0102068), Eq. B.2;
+/// Verschelde, MCS 471 Lecture 32 <homepages.math.uic.edu/~jan/mcs471/variablestep.pdf>.
+void compute_ab2_loss(const State& state, const Ab2History& hist, f64 r) {
+    JasUnpack(state, rad_loss);
+    const auto& loss_prev = hist.loss_prev;
+    const auto& loss_eff = hist.loss_eff;
+    const RadLossFp w_cur = RadLossFp(1.0) + RadLossFp(0.5) * r;
+    const RadLossFp w_prev = RadLossFp(0.5) * r;
+
+    dex_parallel_for(
+        "AB2 loss blend",
+        FlatLoop<1>(rad_loss.extent(1)),
+        YAKL_LAMBDA (i64 ks) {
+            loss_eff(ks) = w_cur * rad_loss(0, ks) - w_prev * loss_prev(ks);
+        }
+    );
+    yakl::fence();
+}
+
+fp_t compute_error_atol(const State& state) {
+    JasUnpack(state, atmos);
+    const bool have_e_int = atmos.e_int.initialized();
+    const auto& q = have_e_int ? atmos.e_int : atmos.pressure;
+
+    fp_t max_q;
+    dex_parallel_reduce(
+        "Error scale",
+        FlatLoop<1>(q.extent(0)),
+        KOKKOS_LAMBDA (i64 ks, fp_t& running_max) {
+            running_max = std::max(running_max, std::abs(q(ks)));
+        },
+        Kokkos::Max<fp_t>(max_q)
+    );
+    return RAD_EQ_ATOL_FRAC * max_q;
+}
+
+/// Largest dt whose AB2 error estimate, dt^2 |L^n - L^{n-1}| / (2 dt_prev),
+/// stays within atol + rtol |y|. Solved for directly, giving the next step size (no need to reject).
+f64 ab2_error_limited_dt(const State& state, const Ab2History& hist) {
     JasUnpack(state, atmos, rad_loss);
+    const auto& loss_prev = hist.loss_prev;
+    const bool have_e_int = atmos.e_int.initialized();
+    const fp_t atol = compute_error_atol(state);
+
+    f64 max_scaled_dl;
+    dex_parallel_reduce(
+        "AB2 error estimate",
+        FlatLoop<1>(rad_loss.extent(1)),
+        KOKKOS_LAMBDA (i64 ks, f64& running_max) {
+            const f64 dL = std::abs(rad_loss(0, ks) - loss_prev(ks)) * RAD_LOSS_TO_SI;
+            const fp_t q = have_e_int ? atmos.e_int(ks) : atmos.pressure(ks);
+            const fp_t scale = atol + RAD_EQ_RTOL * std::abs(1);
+            running_max = std::max(running_max, dL / scale);
+        },
+        Kokkos::Max<f64>(max_scaled_dl)
+    );
+
+    if (max_scaled_dl <= FP(0.0)) {
+        // No limit from this term in this case
+        return std::numeric_limits<f64>::infinity();
+    }
+    return std::sqrt(2.0 * hist.dt_prev / max_scaled_dl);
+}
+
+void update_temperature_explicit(const State& state, const RadLossArr& loss, fp_t delta_t, bool isobaric) {
+    JasUnpack(state, atmos);
     // 1/c_p vs 1/c_v, in units of T/P.
     const fp_t inv_heat_capacity = isobaric ? (FP(2.0) / FP(5.0)) : (FP(2.0) / FP(3.0));
     const fp_t min_temperature = RAD_EQ_MIN_TEMPERATURE;
@@ -1161,9 +1259,9 @@ void update_temperature_explicit(const State& state, fp_t delta_t, bool isobaric
     fp_t max_temp_change;
     dex_parallel_reduce(
         "Update temperature (rad loss)",
-        FlatLoop<1>(rad_loss.extent(1)),
+        FlatLoop<1>(loss.extent(0)),
         KOKKOS_LAMBDA (i64 ks, fp_t& running_max) {
-            const fp_t L = rad_loss(0, ks) * RAD_LOSS_TO_SI;
+            const fp_t L = loss(ks) * RAD_LOSS_TO_SI;
             const fp_t T = atmos.temperature(ks);
 
             const fp_t temperature_update = inv_heat_capacity * L * T / atmos.pressure(ks) * delta_t;
@@ -1179,8 +1277,8 @@ void update_temperature_explicit(const State& state, fp_t delta_t, bool isobaric
     fmt::println("Max temperature change: {} K", max_temp_change);
 }
 
-void advance_e_int(const State& state, fp_t delta_t) {
-    JasUnpack(state, atmos, rad_loss);
+void advance_e_int(const State& state, const RadLossArr& loss, fp_t delta_t) {
+    JasUnpack(state, atmos);
     using namespace ConstantsFP;
     const fp_t total_abund = state.config.total_abund;
     const fp_t min_temperature = RAD_EQ_MIN_TEMPERATURE;
@@ -1189,9 +1287,9 @@ void advance_e_int(const State& state, fp_t delta_t) {
     fp_t max_frac_change;
     dex_parallel_reduce(
         "Advance e_int (rad loss)",
-        FlatLoop<1>(rad_loss.extent(1)),
+        FlatLoop<1>(loss.extent(0)),
         KOKKOS_LAMBDA (i64 ks, fp_t& running_max) {
-            const fp_t L = rad_loss(0, ks) * RAD_LOSS_TO_SI;
+            const fp_t L = loss(ks) * RAD_LOSS_TO_SI;
             const fp_t e_int = atmos.e_int(ks);
             const fp_t delta_e = L * delta_t;
 
@@ -1363,15 +1461,18 @@ int main(int argc, char** argv) {
         // time increment have already been applied, so we resume on the step
         // after it, and the solve below finishes converging that step.
         int snapshot_step = -1;
+        Ab2History ab2;
+        ab2.init(state.atmos.temperature.extent(0));
         if (do_restart) {
-            RestartState restart = handle_restart(&state, *restart_path);
+            RestartState restart = handle_restart(&state, *restart_path, &ab2);
             i = restart.num_iter;
             current_time = restart.current_time;
             snapshot_step = restart.rad_eq_step;
             state.println(
-                "Resuming at step {} (t = {:.6g} s)",
+                "Resuming at step {} (t = {:.6g} s), AB2 history {}",
                 snapshot_step + 1,
-                current_time
+                current_time,
+                ab2.have_history ? "restored" : "absent (one Euler step to rebuild)"
             );
         }
         const int first_step = snapshot_step + 1;
@@ -1392,10 +1493,17 @@ int main(int argc, char** argv) {
                 .actually_conserve_energy=do_restart && actually_conserve_energy
             },
             current_time,
-            snapshot_step
+            snapshot_step,
+            ab2
         );
 
         state.config.max_iter = RAD_EQ_MAX_ITER;
+
+        state.println(
+            "Error control: rtol = {:e}, atol = {:e} * max(e_int)",
+            RAD_EQ_RTOL,
+            RAD_EQ_ATOL_FRAC
+        );
 
         yakl::timer_start("Radiative Equilibrium");
 
@@ -1405,15 +1513,53 @@ int main(int argc, char** argv) {
             fmt::println("\n~~~~~~~~~~~~ Step {}, t = {:.6g} s ~~~~~~~~~~~~~~", ii, current_time);
             fmt::println("t_cv = {:e} s", tcv);
             fmt::println("mean temperature = {:e} K", mean_temp);
-            f64 delta_t = std::min(RAD_EQ_CFL * tcv, RAD_EQ_MAX_DELTA_T);
-            dump_properties(state, ii, current_time);
-            if (rad_eq_path == RadEqPath::EnergyConserving) {
-                advance_e_int(state, delta_t);
+
+            // First step has no history to extrapolate from: Euler, seeding L^{n-1}.
+            f64 delta_t;
+            const char* limiter;
+            if (!ab2.have_history) {
+                delta_t = std::min(f64(RAD_EQ_EULER_CFL * tcv), f64(RAD_EQ_MAX_DELTA_T));
+                limiter = "euler-cfl";
             } else {
-                update_temperature_explicit(state, delta_t, rad_eq_path == RadEqPath::Isobaric);
+                const f64 dt_err = RAD_EQ_SAFETY * ab2_error_limited_dt(state, ab2);
+                const f64 dt_growth = RAD_EQ_MAX_GROWTH * ab2.dt_prev;
+                const f64 dt_cfl = RAD_EQ_CFL_BACKSTOP * tcv;
+                delta_t = std::min(std::min(dt_err, dt_growth), std::min(dt_cfl, f64(RAD_EQ_MAX_DELTA_T)));
+                limiter = "error";
+                if (delta_t == dt_growth) {
+                    limiter = "growth";
+                } else if (delta_t == dt_cfl) {
+                    limiter = "t_cv";
+                } else if (delta_t == f64(RAD_EQ_MAX_DELTA_T)) {
+                    limiter = "max";
+                }
+                fmt::println(
+                    "dt limiters: error {:.4e}, growth {:.4e}, t_cv {:.4e}",
+                    dt_err,
+                    dt_growth,
+                    dt_cfl
+                );
             }
+
+            dump_properties(state, ii, current_time);
+
+            if (ab2.have_history) {
+                compute_ab2_loss(state, ab2, delta_t / ab2.dt_prev);
+            } else {
+                copy_current_loss(state, ab2.loss_eff);
+            }
+            copy_current_loss(state, ab2.loss_prev);
+
+            if (rad_eq_path == RadEqPath::EnergyConserving) {
+                advance_e_int(state, ab2.loss_eff, delta_t);
+            } else {
+                update_temperature_explicit(state, ab2.loss_eff, delta_t, rad_eq_path == RadEqPath::Isobaric);
+            }
+            ab2.dt_prev = delta_t;
+            ab2.have_history = true;
+
             fp_t pop_tol = std::min(RAD_EQ_MAX_POP_TOL, fp_t(RAD_EQ_POP_TOL_SCALE / (FP(0.01) * tcv)));
-            fmt::println("delta_t: {}", delta_t);
+            fmt::println("delta_t: {} ({})", delta_t, limiter);
             fmt::println("New tol = {:e}", pop_tol);
             fmt::println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
 
@@ -1431,7 +1577,8 @@ int main(int argc, char** argv) {
                     .actually_conserve_energy=actually_conserve_energy
                 },
                 current_time,
-                ii
+                ii,
+                ab2
             );
         }
         yakl::timer_stop("Radiative Equilibrium");
