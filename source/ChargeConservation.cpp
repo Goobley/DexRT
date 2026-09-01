@@ -418,7 +418,11 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
             "Rescale pops (presure)",
             FlatLoop<2>(full_pops.extent(0), full_pops.extent(1)),
             YAKL_LAMBDA (int i, i64 k) {
-                full_pops(i, k) *= nh_tot_ratio(k);
+                // H was already solved in absolute units by the coupled
+                // pressure update; only other species follow the new nh_tot.
+                if (i >= num_level) {
+                    full_pops(i, k) *= nh_tot_ratio(k);
+                }
             }
         );
     }
@@ -841,7 +845,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                     Kokkos::parallel_for(
                         Kokkos::TeamVectorRange(
                             team,
-                            new_popsk.extent(0)
+                            num_eqn
                         ),
                         [&] (int i) {
                             F(i) += residuals(i);
@@ -927,7 +931,10 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                 fp_t nh_tot_ratio = pops_sum / nh_tot(k);
                 nh_tot(k) = pops_sum;
 
-                for (int i = 0; i < full_pops.extent(0); ++i) {
+                // The H populations occupy [0, num_level) and have already
+                // been solved as absolute populations by the coupled pressure
+                // update.  Only rescale the other species to the new nh_tot.
+                for (int i = num_level; i < full_pops.extent(0); ++i) {
                     full_pops(i, k) *= nh_tot_ratio;
                 }
             }
