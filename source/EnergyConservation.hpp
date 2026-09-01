@@ -19,12 +19,8 @@ inline fp_t simple_conserve_energy(State* state) {
         using namespace ConstantsFP;
         constexpr fp_t invgammam1 = FP(1.0) / (FP(5.0) / FP(3.0) - 1.0);
 
-        // NOTE(cmo): Set to 1.0 in the config to match mosscap, which only
-        // includes H for now.
         const fp_t total_abund = state->config.total_abund;
         JasUnpack((*state), pops, adata);
-        const auto h_pops = slice_pops(pops, state->adata_host, 0);
-        // NOTE(cmo): This does neglect everything other than H, but that's consistent with mosscap for now.
 
         // NOTE(cmo): These may need tuning.
         constexpr fp_t min_temperature = FP(1e3);
@@ -43,8 +39,8 @@ inline fp_t simple_conserve_energy(State* state) {
                 const fp_t temperature = flatmos.temperature(k);
                 const fp_t e_intk = flatmos.e_int(k);
                 fp_t e_ion = FP(0.0);
-                for (int j = 0; j < h_pops.extent(0); ++j) {
-                    e_ion += h_pops(j, k) * adata.energy(j) * eV;
+                for (int j = 0; j < pops.extent(0); ++j) {
+                    e_ion += pops(j, k) * adata.energy(j) * eV;
                 }
                 const fp_t e_th_target = e_intk - e_ion;
                 const fp_t N = total_abund * flatmos.nh_tot(k) + flatmos.ne(k);
