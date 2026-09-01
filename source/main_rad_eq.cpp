@@ -1129,13 +1129,11 @@ CoolingTimes characteristic_cooling_time(const State& state, bool conserving_ene
     );
     yakl::fence();
 
-    // Once per timestep, so a host-side selection is cheap next to a formal solve.
     auto host = cooling_time.createHostCopy();
     fp_t* begin = host.data();
     i64 idx = i64(RAD_EQ_COOLING_TIME_PERCENTILE * num_cells);
     idx = std::min(idx, num_cells - 1);
     std::nth_element(begin, begin + idx, begin + num_cells);
-    // nth_element only partitions, so the minimum is somewhere below idx.
     return CoolingTimes{
         .percentile = begin[idx],
         .minimum = *std::min_element(begin, begin + idx + 1)
@@ -1261,7 +1259,7 @@ f64 ab2_error_limited_dt(const State& state, const Ab2History& hist) {
         KOKKOS_LAMBDA (i64 ks, f64& running_max) {
             const f64 dL = std::abs(rad_loss(0, ks) - loss_prev(ks)) * RAD_LOSS_TO_SI;
             const fp_t q = have_e_int ? atmos.e_int(ks) : atmos.pressure(ks);
-            const fp_t scale = atol + RAD_EQ_RTOL * std::abs(1);
+            const fp_t scale = atol + RAD_EQ_RTOL * std::abs(q);
             running_max = std::max(running_max, dL / scale);
         },
         Kokkos::Max<f64>(max_scaled_dl)
