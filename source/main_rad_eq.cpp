@@ -22,6 +22,7 @@
 #include "BlockMap.hpp"
 #include "MiscSparse.hpp"
 #include "YAKL_netcdf.h"
+#include <algorithm>
 #include <vector>
 #include <string>
 #include <optional>
@@ -51,7 +52,7 @@ constexpr const char* RadEqPathNames[] = {
 };
 
 /// Number of radiative equilibrium timesteps to take.
-constexpr int RAD_EQ_NUM_STEPS = 200;
+constexpr int RAD_EQ_NUM_STEPS = 400;
 /// Iteration limit for each non-LTE solve inside the time loop (the initial
 /// solve uses the value from the config).
 constexpr int RAD_EQ_MAX_ITER = 50;
@@ -87,6 +88,11 @@ constexpr fp_t RAD_EQ_MAX_POP_TOL = FP(5e-4);
 constexpr fp_t RAD_EQ_POP_TOL_SCALE = FP(1e-2);
 /// Cells losing less than this (W/m3) can't meaningfully constrain the timestep.
 constexpr fp_t RAD_EQ_MIN_RAD_LOSS = FP(1e-12);
+/// Fraction of cells allowed to cool faster than the timestep tracks, rather
+/// than letting a handful of cells set it for the whole domain. Those cells are
+/// over-stepped, so keep it low enough that they stay under
+/// RAD_EQ_MAX_E_INT_LOSS_FRAC -- at 0.5% they'd be clamped every step.
+constexpr fp_t RAD_EQ_COOLING_TIME_PERCENTILE = FP(0.001);
 /// Most of the energy a cell can lose in one step, as a fraction of what it
 /// holds. Relative because the absolute scale of e_int is problem dependent
 /// (~0.1 J/m3 in a prominence, but far larger in the photosphere). The CFL
@@ -1077,11 +1083,17 @@ int iterate_non_lte(
     return i;
 }
 
-fp_t min_characteristic_cooling_time(const State& state, bool conserving_energy) {
+struct CoolingTimes {
+    fp_t percentile; /// what the timestep is built from
+    fp_t minimum;    /// the worst cell; delta_t / this is its fractional e_int loss
+};
+
+CoolingTimes characteristic_cooling_time(const State& state, bool conserving_energy) {
     JasUnpack(state, atmos, pops, adata, rad_loss);
 
     constexpr fp_t gamma = (FP(5.0) / FP(3.0));
     constexpr fp_t igm1 = FP(1.0) / (gamma - FP(1.0));
+    constexpr fp_t quiescent = FP(1e30);
     using namespace ConstantsFP;
 
     // NOTE(claude): When we're conserving energy, e_int is the reservoir we're
@@ -1091,13 +1103,15 @@ fp_t min_characteristic_cooling_time(const State& state, bool conserving_energy)
     // a stale reservoir that drifts further from the gas on every step.
     const bool have_e_int = conserving_energy && atmos.e_int.initialized();
 
-    fp_t result;
-    dex_parallel_reduce(
-        "Max characteristic cooling",
-        FlatLoop<1>(pops.extent(1)),
-        KOKKOS_LAMBDA (i64 ks, fp_t& running_min) {
+    const i64 num_cells = pops.extent(1);
+    Fp1d cooling_time("cooling_time", num_cells);
+    dex_parallel_for(
+        "Characteristic cooling",
+        FlatLoop<1>(num_cells),
+        YAKL_LAMBDA (i64 ks) {
             const fp_t L = std::abs(rad_loss(0, ks) * RAD_LOSS_TO_SI);
             if (L < RAD_EQ_MIN_RAD_LOSS) {
+                cooling_time(ks) = quiescent;
                 return;
             }
 
@@ -1110,12 +1124,22 @@ fp_t min_characteristic_cooling_time(const State& state, bool conserving_energy)
                     e_int += pops(i, ks) * adata.energy(i) * eV;
                 }
             }
-            fp_t cooling_time = e_int / L;
-            running_min = std::min(running_min, cooling_time);
-        },
-        Kokkos::Min<fp_t>(result)
+            cooling_time(ks) = e_int / L;
+        }
     );
-    return result;
+    yakl::fence();
+
+    // Once per timestep, so a host-side selection is cheap next to a formal solve.
+    auto host = cooling_time.createHostCopy();
+    fp_t* begin = host.data();
+    i64 idx = i64(RAD_EQ_COOLING_TIME_PERCENTILE * num_cells);
+    idx = std::min(idx, num_cells - 1);
+    std::nth_element(begin, begin + idx, begin + num_cells);
+    // nth_element only partitions, so the minimum is somewhere below idx.
+    return CoolingTimes{
+        .percentile = begin[idx],
+        .minimum = *std::min_element(begin, begin + idx + 1)
+    };
 }
 
 fp_t mean_temperature(const State& state) {
@@ -1482,7 +1506,11 @@ int main(int argc, char** argv) {
         // temperature provided by the atmosphere, rather than remapping it onto
         // the provided e_int. On a restart we're resuming mid-evolution, where
         // the temperature is already the evolved one, so holding it fixed here
-        // would pull the state away from what we're continuing.
+        // would pull the state away from what we're continuing, and the
+        // cold-start iteration budget doesn't apply either.
+        if (do_restart) {
+            state.config.max_iter = RAD_EQ_MAX_ITER;
+        }
         i = iterate_non_lte(
             wave_dist,
             state,
@@ -1508,10 +1536,11 @@ int main(int argc, char** argv) {
         yakl::timer_start("Radiative Equilibrium");
 
         for (int ii = first_step; ii < RAD_EQ_NUM_STEPS; ++ii) {
-            fp_t tcv = min_characteristic_cooling_time(state, rad_eq_path == RadEqPath::EnergyConserving);
+            CoolingTimes cooling = characteristic_cooling_time(state, rad_eq_path == RadEqPath::EnergyConserving);
+            const fp_t tcv = cooling.percentile;
             fp_t mean_temp = mean_temperature(state);
             fmt::println("\n~~~~~~~~~~~~ Step {}, t = {:.6g} s ~~~~~~~~~~~~~~", ii, current_time);
-            fmt::println("t_cv = {:e} s", tcv);
+            fmt::println("t_cv = {:e} s (min over cells {:e} s)", tcv, cooling.minimum);
             fmt::println("mean temperature = {:e} K", mean_temp);
 
             // First step has no history to extrapolate from: Euler, seeding L^{n-1}.
