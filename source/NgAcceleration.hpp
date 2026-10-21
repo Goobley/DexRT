@@ -9,6 +9,9 @@ struct NgAccelArgs {
     i64 num_space;
     fp_t accel_tol = FP(5e-2);
     fp_t lower_tol = FP(2e-4);
+    /// Populations are distributed over the ranks (rather than replicated):
+    /// sum the Ng normal equations over them.
+    bool distributed = false;
 };
 
 struct NgAccelerator {
@@ -18,11 +21,13 @@ struct NgAccelerator {
     fp_t accel_tol = FP(5e-2); /// Accelerate if all of the previous steps are below this threshold
     fp_t lower_tol = FP(2e-4); /// Tolerance below which to disable acceleration
     yakl::SArray<fp_t, 1, num_steps> change_hist;
+    bool distributed = false;
 
     bool init(const NgAccelArgs& args) {
         pops = decltype(pops)("ng_pops", args.num_level, num_steps, args.num_space);
         accel_tol = args.accel_tol;
         lower_tol = args.lower_tol;
+        distributed = args.distributed;
         return true;
     }
 

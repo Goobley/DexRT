@@ -66,6 +66,7 @@ list(APPEND DEX_2D_SOURCE_FILES
 )
 list(APPEND DEX_SOURCE_FILES
     "source/main.cpp"
+    "source/StateSetup.cpp"
     ${DEX_2D_SOURCE_FILES}
 )
 list(APPEND DEX_RE_SOURCE_FILES

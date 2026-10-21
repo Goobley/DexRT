@@ -195,6 +195,21 @@ namespace DexImpl {
 #endif
 }
 
+/// Whether ExecutionSpace is a host backend. Tested on its memory space rather
+/// than host accessibility, which is also true of UVM/managed device memory.
+template <class ExecutionSpace=Kokkos::DefaultExecutionSpace>
+constexpr bool dex_is_host_space = std::is_same_v<typename ExecutionSpace::memory_space, Kokkos::HostSpace>;
+
+/// Team size for ExecutionSpace: the requested size on devices, 1 on host
+/// backends (where a team can't exceed the thread pool).
+template <class ExecutionSpace=Kokkos::DefaultExecutionSpace>
+inline int dex_team_size(int requested) {
+    if constexpr (dex_is_host_space<ExecutionSpace>) {
+        return 1;
+    }
+    return requested;
+}
+
 template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, bool DexFlatLoop=true, int N, class Lambda>
 inline void dex_parallel_for(const std::string& name, const FlatLoop<N>& loop, const Lambda& closure) {
     static_assert(N < 7, "Flat loops only supported for 1 <= N <= 6");

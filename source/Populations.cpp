@@ -415,7 +415,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
 
         Kokkos::parallel_for(
             "Stat Eq",
-            TeamPolicy(Nspace, std::min(square(num_level), 128)).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+            TeamPolicy(Nspace, dex_team_size(std::min(square(num_level), 128))).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
             KOKKOS_LAMBDA (const KTeam& team) {
                 const i64 ks = team.league_rank();
 
@@ -650,6 +650,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
 template <typename State>
 fp_t stat_eq(State* state, const StatEqOptions& args) {
 #ifdef HAVE_MPI
+    if (state->mpi_state.distributed) {
+        return stat_eq_impl<StatEqPrecision>(state, args);
+    }
     fp_t max_rel_change;
     if (state->mpi_state.rank == 0) {
         max_rel_change = stat_eq_impl<StatEqPrecision>(state, args);

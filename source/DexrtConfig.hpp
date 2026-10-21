@@ -241,7 +241,9 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     DexrtConfig& config = *cfg;
     DexrtOutputConfig out;
 
-    auto output = file["output"];
+    // NOTE(cmo): Always run (for the mode-dependent fixups below), even
+    // without an output section.
+    const YAML::Node output = file["output"] ? file["output"] : YAML::Node(YAML::NodeType::Map);
     if (output["sparse"]) {
         out.sparse = output["sparse"].as<bool>();
     }
@@ -452,9 +454,7 @@ inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file)
         } break;
     }
 
-    if (file["output"]) {
-        parse_and_update_dexrt_output_config(&config, file);
-    }
+    parse_and_update_dexrt_output_config(&config, file);
 
     parse_mip_config(&config, file);
 

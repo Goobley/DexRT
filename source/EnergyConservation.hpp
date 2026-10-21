@@ -12,7 +12,7 @@ inline fp_t simple_conserve_energy(State* state) {
         throw std::runtime_error("Calling conserve_energy without providing e_int at launch!");
     }
 #ifdef HAVE_MPI
-    if (state->mpi_state.rank == 0) {
+    if (state->mpi_state.rank == 0 || state->mpi_state.distributed) {
 #endif
         yakl::timer_start("e_int conservation");
         assert(state->have_h && "Requires H model to be present");
@@ -120,7 +120,9 @@ inline fp_t simple_conserve_energy(State* state) {
         yakl::timer_stop("e_int conservation");
 #ifdef HAVE_MPI
     }
-    MPI_Bcast(&max_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    if (!state->mpi_state.distributed) {
+        MPI_Bcast(&max_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    }
 #endif
     return max_change;
 }

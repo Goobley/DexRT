@@ -553,7 +553,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 
     Kokkos::parallel_for(
         "Charge Conservation",
-        TeamPolicy(num_space, std::min(square(num_eqn), 128)).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+        TeamPolicy(num_space, dex_team_size(std::min(square(num_eqn), 128))).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
         KOKKOS_LAMBDA (const KTeam& team) {
             const i64 ks = team.league_rank();
 
@@ -960,6 +960,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 template <typename State>
 fp_t nr_post_update(State* state, const NrPostUpdateOptions& args) {
 #ifdef HAVE_MPI
+    if (state->mpi_state.distributed) {
+        return nr_post_update_impl<StatEqPrecision>(state, args);
+    }
     fp_t max_rel_change;
     if (state->mpi_state.rank == 0) {
         max_rel_change = nr_post_update_impl<StatEqPrecision>(state, args);

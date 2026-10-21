@@ -73,6 +73,12 @@ bool NgAccelerator::accelerate(const State& state, fp_t change) {
         }
     );
     Kokkos::fence();
+#ifdef HAVE_MPI
+    if (distributed && state.mpi_state.num_ranks > 1) {
+        MPI_Allreduce(MPI_IN_PLACE, aa.data(), aa.size(), MPI_DOUBLE, MPI_SUM, state.mpi_state.comm);
+        MPI_Allreduce(MPI_IN_PLACE, bb.data(), bb.size(), MPI_DOUBLE, MPI_SUM, state.mpi_state.comm);
+    }
+#endif
 
     Kokkos::parallel_for(
         "Solve Ng matrices",

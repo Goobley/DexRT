@@ -4,7 +4,7 @@
 
 template <>
 template <class BlockMap>
-void BlockMapInit<2>::setup_dense<BlockMap>(BlockMap* map, Dims<2> dims) {
+void BlockMapInit<2>::setup_dense(BlockMap* map, Dims<2> dims) {
     constexpr i32 BLOCK_SIZE = map->BLOCK_SIZE;
     i32 x_size = dims.x;
     i32 z_size = dims.z;
@@ -50,7 +50,7 @@ void BlockMapInit<2>::setup_dense<BlockMap>(BlockMap* map, Dims<2> dims) {
 
 template <>
 template <class BlockMap, int mem_space>
-void BlockMapInit<2>::setup_sparse<BlockMap>(BlockMap* map, const AtmosphereNd<2, mem_space>& atmos, fp_t cutoff_temperature) {
+void BlockMapInit<2>::setup_sparse(BlockMap* map, const AtmosphereNd<2, mem_space>& atmos, fp_t cutoff_temperature) {
     static_assert(mem_space == yakl::memDevice, "setup_sparse in 2D expects the atmosphere to be stored in memDevice");
     constexpr i32 BLOCK_SIZE = map->BLOCK_SIZE;
     if (atmos.temperature.extent(0) % BLOCK_SIZE != 0 || atmos.temperature.extent(1) % BLOCK_SIZE != 0) {
@@ -141,7 +141,7 @@ void BlockMapInit<2>::setup_sparse<BlockMap>(BlockMap* map, const AtmosphereNd<2
 
 template <>
 template <class BlockMap>
-void BlockMapInit<3>::setup_dense<BlockMap>(BlockMap* map, Dims<3> dims) {
+void BlockMapInit<3>::setup_dense(BlockMap* map, Dims<3> dims) {
     constexpr i32 BLOCK_SIZE = map->BLOCK_SIZE;
     i32 x_size = dims.x;
     i32 y_size = dims.y;
@@ -197,7 +197,7 @@ void BlockMapInit<3>::setup_dense<BlockMap>(BlockMap* map, Dims<3> dims) {
 
 template <>
 template <class BlockMap, int mem_space>
-void BlockMapInit<3>::setup_sparse<BlockMap>(BlockMap* map, const AtmosphereNd<3, mem_space>& atmos, fp_t cutoff_temperature) {
+void BlockMapInit<3>::setup_sparse(BlockMap* map, const AtmosphereNd<3, mem_space>& atmos, fp_t cutoff_temperature) {
     static_assert(mem_space == yakl::memHost, "setup_sparse in 3D expects the atmosphere to be stored in memHost");
     constexpr i32 BLOCK_SIZE = map->BLOCK_SIZE;
     if (
