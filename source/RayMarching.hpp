@@ -297,11 +297,31 @@ YAKL_INLINE RadianceInterval<Alo> merge_intervals(
 ) {
     fp_t transmission = std::exp(-closer.tau);
     closer.I += transmission * further.I;
+    if constexpr (!std::is_same_v<Alo, DexEmpty>) {
+        closer.I_ext += transmission * further.I;
+    }
     if constexpr (STORE_TAU_CASCADES) {
         // NOTE(cmo): There will be nonsense in further.tau, so it's just not useful -- we're not storing anyway
         closer.tau += further.tau;
     }
     return closer;
+}
+
+template <typename Alo>
+YAKL_INLINE void accumulate_weighted_interval(
+    RadianceInterval<Alo>& acc,
+    const RadianceInterval<Alo>& ri,
+    fp_t weight
+) {
+    acc.I += weight * ri.I;
+    if constexpr (STORE_TAU_CASCADES) {
+        acc.tau += weight * ri.tau;
+    }
+    if constexpr (!std::is_same_v<Alo, DexEmpty>) {
+        acc.psi_star += weight * ri.psi_star;
+        acc.I_ext += weight * ri.I_ext;
+        acc.tr_final += weight * ri.tr_final;
+    }
 }
 
 struct Raymarch2dDynamicState {
@@ -618,12 +638,17 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             result.I = I_sample;
         }
     }
+    constexpr bool compute_alo = (RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>;
+    if constexpr (compute_alo) {
+        result.I_ext = result.I;
+        result.tr_final = FP(1.0);
+    }
     if (!marcher) {
         return result;
     }
 
     // NOTE(cmo): one_m_edt is also the ALO -- divide by chi_s for PsiStar_lambda_omegahat
-    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
+    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0), edt = FP(1.0);
     // NOTE(cmo): implicit assumption muy != 1.0
     const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
     fp_t lambda;
@@ -632,6 +657,10 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     }
     do {
         one_m_edt = FP(0.0);
+        edt = FP(1.0);
+        if constexpr (compute_alo) {
+            result.I_ext = result.I;
+        }
         if (s.can_sample()) {
             i32 u = s.curr_coord(0);
             i32 v = s.curr_coord(1);
@@ -656,15 +685,19 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             fp_t source_fn = eta_s / chi_s;
 
             fp_t tau_mu = tau * inv_sin_theta;
-            fp_t edt = std::exp(-tau_mu);
+            edt = std::exp(-tau_mu);
             one_m_edt = -std::expm1(-tau_mu);
             result.tau += tau_mu;
+            if constexpr (compute_alo) {
+                result.I_ext = result.I * edt;
+            }
             result.I = result.I * edt + source_fn * one_m_edt;
         }
     } while(s.step_through_grid());
 
-    if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
+    if constexpr (compute_alo) {
         result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
+        result.tr_final = edt;
     }
     return result;
 }

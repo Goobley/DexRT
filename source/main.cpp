@@ -492,6 +492,8 @@ void save_results(State& state, const CascadeState& casc_state, i32 num_iter) {
     }
     if (out_cfg.psi_star && casc_state.psi_star.initialized()) {
         nc.write(casc_state.psi_star, "psi_star", {"casc_shape"});
+        nc.write(casc_state.I_ext, "I_ext", {"casc_shape"});
+        nc.write(casc_state.tr_final, "transmission", {"casc_shape"});
     }
     if (out_cfg.active) {
         // NOTE(cmo): Currently active is always written dense

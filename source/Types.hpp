@@ -158,7 +158,13 @@ template <typename Alo=DexEmpty>
 struct RadianceInterval {
     fp_t I = FP(0.0);
     fp_t tau = FP(0.0);
-    Alo psi_star;
+    /// ALO terms of the probe's own segment: I = I_ext + psi_star * eta_probe,
+    /// and tr_final = exp(-dtau) = 1 - psi_star * chi_probe, as psi_star
+    /// \approx 1 in thick media, this helps form this term stably in lower
+    /// precision.
+    Alo psi_star{};
+    Alo I_ext{};
+    Alo tr_final{};
 };
 
 /// deprecated but needs removing from API

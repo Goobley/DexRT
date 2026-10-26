@@ -327,6 +327,8 @@ void dynamic_formal_sol_rc(
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
         if (casc_state.psi_star.initialized()) {
             casc_state.psi_star = FP(0.0);
+            casc_state.I_ext = FP(0.0);
+            casc_state.tr_final = FP(0.0);
         }
         CascadeCalcSubset subset{
             .la_start=la_start,

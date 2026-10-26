@@ -10,6 +10,8 @@ struct CascadeState {
     std::vector<Fp1d> i_cascades;
     std::vector<Fp1d> tau_cascades;
     Fp1d psi_star;
+    Fp1d I_ext;
+    Fp1d tr_final;
     ProbesToCompute2d probes_to_compute;
     MultiResMipChain mip_chain;
     LineSweepData line_sweep_data;
@@ -55,7 +57,9 @@ struct DeviceCascadeStateImpl {
     Fp1d cascade_tau;
     FpConst1d upper_I;
     FpConst1d upper_tau;
-    Fp1d psi_star; /// [ks, phi, wave, theta], but flattened. Index using Cascade operators (probe_lin_index) -- you need to fetch intensity at the same time anyway.
+    Fp1d psi_star; /// [ks, phi, wave, theta], but flattened. Index using Cascade operators (probe_lin_index)
+    Fp1d I_ext; /// Intensity up to the edge of the cell containing the probe (I = I_ext + psi_star * eta) -- you need to fetch intensity at the same time anyway.
+    Fp1d tr_final; /// transmission of the probe's own segment, as I_ext
 };
 typedef DeviceCascadeStateImpl<CascadeStorage> DeviceCascadeState;
 typedef DeviceCascadeStateImpl<CascadeStorage3d> DeviceCascadeState3d;

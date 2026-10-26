@@ -11,6 +11,8 @@ struct CascadeState3d {
     std::vector<Fp1d> tau_cascades;
     MultiResMipChain3d mip_chain;
     Fp1d psi_star;
+    Fp1d I_ext;
+    Fp1d tr_final;
     ProbesToCompute3d probes_to_compute;
 
     bool init(const State3d& state, int max_cascade);

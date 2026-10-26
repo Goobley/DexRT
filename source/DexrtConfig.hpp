@@ -396,6 +396,15 @@ inline void parse_mip_config(DexrtConfig* cfg, const YAML::Node& file) {
             config.mip_config.opacity_threshold = mip_config["opacity_threshold"].as<fp_t>();
         }
     }
+
+    // NOTE(cmo): Gamma uses C0's intensity and psi*, which must come from the
+    // probe's own cell, not a mip average over its neighbours.
+    if (config.mode == DexrtMode::NonLte && config.mip_config.mip_levels[0] != 0) {
+        throw std::runtime_error(fmt::format(
+            "mip_config.mip_levels[0] must be 0 for NonLte (got {}): Gamma needs C0 sampled at the probe's own cell.",
+            config.mip_config.mip_levels[0]
+        ));
+    }
 }
 
 inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file) {

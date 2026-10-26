@@ -268,6 +268,11 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
             result.I = I_sample;
         }
     }
+    constexpr bool compute_alo = (RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>;
+    if constexpr (compute_alo) {
+        result.I_ext = result.I;
+        result.tr_final = FP(1.0);
+    }
     if (!marcher) {
         return result;
     }
@@ -285,9 +290,13 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
         lambda = dyn_state.adata.wavelength(la);
     }
 
-    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0);
+    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0), edt = FP(1.0);
     do {
         one_m_edt = FP(0.0);
+        edt = FP(1.0);
+        if constexpr (compute_alo) {
+            result.I_ext = result.I;
+        }
         if (s.can_sample()) {
             i64 ks = idx_gen.idx(
                 s.current_mip_level,
@@ -371,16 +380,20 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
             }
             fp_t tau = chi_s * s.dt * distance_scale;
             fp_t source_fn = eta_s / chi_s;
-            fp_t edt = std::exp(-tau);
+            edt = std::exp(-tau);
             one_m_edt = -std::expm1(-tau);
             result.tau += tau;
+            if constexpr (compute_alo) {
+                result.I_ext = result.I * edt;
+            }
             result.I = result.I * edt + source_fn * one_m_edt;
         }
 
     } while (s.step_through_grid());
 
-    if constexpr ((RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>) {
+    if constexpr (compute_alo) {
         result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
+        result.tr_final = edt;
     }
     return result;
 }
@@ -507,10 +520,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_trilinear_interval_3d(
                 }
             }
             RadianceInterval<Alo> merged = merge_intervals(ri, upper_interp);
-            interp.I += weights(tri_idx) * merged.I;
-            if constexpr (STORE_TAU_CASCADES) {
-                interp.tau += weights(tri_idx) * merged.tau;
-            }
+            accumulate_weighted_interval(interp, merged, weights(tri_idx));
         }
     } else {
         interp = multi_level_dda_raymarch_3d(args);
@@ -603,6 +613,8 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
     };
     if constexpr (compute_alo) {
         dev_casc_state.psi_star = casc_state.psi_star;
+        dev_casc_state.I_ext = casc_state.I_ext;
+        dev_casc_state.tr_final = casc_state.tr_final;
     }
     DeviceBoundaries boundaries_h{
         .boundary = state.boundary,
@@ -694,6 +706,8 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
             constexpr bool dev_compute_alo = bool(RcMode & RC_COMPUTE_ALO);
             if constexpr (dev_compute_alo) {
                 dev_casc_state.psi_star(lin_idx) = ri.psi_star;
+                dev_casc_state.I_ext(lin_idx) = ri.I_ext;
+                dev_casc_state.tr_final(lin_idx) = ri.tr_final;
             }
         }
     );
@@ -785,6 +799,8 @@ void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_s
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
         if (casc_state.psi_star.initialized()) {
             casc_state.psi_star = FP(0.0);
+            casc_state.I_ext = FP(0.0);
+            casc_state.tr_final = FP(0.0);
         }
         dynamic_formal_sol_rc_3d_subset(state, casc_state, lambda_iterate, la, subset_idx);
         if (casc_state.psi_star.initialized()) {

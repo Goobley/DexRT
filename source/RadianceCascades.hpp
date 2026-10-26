@@ -169,10 +169,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
                 }
             }
             RadianceInterval<Alo> merged = merge_intervals(ri, upper_interp);
-            interp.I += weights(bilin) * merged.I;
-            if constexpr (STORE_TAU_CASCADES) {
-                interp.tau += weights(bilin) * merged.tau;
-            }
+            accumulate_weighted_interval(interp, merged, weights(bilin));
         }
     } else {
         interp = multi_level_dda_raymarch_2d<RcMode, Bc>(
@@ -470,6 +467,8 @@ inline void parallax_fix_inner_merge(
     CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
     i64 spatial_bounds = probe_coord_lookup.num_active_probes();
 
+    // NOTE(cmo): Doesn't update psi_star, I_ext, or tr_final to match the re-merged I,
+    // so these aren't consistent for Gamma when applied to C0.
     // TODO(cmo): Pre-allocate these somewhere.
     Fp1d I_temp = dev_casc_state.cascade_I.createDeviceObject();
     Fp1d tau_temp = dev_casc_state.cascade_tau.createDeviceObject();
@@ -649,6 +648,8 @@ void cascade_i_25d(
     };
     if constexpr (compute_alo) {
         dev_casc_state.psi_star = casc_state.psi_star;
+        dev_casc_state.I_ext = casc_state.I_ext;
+        dev_casc_state.tr_final = casc_state.tr_final;
     }
 
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
@@ -765,11 +766,7 @@ void cascade_i_25d(
                     } else {
                         dispatch_outer(ZeroBc{});
                     }
-                    average_ri.I += sample_weight * ri.I;
-                    average_ri.tau += sample_weight * ri.tau;
-                    if constexpr (dev_compute_alo) {
-                        average_ri.psi_star += sample_weight * ri.psi_star;
-                    }
+                    accumulate_weighted_interval(average_ri, ri, sample_weight);
                 }
 
                 ProbeIndex probe_idx{
@@ -787,6 +784,8 @@ void cascade_i_25d(
                 }
                 if constexpr (dev_compute_alo) {
                     dev_casc_state.psi_star(lin_idx) = average_ri.psi_star;
+                    dev_casc_state.I_ext(lin_idx) = average_ri.I_ext;
+                    dev_casc_state.tr_final(lin_idx) = average_ri.tr_final;
                 }
             }
         );
