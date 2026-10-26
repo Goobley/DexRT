@@ -18,17 +18,14 @@ struct GammaAccumState {
     int64_t k;
 };
 
-/// Add the RH92 terms for transition (i, j): Gamma(i, j) gets local * Uji +
-/// Vji * I_eff and Gamma(j, i) gets Vij * I_eff, weighted by wlamu, with
-/// I_eff = I - psi* eta and local = 1 - psi* chi.
 struct GammaTerms {
     GammaFp ij;
     GammaFp ji;
 };
 
-/// add_gamma_terms' increments of Gamma(i, j) and Gamma(j, i).
-YAKL_INLINE GammaTerms gamma_terms(const UV& uv, fp_t wlamu, fp_t I_eff, fp_t local) {
-    fp_t integrand = local * uv.Uji + uv.Vji * I_eff;
+YAKL_INLINE GammaTerms gamma_terms(const UV& uv, fp_t wlamu, fp_t I_eff, fp_t one_m_psi_chi) {
+    // I_eff = I - psi* eta and one_m_psi_chi = 1 - psi* chi.
+    fp_t integrand = one_m_psi_chi * uv.Uji + uv.Vji * I_eff;
     const GammaFp G_ij = GammaFp(integrand) * GammaFp(wlamu);
     integrand = uv.Vij * I_eff;
     const GammaFp G_ji = GammaFp(integrand) * GammaFp(wlamu);
@@ -36,9 +33,9 @@ YAKL_INLINE GammaTerms gamma_terms(const UV& uv, fp_t wlamu, fp_t I_eff, fp_t lo
 }
 
 template <bool atomic>
-YAKL_INLINE void add_gamma_terms(const GammaAccumState& args, fp_t I_eff, fp_t local) {
+YAKL_INLINE void add_gamma_terms(const GammaAccumState& args, fp_t I_eff, fp_t one_m_psi_chi) {
     JasUnpack(args, uv, wlamu, Gamma, i, j, k);
-    const GammaTerms terms = gamma_terms(uv, wlamu, I_eff, local);
+    const GammaTerms terms = gamma_terms(uv, wlamu, I_eff, one_m_psi_chi);
     const GammaFp G_ij = terms.ij;
     const GammaFp G_ji = terms.ji;
     if constexpr (atomic) {
@@ -50,9 +47,6 @@ YAKL_INLINE void add_gamma_terms(const GammaAccumState& args, fp_t I_eff, fp_t l
     }
 }
 
-/**
- * Add the partial integration of Gamma following the RH92 same-preconditioning approach
-*/
 template <bool atomic=true>
 YAKL_INLINE void add_to_gamma(const GammaAccumState& args) {
     JasUnpack(args, eta, chi, I, psi_star);

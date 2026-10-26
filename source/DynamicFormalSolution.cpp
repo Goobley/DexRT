@@ -20,7 +20,6 @@ void dynamic_compute_gamma(
 ) {
     JasUnpack(subset, la_start, la_end, subset_idx);
     JasUnpack(state, phi, pops, adata, wphi, mr_block_map);
-    const auto& level_stage_idx = state.rate_diag.level_stage_idx;
     using namespace ConstantsFP;
     const auto flat_atmos = flatten<const fp_t>(state.atmos);
 
@@ -38,124 +37,96 @@ void dynamic_compute_gamma(
     int wave_batch = la_end - la_start;
     wave_batch = std::min(wave_batch, ray_subset.wave_batch);
     yakl::SArray<fp_t, 1, WAVE_BATCH> wl_ray_weights(FP(0.0));
-    // NOTE(cmo): We can drop 4pi/hc from the wavelength/angle integral weight
-    // if we divide U and V by hc/4pi. For lines, these terms normally cancel:
-    // for continua it's an extra operation. In both cases, to construct eta and
-    // chi, we need to multiply those terms by the populations (as usual), but
-    // _also_ hc/4pi .
-    constexpr bool include_4pi_hc = GAMMA_INCLUDE_4PI_HC;
-    constexpr fp_t hc_4pi = hc_kJ_nm / four_pi;
     for (int wave = 0; wave < wave_batch; ++wave) {
-        const int la = la_start + wave;
-        const auto& wavelength_h = state.adata_host.wavelength;
-        fp_t lambda = wavelength_h(la);
-        fp_t hc_4pi_eff = FP(1.0);
-        if (include_4pi_hc) {
-            hc_4pi_eff *= hc_4pi;
-        }
-        fp_t wl_weight = lambda / hc_4pi_eff * state.adata_host.wavelength_bin(la);
-        const fp_t wl_ray_weight = wl_weight / fp_t(c0_dirs_to_average<RcMode>());
-        wl_ray_weights(wave) = wl_ray_weight;
+        wl_ray_weights(wave) = gamma_wavelength_weight(state.adata_host, la_start + wave) / fp_t(c0_dirs_to_average<RcMode>());
     }
 
-    for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
-        const auto& Gamma = state.Gamma[ia];
-        const auto& psi_star = casc_state.psi_star;
-        const auto& I = casc_state.i_cascades[0];
-        const auto& incl_quad = state.incl_quad;
-        // NOTE(claude): Optional diagnostics -- these stay default constructed
-        // (and every use of them guarded by initialized()) unless requested.
-        const auto& diag = state.rate_diag;
-        const GammaMat rad_rates = diag.radiative_rates.empty() ? GammaMat() : diag.radiative_rates[ia];
-        const ContEnergyMat cont_absorb = diag.cont_energy_absorb.empty() ? ContEnergyMat() : diag.cont_energy_absorb[ia];
-        const ContEnergyMat cont_emit = diag.cont_energy_emit.empty() ? ContEnergyMat() : diag.cont_energy_emit[ia];
+    const GammaAccumArrayState store = gamma_accum_array_state(state.Gamma, &state.rate_diag);
+    const auto& psi_star = casc_state.psi_star;
+    const auto& I = casc_state.i_cascades[0];
+    const auto& incl_quad = state.incl_quad;
+    dex_parallel_for(
+        "compute Gamma",
+        FlatLoop<2>(
+            spatial_bounds.dim(0),
+            spatial_bounds.dim(1)
+        ),
+        YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
+            IdxGen idx_gen(mr_block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            Coord2 cell_coord = idx_gen.loop_coord(tile_idx, block_idx);
+            ivec2 probe_coord;
+            probe_coord(0) = cell_coord.x;
+            probe_coord(1) = cell_coord.z;
 
-        dex_parallel_for(
-            "compute Gamma",
-            FlatLoop<2>(
-                spatial_bounds.dim(0),
-                spatial_bounds.dim(1)
-            ),
-            YAKL_LAMBDA (i64 tile_idx, i32 block_idx) {
-                IdxGen idx_gen(mr_block_map);
-                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-                Coord2 cell_coord = idx_gen.loop_coord(tile_idx, block_idx);
-                ivec2 probe_coord;
-                probe_coord(0) = cell_coord.x;
-                probe_coord(1) = cell_coord.z;
+            AtmosPointParams local_atmos;
+            local_atmos.temperature = flat_atmos.temperature(ks);
+            local_atmos.ne = flat_atmos.ne(ks);
+            local_atmos.vturb = flat_atmos.vturb(ks);
+            local_atmos.nhtot = flat_atmos.nh_tot(ks);
+            local_atmos.nh0 = flat_atmos.nh0(ks);
 
-                AtmosPointParams local_atmos;
-                local_atmos.temperature = flat_atmos.temperature(ks);
-                local_atmos.ne = flat_atmos.ne(ks);
-                local_atmos.vturb = flat_atmos.vturb(ks);
-                local_atmos.nhtot = flat_atmos.nh_tot(ks);
-                local_atmos.nh0 = flat_atmos.nh0(ks);
+            for (
+                int wave = ray_subset.start_wave_batch;
+                wave < ray_subset.start_wave_batch + wave_batch;
+                ++wave
+            ) {
+                const int la = la_start + wave;
+                const auto active_set = slice_active_set(adata, la);
+                const auto active_cont_set = slice_active_cont_set(adata, la);
+                const GammaCell cell{
+                    .adata = adata,
+                    .phi = phi,
+                    .pops = pops,
+                    .lte_scratch = lte_scratch,
+                    .wphi = wphi,
+                    .store = store,
+                    .active_set = active_set,
+                    .active_cont_set = active_cont_set,
+                    .ks = ks,
+                    .la = la,
+                    .wl_ray_weight = wl_ray_weights(wave)
+                };
+                GammaRayAngularIntegral pre_int;
 
                 for (
-                    int wave = ray_subset.start_wave_batch;
-                    wave < ray_subset.start_wave_batch + wave_batch;
-                    ++wave
+                    int phi_idx = ray_subset.start_flat_dirs;
+                    phi_idx < ray_subset.start_flat_dirs + ray_subset.num_flat_dirs;
+                    phi_idx += 1
                 ) {
-                    const int la = la_start + wave;
-                    const auto active_set = slice_active_set(adata, la);
-                    const auto active_cont_set = slice_active_cont_set(adata, la);
-
                     for (
-                        int phi_idx = ray_subset.start_flat_dirs;
-                        phi_idx < ray_subset.start_flat_dirs + ray_subset.num_flat_dirs;
-                        phi_idx += 1
+                        int theta_idx = ray_subset.start_incl;
+                        theta_idx < ray_subset.start_incl + ray_subset.num_incl;
+                        theta_idx += 1
                     ) {
-                        for (
-                            int theta_idx = ray_subset.start_incl;
-                            theta_idx < ray_subset.start_incl + ray_subset.num_incl;
-                            theta_idx += 1
-                        ) {
-                            const ProbeIndex probe_idx{
-                                .coord=probe_coord,
-                                .dir=phi_idx,
-                                .incl=theta_idx,
-                                .wave=wave
-                            };
-                            RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
-                            const fp_t intensity = probe_fetch<RcMode>(I, ray_set, probe_idx);
-                            const fp_t psi_star_entry = probe_fetch<RcMode>(psi_star, ray_set, probe_idx);
+                        const ProbeIndex probe_idx{
+                            .coord=probe_coord,
+                            .dir=phi_idx,
+                            .incl=theta_idx,
+                            .wave=wave
+                        };
+                        RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
+                        const GammaRay gamma_ray{
+                            .I = probe_fetch<RcMode>(I, ray_set, probe_idx),
+                            .psi_star = probe_fetch<RcMode>(psi_star, ray_set, probe_idx),
+                            .weight = incl_quad.wmuy(theta_idx)
+                        };
 
-                            vec3 mu = inverted_mu(ray, incl_quad.muy(probe_idx.incl));
-                            local_atmos.vel = (
-                                    flat_atmos.vx(ks) * mu(0)
-                                    + flat_atmos.vy(ks) * mu(1)
-                                    + flat_atmos.vz(ks) * mu(2)
-                            );
-
-                            accumulate_gamma_ray(GammaRayArgs{
-                                .ia = ia,
-                                .ks = ks,
-                                .la = la,
-                                .adata = adata,
-                                .phi = phi,
-                                .pops = pops,
-                                .lte_scratch = lte_scratch,
-                                .wphi = wphi,
-                                .local_atmos = local_atmos,
-                                .active_set = active_set,
-                                .active_cont_set = active_cont_set,
-                                .intensity = intensity,
-                                .psi_star = psi_star_entry,
-                                .wl_ray_weight = wl_ray_weights(wave),
-                                .dir_weight = incl_quad.wmuy(theta_idx),
-                                .Gamma = Gamma,
-                                .rad_rates = rad_rates,
-                                .cont_absorb = cont_absorb,
-                                .cont_emit = cont_emit,
-                                .level_stage_idx = level_stage_idx
-                            });
-                        }
+                        vec3 mu = inverted_mu(ray, incl_quad.muy(probe_idx.incl));
+                        local_atmos.vel = (
+                                flat_atmos.vx(ks) * mu(0)
+                                + flat_atmos.vy(ks) * mu(1)
+                                + flat_atmos.vz(ks) * mu(2)
+                        );
+                        accumulate_gamma_ray_lines(cell, local_atmos, gamma_ray);
+                        pre_int.add(gamma_ray);
                     }
                 }
+                accumulate_gamma_continua(cell, local_atmos, pre_int);
             }
-        );
-        yakl::fence();
-    }
+        }
+    );
+    yakl::fence();
 }
 
 template <int RcMode = RC_flags_storage_2d() | RC_DYNAMIC>

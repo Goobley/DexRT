@@ -135,90 +135,81 @@ void dynamic_compute_gamma(
     const int num_cascades = casc_state.num_cascades;
     const auto spatial_bounds = mr_block_map.block_map.loop_bounds();
     const fp_t wl_ray_weight = gamma_wavelength_weight(state.adata_host, la) / fp_t(ray_set.num_az_rays * ray_set.num_polar_rays);
-    // NOTE(cmo): No rate diagnostics in 3D, these are uninitialised.
-    const GammaMat rad_rates;
-    const ContEnergyMat cont_absorb;
-    const ContEnergyMat cont_emit;
-    const yakl::Array<i32, 1, yakl::memDevice> level_stage_idx;
-    for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
-        const auto& Gamma = state.Gamma[ia];
-        const auto& psi_star = casc_state.psi_star;
-        const auto& I = casc_state.i_cascades[0];
-        dex_parallel_for(
-            "Compute Gamma",
-            FlatLoop<2>(
-                spatial_bounds.dim(0),
-                spatial_bounds.dim(1)
-            ),
-            KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
-                IdxGen3d idx_gen(mr_block_map);
-                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-                Coord3 cell_coord = idx_gen.loop_coord(tile_idx, block_idx);
-                ivec3 probe_coord;
-                probe_coord(0) = cell_coord.x;
-                probe_coord(1) = cell_coord.y;
-                probe_coord(2) = cell_coord.z;
+    // NOTE(cmo): No rate diagnostics in 3D.
+    const GammaAccumArrayState out = gamma_accum_array_state(state.Gamma, nullptr);
+    const auto& psi_star = casc_state.psi_star;
+    const auto& I = casc_state.i_cascades[0];
+    dex_parallel_for(
+        "Compute Gamma",
+        FlatLoop<2>(
+            spatial_bounds.dim(0),
+            spatial_bounds.dim(1)
+        ),
+        KOKKOS_LAMBDA (i64 tile_idx, i32 block_idx) {
+            IdxGen3d idx_gen(mr_block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            Coord3 cell_coord = idx_gen.loop_coord(tile_idx, block_idx);
+            ivec3 probe_coord;
+            probe_coord(0) = cell_coord.x;
+            probe_coord(1) = cell_coord.y;
+            probe_coord(2) = cell_coord.z;
 
-                AtmosPointParams local_atmos;
-                local_atmos.temperature = flatmos.temperature(ks);
-                local_atmos.ne = flatmos.ne(ks);
-                local_atmos.vturb = flatmos.vturb(ks);
-                local_atmos.nhtot = flatmos.nh_tot(ks);
-                local_atmos.nh0 = flatmos.nh0(ks);
-                const auto active_set = slice_active_set(adata, la);
-                const auto active_cont_set = slice_active_cont_set(adata, la);
+            AtmosPointParams local_atmos;
+            local_atmos.temperature = flatmos.temperature(ks);
+            local_atmos.ne = flatmos.ne(ks);
+            local_atmos.vturb = flatmos.vturb(ks);
+            local_atmos.nhtot = flatmos.nh_tot(ks);
+            local_atmos.nh0 = flatmos.nh0(ks);
+            const auto active_set = slice_active_set(adata, la);
+            const auto active_cont_set = slice_active_cont_set(adata, la);
+            const GammaCell cell{
+                .adata = adata,
+                .phi = phi,
+                .pops = pops,
+                .lte_scratch = lte_scratch,
+                .wphi = wphi,
+                .store = out,
+                .active_set = active_set,
+                .active_cont_set = active_cont_set,
+                .ks = ks,
+                .la = la,
+                .wl_ray_weight = wl_ray_weight
+            };
+            GammaRayAngularIntegral angle_integral;
 
+            for (
+                int theta_idx = ray_subset.start_polar_rays;
+                theta_idx < ray_subset.start_polar_rays + ray_subset.num_polar_rays;
+                ++theta_idx
+            ) {
                 for (
-                    int theta_idx = ray_subset.start_polar_rays;
-                    theta_idx < ray_subset.start_polar_rays + ray_subset.num_polar_rays;
-                    ++theta_idx
+                    int phi_idx = ray_subset.start_az_rays;
+                    phi_idx < ray_subset.start_az_rays + ray_subset.num_az_rays;
+                    ++phi_idx
                 ) {
-                    for (
-                        int phi_idx = ray_subset.start_az_rays;
-                        phi_idx < ray_subset.start_az_rays + ray_subset.num_az_rays;
-                        ++phi_idx
-                    ) {
-                        const ProbeIndex3d probe_idx{
-                            .coord=probe_coord,
-                            .polar = theta_idx,
-                            .az = phi_idx
-                        };
-                        RaySegment<3> ray = probe_ray(ray_set, num_cascades, 0, probe_idx);
-                        const fp_t intensity = probe_fetch<RcMode>(I, ray_set, probe_idx);
-                        const fp_t psi_star_entry = probe_fetch<RcMode>(psi_star, ray_set, probe_idx);
-                        local_atmos.vel = (
-                                flatmos.vx(ks) * ray.d(0)
-                                + flatmos.vy(ks) * ray.d(1)
-                                + flatmos.vz(ks) * ray.d(2)
-                        );
-
-                        accumulate_gamma_ray(GammaRayArgs{
-                            .ia = ia,
-                            .ks = ks,
-                            .la = la,
-                            .adata = adata,
-                            .phi = phi,
-                            .pops = pops,
-                            .lte_scratch = lte_scratch,
-                            .wphi = wphi,
-                            .local_atmos = local_atmos,
-                            .active_set = active_set,
-                            .active_cont_set = active_cont_set,
-                            .intensity = intensity,
-                            .psi_star = psi_star_entry,
-                            .wl_ray_weight = wl_ray_weight,
-                            .dir_weight = FP(1.0),
-                            .Gamma = Gamma,
-                            .rad_rates = rad_rates,
-                            .cont_absorb = cont_absorb,
-                            .cont_emit = cont_emit,
-                            .level_stage_idx = level_stage_idx
-                        });
-                    }
+                    const ProbeIndex3d probe_idx{
+                        .coord=probe_coord,
+                        .polar = theta_idx,
+                        .az = phi_idx
+                    };
+                    RaySegment<3> ray = probe_ray(ray_set, num_cascades, 0, probe_idx);
+                    const GammaRay gamma_ray{
+                        .I = probe_fetch<RcMode>(I, ray_set, probe_idx),
+                        .psi_star = probe_fetch<RcMode>(psi_star, ray_set, probe_idx),
+                        .weight = FP(1.0)
+                    };
+                    local_atmos.vel = (
+                            flatmos.vx(ks) * ray.d(0)
+                            + flatmos.vy(ks) * ray.d(1)
+                            + flatmos.vz(ks) * ray.d(2)
+                    );
+                    accumulate_gamma_ray_lines(cell, local_atmos, gamma_ray);
+                    angle_integral.add(gamma_ray);
                 }
             }
-        );
-    }
+            accumulate_gamma_continua(cell, local_atmos, angle_integral);
+        }
+    );
     Kokkos::fence();
 }
 

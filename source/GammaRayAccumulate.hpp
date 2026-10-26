@@ -39,214 +39,220 @@ inline fp_t gamma_wavelength_weight(const AtomicData<fp_t, yakl::memHost>& adata
     return adata_host.wavelength(la) / hc_4pi_eff * adata_host.wavelength_bin(la);
 }
 
-struct GammaRayArgs {
-    int ia;
-    i64 ks;
-    int la;
+constexpr int GAMMA_MAX_ATOMS = 8;
+
+/// Repack Gamma (and diagnostics if requested) for each atom, so it can be
+/// accumulated in one kernel
+struct GammaAccumArrayState {
+    GammaMat Gamma[GAMMA_MAX_ATOMS];
+    GammaMat rad_rates[GAMMA_MAX_ATOMS];
+    ContEnergyMat cont_absorb[GAMMA_MAX_ATOMS];
+    ContEnergyMat cont_emit[GAMMA_MAX_ATOMS];
+    yakl::Array<i32, 1, yakl::memDevice> level_stage_idx;
+};
+
+inline GammaAccumArrayState gamma_accum_array_state(const std::vector<GammaMat>& Gamma, const RateDiagnostics* diag) {
+    if (Gamma.size() > GAMMA_MAX_ATOMS) {
+        throw std::runtime_error(fmt::format("At most {} active atoms are supported (GAMMA_MAX_ATOMS).", GAMMA_MAX_ATOMS));
+    }
+    GammaAccumArrayState result;
+    for (int ia = 0; ia < Gamma.size(); ++ia) {
+        result.Gamma[ia] = Gamma[ia];
+        if (diag) {
+            if (!diag->radiative_rates.empty()) {
+                result.rad_rates[ia] = diag->radiative_rates[ia];
+            }
+            if (!diag->cont_energy_absorb.empty()) {
+                result.cont_absorb[ia] = diag->cont_energy_absorb[ia];
+                result.cont_emit[ia] = diag->cont_energy_emit[ia];
+            }
+        }
+    }
+    if (diag) {
+        result.level_stage_idx = diag->level_stage_idx;
+    }
+    return result;
+}
+
+/// All the data shared between different directional rays in a cell for the Gamma accumulation
+struct GammaCell {
     const AtomicData<fp_t>& adata;
     const VoigtProfile<fp_t, false>& phi;
     const Fp2d& pops;
     const Fp2d& lte_scratch;
     const Fp2d& wphi;
-    const AtmosPointParams& local_atmos; /// with vel projected along this ray
+    const GammaAccumArrayState& store;
     const yakl::Array<const u16, 1, yakl::memDevice>& active_set;
     const yakl::Array<const u16, 1, yakl::memDevice>& active_cont_set;
-    fp_t intensity;
-    fp_t psi_star;
-    fp_t wl_ray_weight; /// wlamu, weight of wavelength and ray
-    fp_t dir_weight; /// any additional angular weight (e.g. wmuy)
-    const GammaMat& Gamma;
-    const GammaMat& rad_rates; /// optional
-    const ContEnergyMat& cont_absorb; /// optional
-    const ContEnergyMat& cont_emit; /// optional
-    const yakl::Array<i32, 1, yakl::memDevice>& level_stage_idx;
+    i64 ks;
+    int la;
+    fp_t wl_ray_weight; /// ray weight over wavelength and angle, component common to all rays (i.e. in RC everything but wmuy in 2D)
 };
 
-/// Add one line's contribution (UV computed by the caller) to Gamma (and the
-/// optional radiative rates) for one ray at one wavelength and cell.
-YAKL_INLINE void accumulate_gamma_line(const GammaRayArgs& args, int kr, const UV& uv) {
-    JasUnpack(args, ia, ks, adata, pops, wphi, intensity, wl_ray_weight, dir_weight, Gamma, rad_rates);
-    const fp_t psi_star_entry = args.psi_star;
-    using namespace ConstantsFP;
-    constexpr bool include_4pi_hc = GAMMA_INCLUDE_4PI_HC;
-    constexpr fp_t hc_4pi = hc_kJ_nm / four_pi;
-    const int offset = adata.level_start(ia);
-    const auto& l = adata.lines(kr);
+struct GammaRay {
+    fp_t I;
+    fp_t psi_star;
+    fp_t weight; /// wmuy in 2D RC
+};
 
-    fp_t eta = pops(offset + l.j, ks) * uv.Uji;
-    fp_t chi = pops(offset + l.i, ks) * uv.Vij - pops(offset + l.j, ks) * uv.Vji;
-    if (!include_4pi_hc) {
-        // NOTE(cmo): If we have dropped the hc/4pi
-        // from U and V, these still need the
-        // dimensioning
-        eta *= hc_4pi;
-        chi *= hc_4pi;
+/// Angular integration for a set (or subset) of rays at a wavelength.
+/// Pre-integrating these quantities for continua lets us have considerably
+/// fewer writes into Gamma. If we're integrated over the whole quadrature w
+/// sums to 1, otherwise, it's a fraction of 1.
+struct GammaRayAngularIntegral {
+    fp_t w = FP(0.0);
+    fp_t I = FP(0.0);
+    fp_t psi_star = FP(0.0);
+
+    YAKL_INLINE void add(const GammaRay& ray) {
+        w += ray.weight;
+        I += ray.weight * ray.I;
+        psi_star += ray.weight * ray.psi_star;
     }
-    chi += FP(1e-20);
-    const fp_t wlamu = wl_ray_weight * dir_weight * wphi(kr, ks);
+};
 
-    add_to_gamma<false>(GammaAccumState{
-        .eta = eta,
-        .chi = chi,
-        .uv = uv,
-        .I = intensity,
-        .psi_star = psi_star_entry,
-        .wlamu = wlamu,
-        .Gamma = Gamma,
-        .i = l.i,
-        .j = l.j,
-        .k = ks
-    });
+YAKL_INLINE EmisOpac gamma_eta_chi(const UV& uv, fp_t ni, fp_t nj) {
+    using namespace ConstantsFP;
+    constexpr fp_t hc_4pi = hc_kJ_nm / four_pi;
+    EmisOpac result{
+        .eta = nj * uv.Uji,
+        .chi = ni * uv.Vij - nj * uv.Vji
+    };
+    if (!GAMMA_INCLUDE_4PI_HC) {
+        // NOTE(cmo): If we have dropped the hc/4pi from U and V, these still
+        // need the dimensioning.
+        result.eta *= hc_4pi;
+        result.chi *= hc_4pi;
+    }
+    result.chi += FP(1e-20);
+    return result;
+}
 
-    if (rad_rates.initialized()) {
-        // NOTE(claude): psi_star = 0 removes
-        // preconditioning leaving the true
-        // radiative rates.
+/// Add every active line's contribution (all atoms) for one ray. Non-atomic.
+YAKL_INLINE void accumulate_gamma_ray_lines(const GammaCell& cell, const AtmosPointParams& atmos, const GammaRay& ray) {
+    JasUnpack(cell, adata, pops, wphi, store, active_set, ks);
+    const EmisOpacState<> emis_opac{
+        .adata = adata,
+        .profile = cell.phi,
+        .la = cell.la,
+        .n = pops,
+        .n_star_scratch = cell.lte_scratch,
+        .k = ks,
+        .atmos = atmos
+    };
+    for (int kra = 0; kra < active_set.extent(0); ++kra) {
+        const int kr = active_set(kra);
+        const auto& l = adata.lines(kr);
+        const int offset = adata.level_start(l.atom);
+        const UV uv = compute_uv_line(
+            emis_opac,
+            kr,
+            UvOptions{.divide_by_hc_4pi = !GAMMA_INCLUDE_4PI_HC}
+        );
+        const EmisOpac eta_chi = gamma_eta_chi(uv, pops(offset + l.i, ks), pops(offset + l.j, ks));
+        const fp_t wlamu = cell.wl_ray_weight * ray.weight * wphi(kr, ks);
         add_to_gamma<false>(GammaAccumState{
-            .eta = eta,
-            .chi = chi,
+            .eta = eta_chi.eta,
+            .chi = eta_chi.chi,
             .uv = uv,
-            .I = intensity,
-            .psi_star = FP(0.0),
+            .I = ray.I,
+            .psi_star = ray.psi_star,
             .wlamu = wlamu,
-            .Gamma = rad_rates,
+            .Gamma = store.Gamma[l.atom],
             .i = l.i,
             .j = l.j,
             .k = ks
         });
+
+        const GammaMat& rad_rates = store.rad_rates[l.atom];
+        if (rad_rates.initialized()) {
+            // NOTE(cmo): psi_star = 0 => the true radiative rates.
+            add_to_gamma<false>(GammaAccumState{
+                .eta = eta_chi.eta,
+                .chi = eta_chi.chi,
+                .uv = uv,
+                .I = ray.I,
+                .psi_star = FP(0.0),
+                .wlamu = wlamu,
+                .Gamma = rad_rates,
+                .i = l.i,
+                .j = l.j,
+                .k = ks
+            });
+        }
     }
 }
 
-/// Add one continuum's contribution to Gamma (and the optional radiative rates
-/// and continuum energy balance) for one ray at one wavelength and cell.
-YAKL_INLINE void accumulate_gamma_cont(const GammaRayArgs& args, int kr) {
-    JasUnpack(args, ia, ks, la, adata, phi, pops, lte_scratch, local_atmos);
-    JasUnpack(args, intensity, wl_ray_weight, dir_weight);
-    JasUnpack(args, Gamma, rad_rates, cont_absorb, cont_emit, level_stage_idx);
-    const fp_t psi_star_entry = args.psi_star;
+/// Add every active continuum's contribution (all atoms) from the preintegrated angular
+/// integral of the rays through the cell Non-atomic.
+YAKL_INLINE void accumulate_gamma_continua(const GammaCell& cell, const AtmosPointParams& atmos, const GammaRayAngularIntegral& pre_int) {
     using namespace ConstantsFP;
-    constexpr bool include_4pi_hc = GAMMA_INCLUDE_4PI_HC;
-    constexpr fp_t hc_4pi = hc_kJ_nm / four_pi;
-    const int offset = adata.level_start(ia);
-    const auto& cont = adata.continua(kr);
-
-    const UV uv = compute_uv_cont(
-        EmisOpacState<>{
-            .adata = adata,
-            .profile = phi,
-            .la = la,
-            .n = pops,
-            .n_star_scratch = lte_scratch,
-            .k = ks,
-            .atmos = local_atmos
-        },
-        kr,
-        UvOptions{
-            .divide_by_hc_4pi = !include_4pi_hc
-        }
-    );
-
-    fp_t eta = pops(offset + cont.j, ks) * uv.Uji;
-    fp_t chi = pops(offset + cont.i, ks) * uv.Vij - pops(offset + cont.j, ks) * uv.Vji;
-    if (!include_4pi_hc) {
-        // NOTE(cmo): If we have dropped the hc/4pi
-        // from U and V, these still need the
-        // dimensioning
-        eta *= hc_4pi;
-        chi *= hc_4pi;
-    }
-    chi += FP(1e-20);
-
-    const fp_t cont_wlamu = wl_ray_weight * dir_weight * cont_edge_bin_factor(adata, cont, la);
-    add_to_gamma<false>(GammaAccumState{
-        .eta = eta,
-        .chi = chi,
-        .uv = uv,
-        .I = intensity,
-        .psi_star = psi_star_entry,
-        .wlamu = cont_wlamu,
-        .Gamma = Gamma,
-        .i = cont.i,
-        .j = cont.j,
-        .k = ks
-    });
-
-    if (rad_rates.initialized()) {
-        add_to_gamma<false>(GammaAccumState{
-            .eta = eta,
-            .chi = chi,
-            .uv = uv,
-            .I = intensity,
-            .psi_star = FP(0.0),
-            .wlamu = cont_wlamu,
-            .Gamma = rad_rates,
-            .i = cont.i,
-            .j = cont.j,
-            .k = ks
-        });
-    }
-
-    if (cont_absorb.initialized()) {
-        // NOTE(claude): cont_wlamu * uv.V is the
-        // number rate integrand, 4pi sigma dlambda
-        // / (h nu), under either setting of
-        // include_4pi_hc: the 4pi/hc sits in V when
-        // it is dropped from the weights, and in
-        // wl_ray_weights when it is not. So
-        // multiplying through by h nu leaves the
-        // energy rate, 4pi sigma I dlambda, either
-        // way. Times the population to make it
-        // volumetric.
-        const fp_t hnu = hc_kJ_nm / adata.wavelength(la);
-        const fp_t w = cont_wlamu * hnu;
-        const int c = level_stage_idx(offset + cont.j);
-        const fp_t ni = pops(offset + cont.i, ks);
-        const fp_t nj = pops(offset + cont.j, ks);
-        cont_absorb(c, cont.i, ks) += w * ni * uv.Vij * intensity;
-        cont_emit(c, cont.i, ks) += w * nj * (uv.Uji + uv.Vji * intensity);
-    }
-}
-
-/// Add the contribution of one ray (intensity, psi_star) at one wavelength and
-/// cell to the Gamma of atom ia (and the optional rate diagnostics).
-/// Non-atomic, i.e. no-parallel writes to any ks.
-YAKL_INLINE void accumulate_gamma_ray(const GammaRayArgs& args) {
-    JasUnpack(args, ia, ks, la, adata, phi, pops, lte_scratch, local_atmos);
-    JasUnpack(args, active_set, active_cont_set);
-    constexpr bool include_4pi_hc = GAMMA_INCLUDE_4PI_HC;
-
-    const int kr_base = adata.line_start(ia);
-    const int max_line = kr_base + adata.num_line(ia);
-    for (int kra = 0; kra < active_set.extent(0); ++kra) {
-        const int kr = active_set(kra);
-        if (!(kr >= kr_base && kr < max_line)) {
-            continue;
-        }
-        const UV uv = compute_uv_line(
-            EmisOpacState<>{
-                .adata = adata,
-                .profile = phi,
-                .la = la,
-                .n = pops,
-                .n_star_scratch = lte_scratch,
-                .k = ks,
-                .atmos = local_atmos
-            },
-            kr,
-            UvOptions{
-                .divide_by_hc_4pi = !include_4pi_hc
-            }
-        );
-        accumulate_gamma_line(args, kr, uv);
-    }
-    const int kr_base_c = adata.cont_start(ia);
-    const int max_cont = kr_base_c + adata.num_cont(ia);
+    JasUnpack(cell, adata, pops, store, active_cont_set, ks, la);
+    const EmisOpacState<> emis_opac{
+        .adata = adata,
+        .profile = cell.phi,
+        .la = la,
+        .n = pops,
+        .n_star_scratch = cell.lte_scratch,
+        .k = ks,
+        .atmos = atmos
+    };
     for (int kra = 0; kra < active_cont_set.extent(0); ++kra) {
         const int kr = active_cont_set(kra);
-        if (!(kr >= kr_base_c && kr < max_cont)) {
-            continue;
+        const auto& cont = adata.continua(kr);
+        const int offset = adata.level_start(cont.atom);
+        const UV uv = compute_uv_cont(
+            emis_opac,
+            kr,
+            UvOptions{.divide_by_hc_4pi = !GAMMA_INCLUDE_4PI_HC}
+        );
+        const fp_t ni = pops(offset + cont.i, ks);
+        const fp_t nj = pops(offset + cont.j, ks);
+        const EmisOpac eta_chi = gamma_eta_chi(uv, ni, nj);
+        const fp_t wlamu = cell.wl_ray_weight * cont_edge_bin_factor(adata, cont, la);
+        add_gamma_terms<false>(
+            GammaAccumState{
+                .uv = uv,
+                .wlamu = wlamu,
+                .Gamma = store.Gamma[cont.atom],
+                .i = cont.i,
+                .j = cont.j,
+                .k = ks
+            },
+            pre_int.I - pre_int.psi_star * eta_chi.eta,
+            pre_int.w - pre_int.psi_star * eta_chi.chi
+        );
+
+        const GammaMat& rad_rates = store.rad_rates[cont.atom];
+        if (rad_rates.initialized()) {
+            // NOTE(cmo): psi_star = 0 => the true radiative rates.
+            add_gamma_terms<false>(
+                GammaAccumState{
+                    .uv = uv,
+                    .wlamu = wlamu,
+                    .Gamma = rad_rates,
+                    .i = cont.i,
+                    .j = cont.j,
+                    .k = ks
+                },
+                pre_int.I,
+                pre_int.w
+            );
         }
-        accumulate_gamma_cont(args, kr);
+
+        const ContEnergyMat& cont_absorb = store.cont_absorb[cont.atom];
+        if (cont_absorb.initialized()) {
+            // NOTE(claude): wlamu * uv.V is the number rate integrand, 4pi
+            // sigma dlambda / (h nu), under either setting of
+            // GAMMA_INCLUDE_4PI_HC: the 4pi/hc sits in V when it is dropped
+            // from the weights, and in the weights when it is not. So
+            // multiplying through by h nu leaves the energy rate, 4pi sigma I
+            // dlambda, either way. Times the population to make it volumetric.
+            const fp_t w = wlamu * hc_kJ_nm / adata.wavelength(la);
+            const int c = store.level_stage_idx(offset + cont.j);
+            cont_absorb(c, cont.i, ks) += w * ni * uv.Vij * pre_int.I;
+            store.cont_emit[cont.atom](c, cont.i, ks) += w * nj * (uv.Uji * pre_int.w + uv.Vji * pre_int.I);
+        }
     }
 }
 
