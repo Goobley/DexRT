@@ -29,6 +29,7 @@ if (${YAKL_AUTO_FENCE})
 endif()
 
 list(APPEND DEX_SOURCE_FILES
+    "../source/ProbesToCompute.cpp"
     "../source/StaticFormalSolution.cpp"
     "../source/DynamicFormalSolution.cpp"
     "../source/MiscSparse.cpp"
