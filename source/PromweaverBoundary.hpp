@@ -78,6 +78,10 @@ YAKL_INLINE fp_t vector_chromo_ray_mu(vec3 pos, vec3 dir) {
     }
 
     const fp_t t_hit = (-b - std::sqrt(delta)) / (FP(2.0) * a);
+    // NOTE(cmo): Only hits in front of the ray count.
+    if (t_hit < FP(0.0)) {
+        return FP(-1.0);
+    }
     pos(0) += t_hit * dir(0);
     pos(1) += t_hit * dir(1);
     pos(2) += t_hit * dir(2);
@@ -87,9 +91,11 @@ YAKL_INLINE fp_t vector_chromo_ray_mu(vec3 pos, vec3 dir) {
 }
 
 /**
- * Sample a PwBc instance for a ray at with origin `at`, along direction `dir`,
- * at wavelength index la.  Only considers the height of the point (i.e. domain
- * size small vs solar curvature).
+ * Sample a PwBc instance for a ray with origin `at`, along direction `dir`, at
+ * wavelength index la. `dir` is the viewing direction: the ray is traced from
+ * `at` towards its source (opposite to the propagation of the light). The
+ * boundary is the Sun below the domain, so only rays viewing downwards (dir(2)
+ * < 0) can see it or we inadvertently end up with two suns!
 */
 YAKL_INLINE fp_t sample_boundary(
     const PwBc<>& bc,
@@ -97,6 +103,9 @@ YAKL_INLINE fp_t sample_boundary(
     vec3 at,
     vec3 dir
 ) {
+    if (dir(2) >= FP(0.0)) {
+        return FP(0.0);
+    }
     fp_t mu_sample;
     if constexpr (PWBC_USE_VECTOR_FORM) {
         if constexpr (!PWBC_CONSIDER_HORIZONTAL_OFFSET) {

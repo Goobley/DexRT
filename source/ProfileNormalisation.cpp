@@ -192,18 +192,15 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
     }
 }
 
-/// 2D
 void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi) {
     compute_profile_normalisation<2>(state, casc_state, print_worst_wphi);
 }
 
-/// 3D
 void compute_profile_normalisation(const State3d& state, const CascadeState3d& casc_state, bool print_worst_wphi) {
     compute_profile_normalisation<3>(state, casc_state, print_worst_wphi);
 }
 
-/// 2D, explicit direction set (e.g. short characteristics)
-void compute_profile_normalisation(const State& state, const Fp2d& view_mu, const Fp1d& wmu, bool print_worst_wphi) {
+void compute_profile_normalisation(const State& state, const Fp2d& mu, const Fp1d& wmu, bool print_worst_wphi) {
     const auto flatmos = flatten(state.atmos);
     JasUnpack(state, adata, wphi, mr_block_map);
     const auto& profile = state.phi;
@@ -233,9 +230,9 @@ void compute_profile_normalisation(const State& state, const Fp2d& view_mu, cons
                 const fp_t a = damping_from_gamma(gamma, lambda, dop_width);
                 for (int d = 0; d < num_dirs; ++d) {
                     const fp_t vel = (
-                        flatmos.vx(ks) * view_mu(d, 0)
-                        + flatmos.vy(ks) * view_mu(d, 1)
-                        + flatmos.vz(ks) * view_mu(d, 2)
+                        flatmos.vx(ks) * mu(d, 0)
+                        + flatmos.vy(ks) * mu(d, 1)
+                        + flatmos.vz(ks) * mu(d, 2)
                     );
                     const fp_t v = ((lambda - line.lambda0) + (vel * line.lambda0) / c) / dop_width;
                     const fp_t p = profile(a, v) / (sqrt_pi * dop_width);

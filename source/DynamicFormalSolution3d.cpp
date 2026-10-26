@@ -342,7 +342,14 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
             pos(1) = ray.o(1) * distance_scale + offset(1);
             pos(2) = ray.o(2) * distance_scale + offset(2);
 
-            fp_t I_sample = sample_boundary(bc, la, pos, ray.d);
+            // NOTE(cmo): ray.d is the propagation direction along the ray, the
+            // boundary is sampled along the viewing direction for consistency
+            // (i.e. its reverse, downgoing).
+            vec3 view_dir;
+            for (int i = 0; i < 3; ++i) {
+                view_dir(i) = -ray.d(i);
+            }
+            fp_t I_sample = sample_boundary(bc, la, pos, view_dir);
             result.I = I_sample;
         }
     }
