@@ -160,10 +160,6 @@ void compute_rad_loss(
     const auto sparse_atmos = state.atmos;
 
     bool integrate_rad_loss = state.config.rad_loss == RadLossType::Integrated;
-    int rl_la_start = la_start;
-    if (state.config.store_J_on_cpu || integrate_rad_loss) {
-        rl_la_start = 0;
-    }
 
     CascadeStorage dims = state.c0_size;
     CascadeRays ray_set = cascade_compute_size<RcMode>(dims, 0);
@@ -284,9 +280,9 @@ void compute_rad_loss(
                         }
                     }
                 }
-                int rad_loss_plane = rl_la_start;
+                int rad_loss_plane = 0;
                 if (!integrate_rad_loss) {
-                    rad_loss_plane += wave;
+                    rad_loss_plane = wave;
                 }
                 rad_loss(rad_loss_plane, ks) += loss_entry;
             }

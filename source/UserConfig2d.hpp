@@ -8,7 +8,7 @@
 // So far everything works in single precision, other than where overridden (i.e.
 // StatEq), but you can adjust here, especially if you're lucky enough to have a
 // GPU with good f64 throughput.
-// NOTE(cmo): Pass -DDEXRT_FORCE_DOUBLE_PREC (e.g. in DEX_CXX_FLAGS) for an f64 build.
+// Set DEX_FORCE_DOUBLE_PREC in CMake to force f64 build.
 #if !defined(DEXRT_FORCE_DOUBLE_PREC)
 #define DEXRT_SINGLE_PREC
 #endif

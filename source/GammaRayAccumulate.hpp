@@ -89,7 +89,7 @@ struct GammaCell {
     const VoigtProfile<fp_t, false>& phi;
     const Fp2d& pops;
     const Fp2d& lte_scratch;
-    const Fp2d& wphi;
+    const Rad16Array& wphi;
     const GammaAccumArrayState& store;
     const yakl::Array<const u16, 1, yakl::memDevice>& active_set;
     const yakl::Array<const u16, 1, yakl::memDevice>& active_cont_set;

@@ -64,7 +64,6 @@ struct DexrtConfig {
     std::string output_path;
     std::string initial_pops_path;
     DexrtOutputConfig output;
-    bool store_J_on_cpu = true;
     std::vector<std::string> atom_paths;
     std::vector<ModelAtomConfig> atom_configs;
     BoundaryType boundary = BoundaryType::Zero;
@@ -444,7 +443,7 @@ inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file)
         }
     }
     if (file["store_J_on_cpu"]) {
-        config.store_J_on_cpu = file["store_J_on_cpu"].as<bool>();
+        fmt::println("store_J_on_cpu is ignored -- it is always the case now.");
     }
 
     if (file["max_cascade"]) {

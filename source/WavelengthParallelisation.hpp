@@ -187,29 +187,23 @@ struct WavelengthDistributor {
     inline void reduce_J(State* state) {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(test_lock);
-        fp_t* J_ptr = state->config.store_J_on_cpu ? state->J_cpu.data() : state->J.data();
-        i64 J_size = state->config.store_J_on_cpu ? state->J_cpu.size() : state->J.size();
-        if (state->mpi_state.rank == 0) {
-            MPI_Reduce(
-                MPI_IN_PLACE,
-                J_ptr,
-                J_size,
-                get_FpMpi(),
-                MPI_SUM,
-                0,
-                state->mpi_state.comm
-            );
-        } else {
-            MPI_Reduce(
-                J_ptr,
-                nullptr,
-                J_size,
-                get_FpMpi(),
-                MPI_SUM,
-                0,
-                state->mpi_state.comm
-            );
+        if (!state->J_cpu.initialized()) {
+            return;
         }
+        auto* J_ptr = state->J_cpu.data.data();
+        const i64 J_size = state->J_cpu.data.size();
+        // NOTE(cmo): The 16-bit encoding is monotonic, so its max is exact.
+        const auto J_type = HALF_RADIATION_STORAGE ? MPI_UINT16_T : get_FpMpi();
+        const auto J_op = HALF_RADIATION_STORAGE ? MPI_MAX : MPI_SUM;
+        MPI_Reduce(
+            state->mpi_state.rank == 0 ? MPI_IN_PLACE : J_ptr,
+            state->mpi_state.rank == 0 ? J_ptr : nullptr,
+            J_size,
+            J_type,
+            J_op,
+            0,
+            state->mpi_state.comm
+        );
 #endif
     }
 
@@ -217,8 +211,8 @@ struct WavelengthDistributor {
     inline void reduce_rad_loss(State* state) {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(test_lock);
-        RadLossFp* rad_loss_ptr = state->config.store_J_on_cpu ? state->rad_loss_cpu.data() : state->rad_loss.data();
-        i64 rad_loss_size = state->config.store_J_on_cpu ? state->rad_loss_cpu.size() : state->rad_loss.size();
+        RadLossFp* rad_loss_ptr = state->rad_loss_cpu.data();
+        i64 rad_loss_size = state->rad_loss_cpu.size();
         if (state->mpi_state.rank == 0) {
             MPI_Reduce(
                 MPI_IN_PLACE,

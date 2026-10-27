@@ -10,6 +10,7 @@
 #include "BlockMap.hpp"
 #include "DexrtConfig.hpp"
 #include "MpiWrapper.hpp"
+#include "Rad16BitStorage.hpp"
 #include "RateDiagnostics.hpp"
 
 #include <fmt/core.h>
@@ -35,10 +36,11 @@ struct State {
     AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
-    Fp2d wphi; /// [kr, ks]
+    Rad16Array wphi; /// [kr, ks]
     Fp2d pops; /// [num_level, ks]
-    Fp2d J; /// [num_wave, ks] -- if we're paging J to cpu, the first axis is wave_batch
-    Fp2dHost J_cpu; /// [num_wave, ks] -- The full J in host memory, if we're paging after each batch.
+    Fp2d J; /// [wave_batch, ks] -- the current wavelength batch, paged to J_cpu after each
+    Rad16ArrayHost J_cpu; /// [num_wave, ks] -- The full J in host memory.
+    Rad16Array J_stage; /// J encoded for the copy to J_cpu (HALF_RADIATION_STORAGE only).
     yakl::Array<RadLossFp, 2, yakl::memDevice> rad_loss; /// [wave_batch || 1, ks] follows same logic as J, but also can be pre-integrated (i.e. all wavelength bins integrated)
     yakl::Array<RadLossFp, 2, yakl::memHost> rad_loss_cpu; /// [num_wave || 1, ks] per wavelength if not pre-integrated.
     std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]

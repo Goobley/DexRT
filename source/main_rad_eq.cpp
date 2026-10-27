@@ -22,6 +22,7 @@
 #include "BlockMap.hpp"
 #include "MiscSparse.hpp"
 #include "YAKL_netcdf.h"
+#include "Rad16Output.hpp"
 #include <algorithm>
 #include <vector>
 #include <string>
@@ -117,16 +118,13 @@ void allocate_J(State* state) {
         num_cells = i64(block_map.num_x_tiles()) * block_map.num_z_tiles() * square(BLOCK_SIZE);
     }
 
-    int J_leading_dim = wave_dim;
-    if (config.store_J_on_cpu) {
-        J_leading_dim = c0_size.wave_batch;
-    }
-
-    state->J = Fp2d("J", yakl::DimsT<i64>(J_leading_dim, num_cells));
-    if (config.store_J_on_cpu) {
-        state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
+    state->J = Fp2d("J", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
+    state->J_cpu = Rad16ArrayHost("JHost", wave_dim, num_cells);
+    if constexpr (HALF_RADIATION_STORAGE) {
+        state->J_stage = Rad16Array("JStage", c0_size.wave_batch, num_cells);
     }
     state->J = FP(0.0);
+    state->J_cpu.fill(FP(0.0));
     // TODO(cmo): If we have scattering terms and are updating J, the old
     // contents should probably be moved first, but we don't have these terms yet.
 }
@@ -142,10 +140,7 @@ void allocate_rad_loss(State* state) {
         wave_dim = state->given_state.emis.extent(2);
     }
 
-    int rad_loss_leading_dim = wave_dim;
-    if (config.store_J_on_cpu) {
-        rad_loss_leading_dim = c0_size.wave_batch;
-    }
+    int rad_loss_leading_dim = c0_size.wave_batch;
     int rad_loss_cpu_leading_dim = wave_dim;
     if (config.rad_loss == RadLossType::Integrated) {
         rad_loss_leading_dim = 1;
@@ -153,10 +148,8 @@ void allocate_rad_loss(State* state) {
     }
 
     state->rad_loss = decltype(state->rad_loss)("L", yakl::DimsT<i64>(rad_loss_leading_dim, num_cells));
-    if (config.store_J_on_cpu) {
-        state->rad_loss_cpu = decltype(state->rad_loss_cpu)("LHost", yakl::DimsT<i64>(rad_loss_cpu_leading_dim, num_cells));
-        state->rad_loss_cpu = FP(0.0);
-    }
+    state->rad_loss_cpu = decltype(state->rad_loss_cpu)("LHost", yakl::DimsT<i64>(rad_loss_cpu_leading_dim, num_cells));
+    state->rad_loss_cpu = FP(0.0);
     state->rad_loss = FP(0.0);
 }
 
@@ -222,7 +215,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
                 decltype(state.Gamma)::value_type("Gamma", n_level, n_level, num_active_cells)
             );
         }
-        state.wphi = Fp2d("wphi", state.adata.lines.extent(0), num_active_cells);
+        state.wphi = Rad16Array("wphi", state.adata.lines.extent(0), num_active_cells);
     }
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
@@ -473,14 +466,7 @@ void load_initial_pops(State* st, const std::string& initial_pops_path) {
 }
 
 void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
-    int wave_batch = la_end - la_start;
-    const Fp2dHost J_copy = state.J.createHostCopy();
-    // TODO(cmo): Replace with a memcpy?
-    for (int wave = 0; wave < wave_batch; ++wave) {
-        for (i64 ks = 0; ks < J_copy.extent(1); ++ks) {
-            state.J_cpu(la_start + wave, ks) = J_copy(wave, ks);
-        }
-    }
+    page_rows_to_host(state.J_cpu, la_start, state.J, la_end - la_start, state.J_stage);
 }
 
 void copy_rad_loss_plane_to_host(const State& state, int la_start, int la_end) {
@@ -507,21 +493,17 @@ void copy_rad_loss_plane_to_host(const State& state, int la_start, int la_end) {
 }
 
 void setup_wavelength_batch(const State& state, int la_start, int la_end) {
-    if (state.config.store_J_on_cpu) {
-        state.J = FP(0.0);
-        if (state.rad_loss.initialized() && state.config.rad_loss != RadLossType::Integrated) {
-            state.rad_loss = FP(0.0);
-        }
-        yakl::fence();
+    state.J = FP(0.0);
+    if (state.rad_loss.initialized() && state.config.rad_loss != RadLossType::Integrated) {
+        state.rad_loss = FP(0.0);
     }
+    yakl::fence();
 }
 
 void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
-    if (state.config.store_J_on_cpu) {
-        copy_J_plane_to_host(state, la_start, la_end);
-        if (state.rad_loss.initialized()) {
-            copy_rad_loss_plane_to_host(state, la_start, la_end);
-        }
+    copy_J_plane_to_host(state, la_start, la_end);
+    if (state.rad_loss.initialized()) {
+        copy_rad_loss_plane_to_host(state, la_start, la_end);
     }
 
     const i32 wave_batch_idx = la_start / state.c0_size.wave_batch;
@@ -855,7 +837,7 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     add_netcdf_attributes(state, nc, num_iter);
     const auto& block_map = state.mr_block_map.block_map;
 
-    bool sparse_J = state.config.sparse_calculation && (state.J.extent(1) == state.atmos.temperature.extent(0));
+    bool sparse_J = state.config.sparse_calculation && (state.J_cpu.extent(1) == state.atmos.temperature.extent(0));
 
     auto maybe_rehydrate_and_write = [&](
         auto arr,
@@ -874,30 +856,24 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     };
 
     if (out_cfg.J) {
-        if (config.store_J_on_cpu) {
-            if (sparse_J) {
-                maybe_rehydrate_and_write(state.J_cpu, "J", {"wavelength"});
-            } else {
-                Fp3dHost J_full = state.J_cpu.reshape(state.J_cpu.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
-                nc.write(J_full, "J", {"wavelength", "z", "x"});
-            }
+        if (sparse_J && out_cfg.sparse) {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "ks"}, [](const Fp2dHost& rows) {
+                return rows;
+            });
+        } else if (sparse_J) {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "x"}, [&](const Fp2dHost& rows) {
+                return rehydrate_sparse_quantity(block_map, rows);
+            });
         } else {
-            if (sparse_J) {
-                maybe_rehydrate_and_write(state.J, "J", {"wavelength"});
-            } else {
-                Fp3d J_full = state.J.reshape(state.J.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
-                nc.write(J_full, "J", {"wavelength", "z", "x"});
-            }
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "x"}, [&](const Fp2dHost& rows) {
+                return rows.reshape(rows.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
+            });
         }
         nc.write(state.max_block_mip, "max_mip_block", {"wavelength_batch", "tile_z", "tile_x"});
     }
     if (out_cfg.rad_loss) {
         std::string leading_dim = config.rad_loss == RadLossType::Integrated ? "wavelength_integrated" : "wavelength";
-        if (config.store_J_on_cpu) {
-            maybe_rehydrate_and_write(state.rad_loss_cpu, "rad_loss", {leading_dim});
-        } else {
-            maybe_rehydrate_and_write(state.rad_loss, "rad_loss", {leading_dim});
-        }
+        maybe_rehydrate_and_write(state.rad_loss_cpu, "rad_loss", {leading_dim});
     }
 
     if (out_cfg.wavelength && state.adata.wavelength.initialized()) {
@@ -1004,14 +980,10 @@ int iterate_non_lte(
         bool print_worst_wphi = first_iter;
         compute_profile_normalisation(state, casc_state, print_worst_wphi);
         state.J = FP(0.0);
-        if (config.store_J_on_cpu) {
-            state.J_cpu = FP(0.0);
-        }
+        state.J_cpu.fill(FP(0.0));
         if (state.rad_loss.initialized()) {
             state.rad_loss = FP(0.0);
-            if (config.store_J_on_cpu) {
-                state.rad_loss_cpu = FP(0.0);
-            }
+            state.rad_loss_cpu = FP(0.0);
         }
         yakl::fence();
         WavelengthBatch wave_batch;
@@ -1380,6 +1352,11 @@ int main(int argc, char** argv) {
     {
         State state;
         init_state(&state, config);
+        state.println(
+            "Precision: {}, radiation storage: {}",
+            sizeof(fp_t) == 8 ? "f64" : "f32",
+            HALF_RADIATION_STORAGE ? "16-bit" : "fp_t"
+        );
         if (state.mpi_state.num_ranks > 1) {
             throw std::runtime_error("dexrt_rad_eq does not yet support multiple MPI ranks: rad_loss is not reduced across them.");
         }

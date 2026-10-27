@@ -179,9 +179,9 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
             }
             // NOTE(cmo): Store the multiplicative normalisation factor
             if (entry != FP(0.0)) {
-                wphi(kr, ks) = FP(1.0) / entry;
+                wphi.set(kr, ks, FP(1.0) / entry);
             } else {
-                wphi(kr, ks) = FP(1.0);
+                wphi.set(kr, ks, FP(1.0));
             }
         }
     );
@@ -240,9 +240,9 @@ void compute_profile_normalisation(const State& state, const Fp2d& mu, const Fp1
                 }
             }
             if (entry != FP(0.0)) {
-                wphi(kr, ks) = FP(1.0) / entry;
+                wphi.set(kr, ks, FP(1.0) / entry);
             } else {
-                wphi(kr, ks) = FP(1.0);
+                wphi.set(kr, ks, FP(1.0));
             }
         }
     );

@@ -22,6 +22,7 @@
 #include "BlockMap.hpp"
 #include "MiscSparse.hpp"
 #include "YAKL_netcdf.h"
+#include "Rad16Output.hpp"
 #include <vector>
 #include <string>
 #include <optional>
@@ -76,21 +77,17 @@ void init_state (State* state, const DexrtConfig& config) {
 }
 
 void setup_wavelength_batch(const State& state, int la_start, int la_end) {
-    if (state.config.store_J_on_cpu) {
-        state.J = FP(0.0);
-        if (state.rad_loss.initialized()) {
-            state.rad_loss = FP(0.0);
-        }
-        yakl::fence();
+    state.J = FP(0.0);
+    if (state.rad_loss.initialized()) {
+        state.rad_loss = FP(0.0);
     }
+    yakl::fence();
 }
 
 void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
-    if (state.config.store_J_on_cpu) {
-        copy_J_plane_to_host(state, la_start, la_end);
-        if (state.rad_loss.initialized()) {
-            copy_rad_loss_plane_to_host(state, la_start, la_end);
-        }
+    copy_J_plane_to_host(state, la_start, la_end);
+    if (state.rad_loss.initialized()) {
+        copy_rad_loss_plane_to_host(state, la_start, la_end);
     }
 
     const i32 wave_batch_idx = la_start / state.c0_size.wave_batch;
@@ -424,7 +421,7 @@ void save_results(State& state, const CascadeState& casc_state, i32 num_iter) {
     add_netcdf_attributes(state, nc, num_iter);
     const auto& block_map = state.mr_block_map.block_map;
 
-    bool sparse_J = state.config.sparse_calculation && (state.J.extent(1) == state.atmos.temperature.extent(0));
+    bool sparse_J = state.config.sparse_calculation && (state.J_cpu.extent(1) == state.atmos.temperature.extent(0));
 
     auto maybe_rehydrate_and_write = [&](
         auto arr,
@@ -443,30 +440,24 @@ void save_results(State& state, const CascadeState& casc_state, i32 num_iter) {
     };
 
     if (out_cfg.J) {
-        if (config.store_J_on_cpu) {
-            if (sparse_J) {
-                maybe_rehydrate_and_write(state.J_cpu, "J", {"wavelength"});
-            } else {
-                Fp3dHost J_full = state.J_cpu.reshape(state.J_cpu.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
-                nc.write(J_full, "J", {"wavelength", "z", "x"});
-            }
+        if (sparse_J && out_cfg.sparse) {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "ks"}, [](const Fp2dHost& planes) {
+                return planes;
+            });
+        } else if (sparse_J) {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "x"}, [&](const Fp2dHost& planes) {
+                return rehydrate_sparse_quantity(block_map, planes);
+            });
         } else {
-            if (sparse_J) {
-                maybe_rehydrate_and_write(state.J, "J", {"wavelength"});
-            } else {
-                Fp3d J_full = state.J.reshape(state.J.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
-                nc.write(J_full, "J", {"wavelength", "z", "x"});
-            }
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "x"}, [&](const Fp2dHost& planes) {
+                return planes.reshape(planes.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
+            });
         }
         nc.write(state.max_block_mip, "max_mip_block", {"wavelength_batch", "tile_z", "tile_x"});
     }
     if (out_cfg.rad_loss) {
         std::string leading_dim = config.rad_loss == RadLossType::Integrated ? "wavelength_integrated" : "wavelength";
-        if (config.store_J_on_cpu) {
-            maybe_rehydrate_and_write(state.rad_loss_cpu, "rad_loss", {leading_dim});
-        } else {
-            maybe_rehydrate_and_write(state.rad_loss, "rad_loss", {leading_dim});
-        }
+        maybe_rehydrate_and_write(state.rad_loss_cpu, "rad_loss", {leading_dim});
     }
 
     if (out_cfg.wavelength && state.adata.wavelength.initialized()) {
@@ -563,6 +554,11 @@ int main(int argc, char** argv) {
         // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if
         // not using an atmosphere
         init_state(&state, config);
+        state.println(
+            "Precision: {}, radiation storage: {}",
+            sizeof(fp_t) == 8 ? "f64" : "f32",
+            HALF_RADIATION_STORAGE ? "16-bit" : "fp_t"
+        );
         CascadeState casc_state;
         casc_state.init(state, config.max_cascade);
         yakl::timer_start("DexRT");
@@ -705,14 +701,10 @@ int main(int argc, char** argv) {
                     bool print_worst_wphi = first_iter;
                     compute_profile_normalisation(state, casc_state, print_worst_wphi);
                     state.J = FP(0.0);
-                    if (config.store_J_on_cpu) {
-                        state.J_cpu = FP(0.0);
-                    }
+                    state.J_cpu.fill(FP(0.0));
                     if (state.rad_loss.initialized()) {
                         state.rad_loss = FP(0.0);
-                        if (config.store_J_on_cpu) {
-                            state.rad_loss_cpu = FP(0.0);
-                        }
+                        state.rad_loss_cpu = FP(0.0);
                     }
                     yakl::fence();
                     WavelengthBatch wave_batch;
@@ -795,14 +787,10 @@ int main(int argc, char** argv) {
                     // diagnostics are written out, so must be zeroed.
                     state.rate_diag.zero();
                     state.J = FP(0.0);
-                    if (config.store_J_on_cpu) {
-                        state.J_cpu = FP(0.0);
-                    }
+                    state.J_cpu.fill(FP(0.0));
                     if (state.rad_loss.initialized()) {
                         state.rad_loss = FP(0.0);
-                        if (config.store_J_on_cpu) {
-                            state.rad_loss_cpu = FP(0.0);
-                        }
+                        state.rad_loss_cpu = FP(0.0);
                     }
                     yakl::fence();
                     wave_dist.reset();
@@ -830,14 +818,10 @@ int main(int argc, char** argv) {
             } else {
                 state.J = FP(0.0);
                 compute_nh0(state);
-                if (config.store_J_on_cpu) {
-                    state.J_cpu = FP(0.0);
-                }
+                state.J_cpu.fill(FP(0.0));
                 if (state.rad_loss.initialized()) {
                     state.rad_loss = FP(0.0);
-                    if (config.store_J_on_cpu) {
-                        state.rad_loss_cpu = FP(0.0);
-                    }
+                    state.rad_loss_cpu = FP(0.0);
                 }
                 yakl::fence();
                 wave_dist.reset();

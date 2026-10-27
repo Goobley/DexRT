@@ -27,6 +27,14 @@ endif()
 if (${YAKL_AUTO_FENCE})
     set(YAKL_DEFS "${YAKL_DEFS} -DYAKL_AUTO_FENCE")
 endif()
+option(DEX_FORCE_DOUBLE_PREC "Compile with fp_t = double" OFF)
+option(DEX_HALF_RADIATION_STORAGE "Store radiation arrays (J, wphi) in 16 bits" ON)
+if (${DEX_FORCE_DOUBLE_PREC})
+    set(DEX_CXX_FLAGS "${DEX_CXX_FLAGS} -DDEXRT_FORCE_DOUBLE_PREC")
+endif()
+if (${DEX_HALF_RADIATION_STORAGE})
+    set(DEX_CXX_FLAGS "${DEX_CXX_FLAGS} -DDEXRT_HALF_RADIATION_STORAGE")
+endif()
 
 list(APPEND DEX_SOURCE_FILES
     "../source/ProbesToCompute.cpp"

@@ -68,16 +68,13 @@ void allocate_J(State* state) {
         num_cells = i64(block_map.num_x_tiles()) * block_map.num_z_tiles() * square(BLOCK_SIZE);
     }
 
-    int J_leading_dim = wave_dim;
-    if (config.store_J_on_cpu) {
-        J_leading_dim = c0_size.wave_batch;
-    }
-
-    state->J = Fp2d("J", yakl::DimsT<i64>(J_leading_dim, num_cells));
-    if (config.store_J_on_cpu) {
-        state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
+    state->J = Fp2d("J", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
+    state->J_cpu = Rad16ArrayHost("JHost", wave_dim, num_cells);
+    if constexpr (HALF_RADIATION_STORAGE) {
+        state->J_stage = Rad16Array("JStage", c0_size.wave_batch, num_cells);
     }
     state->J = FP(0.0);
+    state->J_cpu.fill(FP(0.0));
     // TODO(cmo): If we have scattering terms and are updating J, the old
     // contents should probably be moved first, but we don't have these terms yet.
 }
@@ -93,10 +90,7 @@ void allocate_rad_loss(State* state) {
         wave_dim = state->given_state.emis.extent(2);
     }
 
-    int rad_loss_leading_dim = wave_dim;
-    if (config.store_J_on_cpu) {
-        rad_loss_leading_dim = c0_size.wave_batch;
-    }
+    int rad_loss_leading_dim = c0_size.wave_batch;
     int rad_loss_cpu_leading_dim = wave_dim;
     if (config.rad_loss == RadLossType::Integrated) {
         rad_loss_leading_dim = 1;
@@ -104,10 +98,8 @@ void allocate_rad_loss(State* state) {
     }
 
     state->rad_loss = decltype(state->rad_loss)("L", yakl::DimsT<i64>(rad_loss_leading_dim, num_cells));
-    if (config.store_J_on_cpu) {
-        state->rad_loss_cpu = decltype(state->rad_loss_cpu)("LHost", yakl::DimsT<i64>(rad_loss_cpu_leading_dim, num_cells));
-        state->rad_loss_cpu = FP(0.0);
-    }
+    state->rad_loss_cpu = decltype(state->rad_loss_cpu)("LHost", yakl::DimsT<i64>(rad_loss_cpu_leading_dim, num_cells));
+    state->rad_loss_cpu = FP(0.0);
     state->rad_loss = FP(0.0);
 }
 
@@ -181,7 +173,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config, const AtmosZ
             );
         }
         state.rate_diag.allocate(state.adata_host, config.output, num_active_cells);
-        state.wphi = Fp2d("wphi", state.adata.lines.extent(0), num_active_cells);
+        state.wphi = Rad16Array("wphi", state.adata.lines.extent(0), num_active_cells);
     }
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
@@ -430,19 +422,12 @@ void load_initial_pops(State* st, const std::string& initial_pops_path) {
     }
 }
 
-/// Called to copy J from GPU to plane of host array if config.store_J_on_cpu
+/// Copy J from GPU to plane of host array
 void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
-    int wave_batch = la_end - la_start;
-    const Fp2dHost J_copy = state.J.createHostCopy();
-    // TODO(cmo): Replace with a memcpy?
-    for (int wave = 0; wave < wave_batch; ++wave) {
-        for (i64 ks = 0; ks < J_copy.extent(1); ++ks) {
-            state.J_cpu(la_start + wave, ks) = J_copy(wave, ks);
-        }
-    }
+    page_rows_to_host(state.J_cpu, la_start, state.J, la_end - la_start, state.J_stage);
 }
 
-/// Called to copy rad_loss from GPU to plane of host array if config.store_J_on_cpu
+/// Copy rad_loss from GPU to plane of host array
 void copy_rad_loss_plane_to_host(const State& state, int la_start, int la_end) {
     if (!state.rad_loss.initialized()) {
         return;

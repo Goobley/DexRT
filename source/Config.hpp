@@ -111,6 +111,14 @@ constexpr int NUM_DIM = 2;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 
+/// Store radiation arrays typed as (Rad16Array, Rad16BitStorage.hpp) as our
+/// Rad16 16 bits format rather than fp_t.
+#if defined(DEXRT_HALF_RADIATION_STORAGE)
+constexpr bool HALF_RADIATION_STORAGE = true;
+#else
+constexpr bool HALF_RADIATION_STORAGE = false;
+#endif
+
 template <int NumIncl=NUM_INCL>
 yakl::SArray<fp_t, 1, NumIncl> get_incl_rays() {
     yakl::SArray<fp_t, 1, NumIncl> incl_rays;

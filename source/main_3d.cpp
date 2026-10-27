@@ -6,6 +6,7 @@
 #include <argparse/argparse.hpp>
 #include <fmt/core.h>
 #include "YAKL_netcdf.h"
+#include "Rad16Output.hpp"
 #include "Atmosphere.hpp"
 #include "Populations.hpp"
 #include "CrtafParser.hpp"
@@ -41,10 +42,14 @@ void allocate_J(State3d* state) {
         num_cells = i64(block_map.num_x_tiles()) * i64(block_map.num_y_tiles()) * i64(block_map.num_z_tiles()) * cube(BLOCK_SIZE_3D);
     }
 
-    if (config.store_J_on_cpu && config.mode != DexrtMode::GivenFs) {
+    if (config.mode != DexrtMode::GivenFs) {
         state->J = Fp2d("J", yakl::DimsT<i64>(1, num_cells));
         if (!NO_J_3D) {
-            state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
+            state->J_cpu = Rad16ArrayHost("JHost", wave_dim, num_cells);
+            state->J_cpu.fill(FP(0.0));
+            if constexpr (HALF_RADIATION_STORAGE) {
+                state->J_stage = Rad16Array("JStage", 1, num_cells);
+            }
         }
     } else {
         state->J = Fp2d("J", yakl::DimsT<i64>(wave_dim, num_cells));
@@ -156,7 +161,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
                 decltype(state.Gamma)::value_type("Gamma", n_level, n_level, num_active_cells)
             );
         }
-        state.wphi = Fp2d("wphi", state.adata.lines.extent(0), num_active_cells);
+        state.wphi = Rad16Array("wphi", state.adata.lines.extent(0), num_active_cells);
     // }
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
@@ -467,20 +472,19 @@ void save_results(const State3d& state, const CascadeState3d& casc_state, i32 nu
     };
 
     if (out_cfg.J && !NO_J_3D) {
-        if (config.store_J_on_cpu) {
-            if (sparse_J) {
-                maybe_rehydrate_and_write(state.J_cpu, "J", {"wavelength"});
+        if (state.J_cpu.initialized()) {
+            if (sparse_J && out_cfg.sparse) {
+                write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "ks"}, [](const Fp2dHost& rows) {
+                    return rows;
+                });
+            } else if (sparse_J) {
+                write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "y", "x"}, [&](const Fp2dHost& rows) {
+                    return rehydrate_sparse_quantity(block_map, rows);
+                });
             } else {
-                nc.write(
-                    state.J_cpu.reshape(
-                        state.J_cpu.extent(0),
-                        state.atmos.num_z,
-                        state.atmos.num_y,
-                        state.atmos.num_x
-                    ),
-                    "J",
-                    {"wavelength", "z", "y", "x"}
-                );
+                write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "y", "x"}, [&](const Fp2dHost& rows) {
+                    return rows.reshape(rows.extent(0), state.atmos.num_z, state.atmos.num_y, state.atmos.num_x);
+                });
             }
         } else {
             if (sparse_J) {
@@ -684,11 +688,7 @@ void copy_J_plane_to_host(const State3d& state, int la) {
     if (NO_J_3D) {
         return;
     }
-    const Fp2dHost J_copy = state.J.createHostCopy();
-    // TODO(cmo): Replace with a memcpy?
-    for (i64 ks = 0; ks < J_copy.extent(1); ++ks) {
-        state.J_cpu(la, ks) = J_copy(0, ks);
-    }
+    page_rows_to_host(state.J_cpu, la, state.J, 1, state.J_stage);
 }
 
 int main(int argc, char** argv) {
@@ -723,6 +723,11 @@ int main(int argc, char** argv) {
         yakl::timer_start("DexRT");
         State3d state;
         init_state(&state, config);
+        state.println(
+            "Precision: {}, radiation storage: {}",
+            sizeof(fp_t) == 8 ? "f64" : "f32",
+            HALF_RADIATION_STORAGE ? "16-bit" : "fp_t"
+        );
 
         CascadeState3d casc_state;
         casc_state.init(state, config.max_cascade);
@@ -834,25 +839,21 @@ int main(int argc, char** argv) {
 
                 compute_profile_normalisation(state, casc_state, first_iter);
                 state.J = FP(0.0);
-                if (config.store_J_on_cpu && !NO_J_3D) {
-                    state.J_cpu = FP(0.0);
+                if (state.J_cpu.initialized()) {
+                    state.J_cpu.fill(FP(0.0));
                 }
                 Kokkos::fence();
                 WavelengthBatch wave_batch;
                 wave_dist.wait_for_all(state.mpi_state);
                 wave_dist.reset();
                 while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
-                    if (config.store_J_on_cpu) {
-                        state.J = FP(0.0);
-                        Kokkos::fence();
-                    }
+                    state.J = FP(0.0);
+                    Kokkos::fence();
                     KOKKOS_ASSERT(wave_batch.la_end - wave_batch.la_start == 1);
                     const int la = wave_batch.la_start;
                     bool lambda_iterate = i < initial_lambda_iterations;
                     dynamic_formal_sol_rc_3d(state, casc_state, lambda_iterate, la);
-                    if (config.store_J_on_cpu) {
-                        copy_J_plane_to_host(state, la);
-                    }
+                    copy_J_plane_to_host(state, la);
                     if (show_iteration_progress && state.mpi_state.rank == 0) {
                         pbar.update(f64(la + 1) / f64(state.adata_host.wavelength.extent(0)));
                     }
@@ -908,8 +909,8 @@ int main(int argc, char** argv) {
                 state.println("Final FS (dense)");
                 compute_nh0(state);
                 state.J = FP(0.0);
-                if (config.store_J_on_cpu && !NO_J_3D) {
-                    state.J_cpu = FP(0.0);
+                if (state.J_cpu.initialized()) {
+                    state.J_cpu.fill(FP(0.0));
                 }
                 Kokkos::fence();
                 WavelengthBatch wave_batch;
@@ -917,15 +918,11 @@ int main(int argc, char** argv) {
                 wave_dist.reset();
                 while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
                     const int la = wave_batch.la_start;
-                    if (config.store_J_on_cpu) {
-                        state.J = FP(0.0);
-                        Kokkos::fence();
-                    }
+                    state.J = FP(0.0);
+                    Kokkos::fence();
                     bool lambda_iterate = true;
                     dynamic_formal_sol_rc_3d(state, casc_state, lambda_iterate, la);
-                    if (config.store_J_on_cpu) {
-                        copy_J_plane_to_host(state, la);
-                    }
+                    copy_J_plane_to_host(state, la);
                 }
                 state.config.sparse_calculation = true;
             }

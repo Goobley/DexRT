@@ -18,4 +18,7 @@ cmake -DDEX_ARCH="CUDA"              \
       -DKokkos_ROOT="$(pwd)/../kokkos-debug/" \
       -DCMAKE_PREFIX_PATH="$(pwd)/../../kokkos-debug/lib/cmake/;$(pwd)/../../kokkos-kernels/lib/cmake" \
       -DCMAKE_BUILD_TYPE="Debug" \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DDEX_FORCE_DOUBLE_PREC=Off \
+      -DDEX_HALF_RADIATION_STORAGE=On \
       ..
