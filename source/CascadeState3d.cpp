@@ -44,9 +44,8 @@ bool CascadeState3d::init(const State3d& state, int max_cascades) {
         }
     }
     if (state.config.mode == DexrtMode::NonLte) {
-        psi_star = Fp1d("PsiStar", yakl::DimsT<i64>(i_cascades[0].extent(0)));
         I_ext = Fp1d("IExternal", yakl::DimsT<i64>(i_cascades[0].extent(0)));
-        tr_final = Fp1d("Transmission", yakl::DimsT<i64>(i_cascades[0].extent(0)));
+        one_minus_alo = Fp1d("OneMinusAlo", yakl::DimsT<i64>(i_cascades[0].extent(0)));
     }
     mip_chain.init(state, state.mr_block_map.buffer_len());
 

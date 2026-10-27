@@ -119,7 +119,8 @@ struct RcDynamicState3d {
 };
 
 
-void dynamic_compute_gamma(
+template <int MaxLines>
+static void dynamic_compute_gamma_impl(
     const State3d& state,
     const CascadeState3d& casc_state,
     const Fp2d& lte_scratch,
@@ -137,8 +138,8 @@ void dynamic_compute_gamma(
     const fp_t wl_ray_weight = gamma_wavelength_weight(state.adata_host, la) / fp_t(ray_set.num_az_rays * ray_set.num_polar_rays);
     // NOTE(cmo): No rate diagnostics in 3D.
     const GammaAccumArrayState out = gamma_accum_array_state(state.Gamma, nullptr);
-    const auto& psi_star = casc_state.psi_star;
-    const auto& I = casc_state.i_cascades[0];
+    const auto& I_ext = casc_state.I_ext;
+    const auto& one_minus_alo = casc_state.one_minus_alo;
     dex_parallel_for(
         "Compute Gamma",
         FlatLoop<2>(
@@ -162,7 +163,7 @@ void dynamic_compute_gamma(
             local_atmos.nh0 = flatmos.nh0(ks);
             const auto active_set = slice_active_set(adata, la);
             const auto active_cont_set = slice_active_cont_set(adata, la);
-            const GammaCell cell{
+            GammaCell cell{
                 .adata = adata,
                 .phi = phi,
                 .pops = pops,
@@ -175,6 +176,7 @@ void dynamic_compute_gamma(
                 .la = la,
                 .wl_ray_weight = wl_ray_weight
             };
+            cell.statics = gamma_static_sums(cell, local_atmos);
             GammaRayAngularIntegral angle_integral;
 
             for (
@@ -194,8 +196,8 @@ void dynamic_compute_gamma(
                     };
                     RaySegment<3> ray = probe_ray(ray_set, num_cascades, 0, probe_idx);
                     const GammaRay gamma_ray{
-                        .I = probe_fetch<RcMode>(I, ray_set, probe_idx),
-                        .psi_star = probe_fetch<RcMode>(psi_star, ray_set, probe_idx),
+                        .I_ext = probe_fetch<RcMode>(I_ext, ray_set, probe_idx),
+                        .one_minus_alo = probe_fetch<RcMode>(one_minus_alo, ray_set, probe_idx),
                         .weight = FP(1.0)
                     };
                     local_atmos.vel = (
@@ -203,14 +205,31 @@ void dynamic_compute_gamma(
                             + flatmos.vy(ks) * ray.d(1)
                             + flatmos.vz(ks) * ray.d(2)
                     );
-                    accumulate_gamma_ray_lines(cell, local_atmos, gamma_ray);
-                    angle_integral.add(gamma_ray);
+                    const GammaRayDerived derived = accumulate_gamma_ray_lines<MaxLines>(cell, local_atmos, gamma_ray);
+                    angle_integral.add(gamma_ray, derived);
                 }
             }
             accumulate_gamma_continua(cell, local_atmos, angle_integral);
         }
     );
     Kokkos::fence();
+}
+
+void dynamic_compute_gamma(
+    const State3d& state,
+    const CascadeState3d& casc_state,
+    const Fp2d& lte_scratch,
+    int la,
+    int subset_idx
+) {
+    const int max_lines = gamma_max_active_lines(state.adata_host, la, la + 1);
+    if (max_lines <= 1) {
+        dynamic_compute_gamma_impl<1>(state, casc_state, lte_scratch, la, subset_idx);
+    } else if (max_lines <= CORE_AND_VOIGT_MAX_LINES_3D) {
+        dynamic_compute_gamma_impl<CORE_AND_VOIGT_MAX_LINES_3D>(state, casc_state, lte_scratch, la, subset_idx);
+    } else {
+        dynamic_compute_gamma_impl<0>(state, casc_state, lte_scratch, la, subset_idx);
+    }
 }
 
 template <typename Bc, typename DynamicState>
@@ -271,7 +290,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
     constexpr bool compute_alo = (RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>;
     if constexpr (compute_alo) {
         result.I_ext = result.I;
-        result.tr_final = FP(1.0);
+        result.one_minus_alo = FP(1.0);
     }
     if (!marcher) {
         return result;
@@ -392,8 +411,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_3d(
     } while (s.step_through_grid());
 
     if constexpr (compute_alo) {
-        result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
-        result.tr_final = edt;
+        result.one_minus_alo = edt;
     }
     return result;
 }
@@ -612,9 +630,8 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
         .upper_tau = tau_cascade_ip
     };
     if constexpr (compute_alo) {
-        dev_casc_state.psi_star = casc_state.psi_star;
         dev_casc_state.I_ext = casc_state.I_ext;
-        dev_casc_state.tr_final = casc_state.tr_final;
+        dev_casc_state.one_minus_alo = casc_state.one_minus_alo;
     }
     DeviceBoundaries boundaries_h{
         .boundary = state.boundary,
@@ -705,9 +722,8 @@ void compute_cascade_i_3d(const State3d& state, const CascadeState3d& casc_state
             }
             constexpr bool dev_compute_alo = bool(RcMode & RC_COMPUTE_ALO);
             if constexpr (dev_compute_alo) {
-                dev_casc_state.psi_star(lin_idx) = ri.psi_star;
                 dev_casc_state.I_ext(lin_idx) = ri.I_ext;
-                dev_casc_state.tr_final(lin_idx) = ri.tr_final;
+                dev_casc_state.one_minus_alo(lin_idx) = ri.one_minus_alo;
             }
         }
     );
@@ -763,7 +779,7 @@ void dynamic_formal_sol_rc_3d_subset(
             casc_idx
         );
     }
-    if (casc_state.psi_star.initialized() && !lambda_iterate) {
+    if (casc_state.I_ext.initialized() && !lambda_iterate) {
         compute_cascade_i_3d<RcModeAlo>(
             state,
             casc_state,
@@ -797,13 +813,12 @@ void dynamic_formal_sol_rc_3d(const State3d& state, const CascadeState3d& casc_s
 
     constexpr int num_subsets = subset_tasks_per_cascade_3d<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
-        if (casc_state.psi_star.initialized()) {
-            casc_state.psi_star = FP(0.0);
+        if (casc_state.I_ext.initialized()) {
             casc_state.I_ext = FP(0.0);
-            casc_state.tr_final = FP(0.0);
+            casc_state.one_minus_alo = FP(0.0);
         }
         dynamic_formal_sol_rc_3d_subset(state, casc_state, lambda_iterate, la, subset_idx);
-        if (casc_state.psi_star.initialized()) {
+        if (casc_state.I_ext.initialized()) {
             dynamic_compute_gamma(
                 state,
                 casc_state,

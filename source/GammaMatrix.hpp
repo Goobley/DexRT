@@ -24,7 +24,7 @@ struct GammaTerms {
 };
 
 YAKL_INLINE GammaTerms gamma_terms(const UV& uv, fp_t wlamu, fp_t I_eff, fp_t one_m_psi_chi) {
-    // I_eff = I - psi* eta and one_m_psi_chi = 1 - psi* chi.
+    // I_eff = I - psi* eta_trans and one_m_psi_chi = 1 - psi* chi_trans.
     fp_t integrand = one_m_psi_chi * uv.Uji + uv.Vji * I_eff;
     const GammaFp G_ij = GammaFp(integrand) * GammaFp(wlamu);
     integrand = uv.Vij * I_eff;
@@ -54,20 +54,20 @@ YAKL_INLINE void add_to_gamma(const GammaAccumState& args) {
 }
 
 /// add_to_gamma from the parts of I - psi* eta and 1 - psi* chi that don't
-/// cancel in optically thick cells: I_nl = I - psi* eta_total, q = 1 - psi*
-/// chi_total, and the emissivity/opacity of everything other than this
+/// cancel in optically thick cells: I_ext = I - psi* eta_total, one_minus_alo =
+/// 1 - psi* chi_total, and the emissivity/opacity of everything other than this
 /// transition, eta_other/chi_other (summed, not differenced). args.eta, chi,
 /// I are unused.
 template <bool atomic=true>
 YAKL_INLINE void add_to_gamma_split(
     const GammaAccumState& args,
-    fp_t I_nl,
-    fp_t q,
+    fp_t I_ext,
+    fp_t one_minus_alo,
     fp_t eta_other,
     fp_t chi_other
 ) {
     const fp_t psi_star = args.psi_star;
-    add_gamma_terms<atomic>(args, I_nl + psi_star * eta_other, q + psi_star * chi_other);
+    add_gamma_terms<atomic>(args, I_ext + psi_star * eta_other, one_minus_alo + psi_star * chi_other);
 }
 
 template <typename T>

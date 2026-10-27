@@ -5,6 +5,7 @@
 #include "Constants.hpp"
 #include "EmisOpac.hpp"
 #include "GammaMatrix.hpp"
+#include "CompensatedSum.hpp"
 #include "RateDiagnostics.hpp"
 #include "Voigt.hpp"
 
@@ -74,7 +75,15 @@ inline GammaAccumArrayState gamma_accum_array_state(const std::vector<GammaMat>&
     return result;
 }
 
-/// All the data shared between different directional rays in a cell for the Gamma accumulation
+/// Static (direction independent) emissivity and opacity of a cell: the active
+/// continua and raymarch's opacity floor, using compensated sums for precision
+/// in fp32
+struct GammaStaticSums {
+    CompensatedSum eta;
+    CompensatedSum chi;
+};
+
+/// Data common to the different rays of a cell to build Gamma
 struct GammaCell {
     const AtomicData<fp_t>& adata;
     const VoigtProfile<fp_t, false>& phi;
@@ -87,27 +96,46 @@ struct GammaCell {
     i64 ks;
     int la;
     fp_t wl_ray_weight; /// ray weight over wavelength and angle, component common to all rays (i.e. in RC everything but wmuy in 2D)
+    GammaStaticSums statics; /// gamma_static_sums
 };
 
+/// A ray's terms from the formal solver, at the probe.
 struct GammaRay {
-    fp_t I;
+    fp_t I_ext;
+    fp_t one_minus_alo;
+    fp_t weight; /// wmuy in 2D RC, 1.0 in 3D RC, varying in SC
+};
+
+/// A ray's terms derived in accumulate_gamma_ray_lines: psi* = (1 -
+/// one_minus_alo) / chi and I = I_ext + psi* eta. As psi* is just part of the
+/// preconditioning, it's fine for it to lose some precision in thin cells.
+struct GammaRayDerived {
     fp_t psi_star;
-    fp_t weight; /// wmuy in 2D RC
+    fp_t I;
+    EmisOpac lines;
 };
 
 /// Angular integration for a set (or subset) of rays at a wavelength.
 /// Pre-integrating these quantities for continua lets us have considerably
 /// fewer writes into Gamma. If we're integrated over the whole quadrature w
-/// sums to 1, otherwise, it's a fraction of 1.
+/// sums to 1, otherwise, it's a fraction of 1. The integrated I is I_ext +
+/// psi_star * eta_static + psi_eta_lines.
 struct GammaRayAngularIntegral {
     fp_t w = FP(0.0);
-    fp_t I = FP(0.0);
+    fp_t I_ext = FP(0.0);
+    fp_t one_minus_alo = FP(0.0);
     fp_t psi_star = FP(0.0);
+    fp_t psi_eta_lines = FP(0.0);
+    fp_t psi_chi_lines = FP(0.0);
 
-    YAKL_INLINE void add(const GammaRay& ray) {
+    YAKL_INLINE void add(const GammaRay& ray, const GammaRayDerived& d) {
+        const fp_t w_psi = ray.weight * d.psi_star;
         w += ray.weight;
-        I += ray.weight * ray.I;
-        psi_star += ray.weight * ray.psi_star;
+        I_ext += ray.weight * ray.I_ext;
+        one_minus_alo += ray.weight * ray.one_minus_alo;
+        psi_star += w_psi;
+        psi_eta_lines += w_psi * d.lines.eta;
+        psi_chi_lines += w_psi * d.lines.chi;
     }
 };
 
@@ -128,9 +156,9 @@ YAKL_INLINE EmisOpac gamma_eta_chi(const UV& uv, fp_t ni, fp_t nj) {
     return result;
 }
 
-/// Add every active line's contribution (all atoms) for one ray. Non-atomic.
-YAKL_INLINE void accumulate_gamma_ray_lines(const GammaCell& cell, const AtmosPointParams& atmos, const GammaRay& ray) {
-    JasUnpack(cell, adata, pops, wphi, store, active_set, ks);
+/// Fill cell.statics (direction independent, so once per cell and wavelength).
+YAKL_INLINE GammaStaticSums gamma_static_sums(const GammaCell& cell, const AtmosPointParams& atmos) {
+    JasUnpack(cell, adata, pops, active_cont_set, ks);
     const EmisOpacState<> emis_opac{
         .adata = adata,
         .profile = cell.phi,
@@ -140,47 +168,173 @@ YAKL_INLINE void accumulate_gamma_ray_lines(const GammaCell& cell, const AtmosPo
         .k = ks,
         .atmos = atmos
     };
-    for (int kra = 0; kra < active_set.extent(0); ++kra) {
-        const int kr = active_set(kra);
-        const auto& l = adata.lines(kr);
-        const int offset = adata.level_start(l.atom);
-        const UV uv = compute_uv_line(
+    GammaStaticSums result;
+    // NOTE(cmo): The raymarch's opacity floor.
+    result.chi.add(FP(1e-15));
+    for (int kra = 0; kra < active_cont_set.extent(0); ++kra) {
+        const int kr = active_cont_set(kra);
+        const auto& cont = adata.continua(kr);
+        const int offset = adata.level_start(cont.atom);
+        const UV uv = compute_uv_cont(
             emis_opac,
             kr,
             UvOptions{.divide_by_hc_4pi = !GAMMA_INCLUDE_4PI_HC}
         );
-        const EmisOpac eta_chi = gamma_eta_chi(uv, pops(offset + l.i, ks), pops(offset + l.j, ks));
-        const fp_t wlamu = cell.wl_ray_weight * ray.weight * wphi(kr, ks);
-        add_to_gamma<false>(GammaAccumState{
-            .eta = eta_chi.eta,
-            .chi = eta_chi.chi,
-            .uv = uv,
-            .I = ray.I,
-            .psi_star = ray.psi_star,
+        const EmisOpac eta_chi = gamma_eta_chi(uv, pops(offset + cont.i, ks), pops(offset + cont.j, ks));
+        result.eta.add(eta_chi.eta);
+        result.chi.add(eta_chi.chi);
+    }
+    return result;
+}
+
+struct GammaLineTerms {
+    UV uv;
+    EmisOpac eta_chi;
+};
+
+/// Add line kr's contribution for one ray. I - psi* eta and 1 - psi* chi are
+/// formed as I_ext + psi* eta_other and one_minus_alo + psi* chi_other, which
+/// minimise cancellation in optically thick cells. This uses CompensatedSums on
+/// f32.  Non-atomic.
+YAKL_INLINE void accumulate_gamma_line(
+    const GammaCell& cell,
+    const GammaRay& ray,
+    const GammaRayDerived& d,
+    int kr,
+    const GammaLineTerms& t,
+    fp_t eta_other,
+    fp_t chi_other
+) {
+    JasUnpack(cell, adata, wphi, store, ks);
+    const auto& l = adata.lines(kr);
+    const fp_t wlamu = cell.wl_ray_weight * ray.weight * wphi(kr, ks);
+    add_to_gamma_split<false>(
+        GammaAccumState{
+            .uv = t.uv,
+            .psi_star = d.psi_star,
             .wlamu = wlamu,
             .Gamma = store.Gamma[l.atom],
             .i = l.i,
             .j = l.j,
             .k = ks
-        });
+        },
+        ray.I_ext,
+        ray.one_minus_alo,
+        eta_other,
+        chi_other
+    );
 
-        const GammaMat& rad_rates = store.rad_rates[l.atom];
-        if (rad_rates.initialized()) {
-            // NOTE(cmo): psi_star = 0 => the true radiative rates.
-            add_to_gamma<false>(GammaAccumState{
-                .eta = eta_chi.eta,
-                .chi = eta_chi.chi,
-                .uv = uv,
-                .I = ray.I,
-                .psi_star = FP(0.0),
-                .wlamu = wlamu,
-                .Gamma = rad_rates,
-                .i = l.i,
-                .j = l.j,
-                .k = ks
-            });
+    const GammaMat& rad_rates = store.rad_rates[l.atom];
+    if (rad_rates.initialized()) {
+        // NOTE(cmo): psi_star = 0 => the true radiative rates.
+        add_to_gamma<false>(GammaAccumState{
+            .eta = t.eta_chi.eta,
+            .chi = t.eta_chi.chi,
+            .uv = t.uv,
+            .I = d.I,
+            .psi_star = FP(0.0),
+            .wlamu = wlamu,
+            .Gamma = rad_rates,
+            .i = l.i,
+            .j = l.j,
+            .k = ks
+        });
+    }
+}
+
+inline int gamma_max_active_lines(const AtomicData<fp_t, yakl::memHost>& adata, int la_start, int la_end) {
+    int result = 0;
+    for (int la = la_start; la < la_end; ++la) {
+        result = std::max(result, int(adata.active_lines_end(la) - adata.active_lines_start(la)));
+    }
+    return result;
+}
+
+/// Add every active line's contribution (all atoms) for one ray. Non-atomic.
+/// Each line's other terms, and psi*, need the ray's totals first, so the lines
+/// are visited twice. To minimise this cost, we cache up to MaxLines profiles.
+/// Setting MaxLines to 0 avoids the cache, for the case where there are many
+/// lines. Anticipated to dispatch this on the same basis as CoreAndVoigt
+/// Returns the derived ray quantities including total line opacity.
+template <int MaxLines>
+YAKL_INLINE GammaRayDerived accumulate_gamma_ray_lines(const GammaCell& cell, const AtmosPointParams& atmos, const GammaRay& ray) {
+    JasUnpack(cell, adata, pops, active_set, ks);
+    const EmisOpacState<> emis_opac{
+        .adata = adata,
+        .profile = cell.phi,
+        .la = cell.la,
+        .n = pops,
+        .n_star_scratch = cell.lte_scratch,
+        .k = ks,
+        .atmos = atmos
+    };
+    const UvOptions uv_opts{.divide_by_hc_4pi = !GAMMA_INCLUDE_4PI_HC};
+    const fp_t lambda = adata.wavelength(cell.la);
+    const int num_lines = active_set.extent(0);
+    auto line_terms_from_profile = [&](int kr, fp_t p) {
+        const auto& l = adata.lines(kr);
+        const int offset = adata.level_start(l.atom);
+        GammaLineTerms t;
+        t.uv = compute_uv_from_profile(l, p, lambda, uv_opts);
+        t.eta_chi = gamma_eta_chi(t.uv, pops(offset + l.i, ks), pops(offset + l.j, ks));
+        return t;
+    };
+
+    GammaRayDerived d;
+    d.lines = EmisOpac{FP(0.0), FP(0.0)};
+    CompensatedSum eta_total = cell.statics.eta;
+    CompensatedSum chi_total = cell.statics.chi;
+    auto add_to_totals = [&](const EmisOpac& eta_chi) {
+        eta_total.add(eta_chi.eta);
+        chi_total.add(eta_chi.chi);
+        d.lines.eta += eta_chi.eta;
+        d.lines.chi += eta_chi.chi;
+    };
+    fp_t profiles[MaxLines > 0 ? MaxLines : 1];
+    if constexpr (MaxLines > 0) {
+        #pragma unroll
+        for (int kra = 0; kra < MaxLines; ++kra) {
+            if (kra < num_lines) {
+                const int kr = active_set(kra);
+                profiles[kra] = compute_line_profile(emis_opac, kr);
+                add_to_totals(line_terms_from_profile(kr, profiles[kra]).eta_chi);
+            }
+        }
+    } else {
+        for (int kra = 0; kra < num_lines; ++kra) {
+            const int kr = active_set(kra);
+            add_to_totals(line_terms_from_profile(kr, compute_line_profile(emis_opac, kr)).eta_chi);
         }
     }
+    d.psi_star = std::max((FP(1.0) - ray.one_minus_alo) / chi_total.value(), FP(0.0));
+    d.I = ray.I_ext + d.psi_star * eta_total.value();
+
+    auto accumulate = [&](int kr, fp_t p) {
+        const GammaLineTerms t = line_terms_from_profile(kr, p);
+        accumulate_gamma_line(
+            cell,
+            ray,
+            d,
+            kr,
+            t,
+            eta_total.minus(t.eta_chi.eta),
+            chi_total.minus(t.eta_chi.chi)
+        );
+    };
+    if constexpr (MaxLines > 0) {
+        #pragma unroll
+        for (int kra = 0; kra < MaxLines; ++kra) {
+            if (kra < num_lines) {
+                accumulate(active_set(kra), profiles[kra]);
+            }
+        }
+    } else {
+        for (int kra = 0; kra < num_lines; ++kra) {
+            const int kr = active_set(kra);
+            accumulate(kr, compute_line_profile(emis_opac, kr));
+        }
+    }
+    return d;
 }
 
 /// Add every active continuum's contribution (all atoms) from the preintegrated angular
@@ -210,19 +364,27 @@ YAKL_INLINE void accumulate_gamma_continua(const GammaCell& cell, const AtmosPoi
         const fp_t nj = pops(offset + cont.j, ks);
         const EmisOpac eta_chi = gamma_eta_chi(uv, ni, nj);
         const fp_t wlamu = cell.wl_ray_weight * cont_edge_bin_factor(adata, cont, la);
+        const GammaAccumState acc{
+            .uv = uv,
+            .wlamu = wlamu,
+            .Gamma = store.Gamma[cont.atom],
+            .i = cont.i,
+            .j = cont.j,
+            .k = ks
+        };
+        // I_eff = I - psi* eta_trans = (I_ext + psi* eta_tot) - psi* eta_trans
+        //       = I_ext + psi* (eta_tot - eta_trans) = I_ext + psi* eta_other_cont + psi* eta_lines
+        // eta_other formed by compensated sum to avoid roundoff issues
+        // Now, psi* = Lambda* / chi_tot
+        // one_m_psi_chi = 1 - chi_trans psi*  = 1 - (chi_tot - chi_other) psi*
+        //               = 1 - chi_tot psi* + chi_other psi* = (1 - Lambda*) + chi_other psi*
         add_gamma_terms<false>(
-            GammaAccumState{
-                .uv = uv,
-                .wlamu = wlamu,
-                .Gamma = store.Gamma[cont.atom],
-                .i = cont.i,
-                .j = cont.j,
-                .k = ks
-            },
-            pre_int.I - pre_int.psi_star * eta_chi.eta,
-            pre_int.w - pre_int.psi_star * eta_chi.chi
+            acc,
+            pre_int.I_ext + pre_int.psi_star * cell.statics.eta.minus(eta_chi.eta) + pre_int.psi_eta_lines,
+            pre_int.one_minus_alo + pre_int.psi_star * cell.statics.chi.minus(eta_chi.chi) + pre_int.psi_chi_lines
         );
 
+        const fp_t I = pre_int.I_ext + pre_int.psi_star * cell.statics.eta.value() + pre_int.psi_eta_lines;
         const GammaMat& rad_rates = store.rad_rates[cont.atom];
         if (rad_rates.initialized()) {
             // NOTE(cmo): psi_star = 0 => the true radiative rates.
@@ -235,7 +397,7 @@ YAKL_INLINE void accumulate_gamma_continua(const GammaCell& cell, const AtmosPoi
                     .j = cont.j,
                     .k = ks
                 },
-                pre_int.I,
+                I,
                 pre_int.w
             );
         }
@@ -248,10 +410,10 @@ YAKL_INLINE void accumulate_gamma_continua(const GammaCell& cell, const AtmosPoi
             // from the weights, and in the weights when it is not. So
             // multiplying through by h nu leaves the energy rate, 4pi sigma I
             // dlambda, either way. Times the population to make it volumetric.
-            const fp_t w = wlamu * hc_kJ_nm / adata.wavelength(la);
+            const fp_t w_energy = wlamu * hc_kJ_nm / adata.wavelength(la);
             const int c = store.level_stage_idx(offset + cont.j);
-            cont_absorb(c, cont.i, ks) += w * ni * uv.Vij * pre_int.I;
-            store.cont_emit[cont.atom](c, cont.i, ks) += w * nj * (uv.Uji * pre_int.w + uv.Vji * pre_int.I);
+            cont_absorb(c, cont.i, ks) += w_energy * ni * uv.Vij * I;
+            store.cont_emit[cont.atom](c, cont.i, ks) += w_energy * nj * (uv.Uji * pre_int.w + uv.Vji * I);
         }
     }
 }

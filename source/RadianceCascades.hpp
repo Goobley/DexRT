@@ -235,7 +235,7 @@ YAKL_INLINE RadianceInterval<DexEmpty> interp_probe_dir(
     ri.tau = -std::log(ri.tau);
     ri.tau = std::min(ri.tau, FP(1e4));
 
-    // NOTE(cmo): Can ignore the psi_star, as it's never merged (comes from C0 only).
+    // NOTE(cmo): Can ignore the ALO terms, as they're never merged (come from C0 only).
     return ri;
 }
 
@@ -467,7 +467,7 @@ inline void parallax_fix_inner_merge(
     CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
     i64 spatial_bounds = probe_coord_lookup.num_active_probes();
 
-    // NOTE(cmo): Doesn't update psi_star, I_ext, or tr_final to match the re-merged I,
+    // NOTE(cmo): Doesn't update I_ext or one_minus_alo to match the re-merged I,
     // so these aren't consistent for Gamma when applied to C0.
     // TODO(cmo): Pre-allocate these somewhere.
     Fp1d I_temp = dev_casc_state.cascade_I.createDeviceObject();
@@ -647,9 +647,8 @@ void cascade_i_25d(
         .upper_tau = tau_cascade_ip
     };
     if constexpr (compute_alo) {
-        dev_casc_state.psi_star = casc_state.psi_star;
         dev_casc_state.I_ext = casc_state.I_ext;
-        dev_casc_state.tr_final = casc_state.tr_final;
+        dev_casc_state.one_minus_alo = casc_state.one_minus_alo;
     }
 
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
@@ -783,9 +782,8 @@ void cascade_i_25d(
                     dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
                 }
                 if constexpr (dev_compute_alo) {
-                    dev_casc_state.psi_star(lin_idx) = average_ri.psi_star;
                     dev_casc_state.I_ext(lin_idx) = average_ri.I_ext;
-                    dev_casc_state.tr_final(lin_idx) = average_ri.tr_final;
+                    dev_casc_state.one_minus_alo(lin_idx) = average_ri.one_minus_alo;
                 }
             }
         );

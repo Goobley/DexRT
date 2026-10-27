@@ -318,9 +318,8 @@ YAKL_INLINE void accumulate_weighted_interval(
         acc.tau += weight * ri.tau;
     }
     if constexpr (!std::is_same_v<Alo, DexEmpty>) {
-        acc.psi_star += weight * ri.psi_star;
         acc.I_ext += weight * ri.I_ext;
-        acc.tr_final += weight * ri.tr_final;
+        acc.one_minus_alo += weight * ri.one_minus_alo;
     }
 }
 
@@ -641,7 +640,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     constexpr bool compute_alo = (RcMode & RC_COMPUTE_ALO) && !std::is_same_v<Alo, DexEmpty>;
     if constexpr (compute_alo) {
         result.I_ext = result.I;
-        result.tr_final = FP(1.0);
+        result.one_minus_alo = FP(1.0);
     }
     if (!marcher) {
         return result;
@@ -696,8 +695,7 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     } while(s.step_through_grid());
 
     if constexpr (compute_alo) {
-        result.psi_star = std::max(one_m_edt / chi_s, FP(0.0));
-        result.tr_final = edt;
+        result.one_minus_alo = edt;
     }
     return result;
 }

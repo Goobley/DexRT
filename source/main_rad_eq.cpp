@@ -925,10 +925,9 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     if (state.atmos.e_int.initialized()) {
         maybe_rehydrate_and_write(state.atmos.e_int, "e_int", {});
     }
-    if (out_cfg.psi_star && casc_state.psi_star.initialized()) {
-        nc.write(casc_state.psi_star, "psi_star", {"casc_shape"});
+    if (out_cfg.psi_star && casc_state.I_ext.initialized()) {
         nc.write(casc_state.I_ext, "I_ext", {"casc_shape"});
-        nc.write(casc_state.tr_final, "transmission", {"casc_shape"});
+        nc.write(casc_state.one_minus_alo, "one_minus_alo", {"casc_shape"});
     }
     if (out_cfg.active) {
         // NOTE(cmo): Currently active is always written dense

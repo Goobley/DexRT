@@ -182,11 +182,25 @@ YAKL_INLINE fp_t gamma_from_broadening(
 }
 
 
+/// The normalised line profile at lambda [nm-1], as scaled by compute_uv.
 template <int mem_space=yakl::memDevice>
-YAKL_INLINE UV compute_uv(
+YAKL_INLINE fp_t line_profile(
     const CompLine<fp_t>& l,
     const VoigtProfile<fp_t, false, mem_space>& phi,
     const LineParams& params,
+    fp_t lambda
+) {
+    using namespace ConstantsFP;
+    const fp_t a = damping_from_gamma(params.gamma, lambda, params.dop_width);
+    const fp_t v = ((lambda - l.lambda0) + (params.vel * l.lambda0) / c) / params.dop_width;
+    // [nm-1]
+    return phi(a, v) / (sqrt_pi * params.dop_width);
+}
+
+/// U and V of a line from its profile p (line_profile).
+YAKL_INLINE UV compute_uv_from_profile(
+    const CompLine<fp_t>& l,
+    fp_t p,
     fp_t lambda,
     const UvOptions& opts = UvOptions()
 ) {
@@ -196,10 +210,6 @@ YAKL_INLINE UV compute_uv(
     if (!opts.divide_by_hc_4pi) {
         hnu_4pi *= hc_kJ_nm / four_pi;
     }
-    const fp_t a = damping_from_gamma(params.gamma, lambda, params.dop_width);
-    const fp_t v = ((lambda - l.lambda0) + (params.vel * l.lambda0) / c) / params.dop_width;
-    // [nm-1]
-    const fp_t p = phi(a, v) / (sqrt_pi * params.dop_width);
     UV result;
     // [m2]
     result.Vij = hnu_4pi * l.Bij * p;
@@ -208,6 +218,17 @@ YAKL_INLINE UV compute_uv(
     // [kW / (nm sr)]
     result.Uji = hnu_4pi * l.Aji * p;
     return result;
+}
+
+template <int mem_space=yakl::memDevice>
+YAKL_INLINE UV compute_uv(
+    const CompLine<fp_t>& l,
+    const VoigtProfile<fp_t, false, mem_space>& phi,
+    const LineParams& params,
+    fp_t lambda,
+    const UvOptions& opts = UvOptions()
+) {
+    return compute_uv_from_profile(l, line_profile(l, phi, params, lambda), lambda, opts);
 }
 
 template <int mem_space=yakl::memDevice>
@@ -231,29 +252,35 @@ YAKL_INLINE UV compute_uv(
     return result;
 }
 
+/// line_profile of line_idx at args' wavelength and atmosphere.
 template <typename T=fp_t, int mem_space=yakl::memDevice>
-YAKL_INLINE UV compute_uv_line(
+YAKL_INLINE fp_t compute_line_profile(
     const EmisOpacState<T, mem_space>& args,
-    int line_idx,
-    const UvOptions& opts = UvOptions()
+    int line_idx
 ) {
     JasUnpack(args, adata, profile, la, k, atmos);
-    const fp_t lambda = adata.wavelength(la);
     const auto& l = adata.lines(line_idx);
 
     LineParams params;
     params.dop_width = doppler_width(l.lambda0, adata.mass(l.atom), atmos.temperature, atmos.vturb);
     params.gamma = gamma_from_broadening(l, adata.broadening, atmos.temperature, atmos.ne, atmos.nh0);
     params.vel = atmos.vel;
+    return line_profile(l, profile, params, adata.wavelength(la));
+}
 
-    const UV uv = compute_uv(
-        l,
-        profile,
-        params,
+template <typename T=fp_t, int mem_space=yakl::memDevice>
+YAKL_INLINE UV compute_uv_line(
+    const EmisOpacState<T, mem_space>& args,
+    int line_idx,
+    const UvOptions& opts = UvOptions()
+) {
+    const fp_t lambda = args.adata.wavelength(args.la);
+    return compute_uv_from_profile(
+        args.adata.lines(line_idx),
+        compute_line_profile(args, line_idx),
         lambda,
         opts
     );
-    return uv;
 }
 
 template <typename T=fp_t, int mem_space=yakl::memDevice>

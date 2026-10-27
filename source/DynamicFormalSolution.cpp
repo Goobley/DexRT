@@ -12,7 +12,8 @@
 #include "DirectionalEmisOpacInterp.hpp"
 #include "Mipmaps.hpp"
 
-void dynamic_compute_gamma(
+template <int MaxLines>
+static void dynamic_compute_gamma_impl(
     const State& state,
     const CascadeState& casc_state,
     const Fp2d& lte_scratch,
@@ -42,8 +43,8 @@ void dynamic_compute_gamma(
     }
 
     const GammaAccumArrayState store = gamma_accum_array_state(state.Gamma, &state.rate_diag);
-    const auto& psi_star = casc_state.psi_star;
-    const auto& I = casc_state.i_cascades[0];
+    const auto& I_ext = casc_state.I_ext;
+    const auto& one_minus_alo = casc_state.one_minus_alo;
     const auto& incl_quad = state.incl_quad;
     dex_parallel_for(
         "compute Gamma",
@@ -74,7 +75,7 @@ void dynamic_compute_gamma(
                 const int la = la_start + wave;
                 const auto active_set = slice_active_set(adata, la);
                 const auto active_cont_set = slice_active_cont_set(adata, la);
-                const GammaCell cell{
+                GammaCell cell{
                     .adata = adata,
                     .phi = phi,
                     .pops = pops,
@@ -87,6 +88,7 @@ void dynamic_compute_gamma(
                     .la = la,
                     .wl_ray_weight = wl_ray_weights(wave)
                 };
+                cell.statics = gamma_static_sums(cell, local_atmos);
                 GammaRayAngularIntegral pre_int;
 
                 for (
@@ -107,8 +109,8 @@ void dynamic_compute_gamma(
                         };
                         RayProps ray = ray_props(ray_set, num_cascades, 0, probe_idx);
                         const GammaRay gamma_ray{
-                            .I = probe_fetch<RcMode>(I, ray_set, probe_idx),
-                            .psi_star = probe_fetch<RcMode>(psi_star, ray_set, probe_idx),
+                            .I_ext = probe_fetch<RcMode>(I_ext, ray_set, probe_idx),
+                            .one_minus_alo = probe_fetch<RcMode>(one_minus_alo, ray_set, probe_idx),
                             .weight = incl_quad.wmuy(theta_idx)
                         };
 
@@ -118,8 +120,8 @@ void dynamic_compute_gamma(
                                 + flat_atmos.vy(ks) * mu(1)
                                 + flat_atmos.vz(ks) * mu(2)
                         );
-                        accumulate_gamma_ray_lines(cell, local_atmos, gamma_ray);
-                        pre_int.add(gamma_ray);
+                        const GammaRayDerived derived = accumulate_gamma_ray_lines<MaxLines>(cell, local_atmos, gamma_ray);
+                        pre_int.add(gamma_ray, derived);
                     }
                 }
                 accumulate_gamma_continua(cell, local_atmos, pre_int);
@@ -127,6 +129,22 @@ void dynamic_compute_gamma(
         }
     );
     yakl::fence();
+}
+
+void dynamic_compute_gamma(
+    const State& state,
+    const CascadeState& casc_state,
+    const Fp2d& lte_scratch,
+    const CascadeCalcSubset& subset
+) {
+    const int max_lines = gamma_max_active_lines(state.adata_host, subset.la_start, subset.la_end);
+    if (max_lines <= 1) {
+        dynamic_compute_gamma_impl<1>(state, casc_state, lte_scratch, subset);
+    } else if (max_lines <= CORE_AND_VOIGT_MAX_LINES) {
+        dynamic_compute_gamma_impl<CORE_AND_VOIGT_MAX_LINES>(state, casc_state, lte_scratch, subset);
+    } else {
+        dynamic_compute_gamma_impl<0>(state, casc_state, lte_scratch, subset);
+    }
 }
 
 template <int RcMode = RC_flags_storage_2d() | RC_DYNAMIC>
@@ -325,10 +343,9 @@ void dynamic_formal_sol_rc(
     // NOTE(cmo): Compute RC FS
     constexpr int num_subsets = subset_tasks_per_cascade<RcStorage>();
     for (int subset_idx = 0; subset_idx < num_subsets; ++subset_idx) {
-        if (casc_state.psi_star.initialized()) {
-            casc_state.psi_star = FP(0.0);
+        if (casc_state.I_ext.initialized()) {
             casc_state.I_ext = FP(0.0);
-            casc_state.tr_final = FP(0.0);
+            casc_state.one_minus_alo = FP(0.0);
         }
         CascadeCalcSubset subset{
             .la_start=la_start,
@@ -353,7 +370,7 @@ void dynamic_formal_sol_rc(
                 mip_chain
             );
         }
-        if (casc_state.psi_star.initialized() && !lambda_iterate) {
+        if (casc_state.I_ext.initialized() && !lambda_iterate) {
             cascade_i_25d<RcModeAlo>(
                 state,
                 casc_state,
@@ -378,7 +395,7 @@ void dynamic_formal_sol_rc(
                 mip_chain
             );
         }
-        if (opts.compute_gamma && casc_state.psi_star.initialized()) {
+        if (opts.compute_gamma && casc_state.I_ext.initialized()) {
             // NOTE(cmo): Add terms to Gamma
             dynamic_compute_gamma(
                 state,
