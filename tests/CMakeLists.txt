@@ -55,6 +55,7 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_utils.cpp
     test_emis_opac.cpp
     test_gesv.cpp
+    test_wavelength_bins.cpp
 )
 
 set(CMAKE_CXX_STANDARD 20)

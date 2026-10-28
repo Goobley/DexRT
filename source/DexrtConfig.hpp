@@ -79,7 +79,6 @@ struct DexrtConfig {
     int snapshot_frequency = 0;
     int initial_lambda_iterations = 2;
     int max_cascade = 5;
-    bool limit_line_edge_bins = true;
     RadLossType rad_loss = RadLossType::None;
     bool rad_loss_use_flux_divergence = false;
     DexrtMipConfig mip_config;
@@ -177,9 +176,6 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
         config.rad_loss_use_flux_divergence = file["rad_loss_use_flux_divergence"].as<bool>();
     }
 
-    if (file["limit_line_edge_bins"]) {
-        config.limit_line_edge_bins = file["limit_line_edge_bins"].as<bool>();
-    }
 }
 
 inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {

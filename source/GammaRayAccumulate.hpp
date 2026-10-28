@@ -13,21 +13,6 @@
 /// eta/chi built from them multiplied back up.
 constexpr bool GAMMA_INCLUDE_4PI_HC = false;
 
-/// Avoid integrating continuum bins through their edges on the midpoint
-/// integration if the bins get wide.
-constexpr bool LIMIT_CONT_EDGE_BINS = true;
-
-/// Correction for the global wavelength bin at la to the continuum's true bin.
-YAKL_INLINE fp_t cont_edge_bin_factor(const AtomicData<fp_t>& adata, const CompCont<fp_t>& cont, int la) {
-    if (!LIMIT_CONT_EDGE_BINS || (la != cont.blue_idx && la != cont.red_idx - 1) || cont.red_idx - cont.blue_idx < 2) {
-        return FP(1.0);
-    }
-    const int lo = std::max(la - 1, int(cont.blue_idx));
-    const int hi = std::min(la + 1, int(cont.red_idx) - 1);
-    const fp_t local_bin = FP(0.5) * (adata.wavelength(hi) - adata.wavelength(lo));
-    return local_bin / adata.wavelength_bin(la);
-}
-
 /// Wavelength part of the Gamma integration weight (excluding the angular
 /// weight) - wla.
 inline fp_t gamma_wavelength_weight(const AtomicData<fp_t, yakl::memHost>& adata_host, int la) {
@@ -369,7 +354,7 @@ YAKL_INLINE void accumulate_gamma_continua(const GammaCell& cell, const AtmosPoi
         const fp_t ni = pops(offset + cont.i, ks);
         const fp_t nj = pops(offset + cont.j, ks);
         const EmisOpac eta_chi = gamma_eta_chi(uv, ni, nj);
-        const fp_t wlamu = cell.wl_ray_weight * cont_edge_bin_factor(adata, cont, la);
+        const fp_t wlamu = cell.wl_ray_weight;
         const GammaAccumState acc{
             .uv = uv,
             .wlamu = wlamu,

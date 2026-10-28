@@ -39,7 +39,7 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
 
         auto model = parse_crtaf_model<f64>("../test_CaII.yaml");
         // auto atom = to_comp_atom(model);
-        auto atomic_data = to_atomic_data<fp_t, f64>({model}, ToAtomicDataOptions{.limit_line_edge_bins = true});
+        auto atomic_data = to_atomic_data<fp_t, f64>({model});
         constexpr int num_wave = 8;
         const fp_t wavelengths[num_wave] = {
             fp_t(model.lines[0].lambda0),

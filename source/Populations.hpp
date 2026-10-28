@@ -6,6 +6,7 @@
 #include "Utils.hpp"
 #include "State.hpp"
 #include "JasPP.hpp"
+#include "WavelengthBins.hpp"
 
 template <typename T=fp_t, typename U=fp_t, int mem_space=yakl::memDevice>
 CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
@@ -160,6 +161,8 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
 
     std::vector<U> new_grid;
     new_grid.reserve(n_max_wavelengths);
+    std::vector<int> gov_idx;
+    gov_idx.reserve(n_max_wavelengths);
     auto ptr = default_grid.begin();
     while (ptr != default_grid.end()) {
         const U wave = ptr->wavelength;
@@ -181,6 +184,7 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
 
         if (ptr->origin == governing_trans) {
             new_grid.emplace_back(ptr->wavelength);
+            gov_idx.emplace_back(governing_trans);
         }
 
         ++ptr;
@@ -191,16 +195,9 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
         wavelength(la) = new_grid[la];
     }
     host_atom.wavelength = wavelength;
-    yakl::Array<T, 1, yakl::memHost> wavelength_bin("delta_lambda", new_grid.size());
-    wavelength_bin(0) = FP(0.5) * (new_grid[1] - new_grid[0]);
-    for (int la = 1; la < wavelength.extent(0) - 1; ++la) {
-        wavelength_bin(la) = FP(0.5) * (new_grid[la + 1] - new_grid[la - 1]);
-    }
-    wavelength_bin(wavelength.extent(0) - 1) = FP(0.5) * (new_grid[wavelength.extent(0) - 1] - new_grid[wavelength.extent(0) - 2]);
-    host_atom.wavelength_bin = wavelength_bin;
-
 
     int n_sigma = 0;
+    std::vector<TransitionWaveRange<U>> bin_trans(blue_wavelengths.size());
     for (int kr = 0; kr < blue_wavelengths.size(); ++kr) {
         auto blue_iter = std::lower_bound(
             new_grid.begin(),
@@ -222,7 +219,21 @@ CompAtom<T, mem_space> to_comp_atom(const ModelAtom<U>& model) {
             cont.red_idx = red_iter - new_grid.begin();
             n_sigma += cont.red_idx - cont.blue_idx;
         }
+        bin_trans[kr] = TransitionWaveRange<U>{
+            .blue_idx = int(blue_iter - new_grid.begin()),
+            .red_idx = int(red_iter - new_grid.begin()),
+            .blue = blue_wavelengths[kr],
+            .red = red_wavelengths[kr],
+            .continuum = !is_line(kr)
+        };
     }
+    // NOTE(claude): Holes aren't filled for a single atom.
+    const WavelengthBins<U> bins = clamped_wavelength_bins(new_grid, bin_trans, gov_idx);
+    yakl::Array<T, 1, yakl::memHost> wavelength_bin("delta_lambda", new_grid.size());
+    for (int la = 0; la < new_grid.size(); ++la) {
+        wavelength_bin(la) = bins.bin[la];
+    }
+    host_atom.wavelength_bin = wavelength_bin;
     yakl::Array<T, 1, yakl::memHost> sigma("sigma", n_sigma);
     int sigma_offset = 0;
     for (int kr = 0; kr < continua.extent(0); ++kr) {
@@ -315,12 +326,8 @@ struct AtomicDataHostDevice {
     bool have_h_model = false;
 };
 
-struct ToAtomicDataOptions {
-    bool limit_line_edge_bins;
-};
-
 template <typename T=fp_t, typename U=fp_t>
-AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models, const ToAtomicDataOptions& opts) {
+AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models) {
 #define DFPU(X) U(FP(X))
     using namespace ConstantsF64;
     // Sort by mass
@@ -401,9 +408,6 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models, const T
         for (const auto& line : model.lines) {
             n_broadening += line.broadening.size();
             n_max_wavelengths += line.wavelength.size();
-            if (opts.limit_line_edge_bins) {
-                n_max_wavelengths += 2;
-            }
         }
     }
     yakl::Array<ScaledExponentsBroadening<T>, 1, yakl::memHost> broadening("broadening", n_broadening);
@@ -465,7 +469,6 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models, const T
     struct WavelengthAndOrigin {
         U wavelength;
         int origin;
-        bool line_grid_limiter = false; /// Whether this is added by the algorithm to limit the size of the outermost bins on a line
     };
     std::vector<WavelengthAndOrigin> default_grid;
     default_grid.reserve(n_max_wavelengths);
@@ -494,20 +497,6 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models, const T
                 entry.wavelength = la;
                 entry.origin = trans_idx;
                 default_grid.emplace_back(entry);
-            }
-            if (opts.limit_line_edge_bins && line.wavelength.size() >= 2) {
-                WavelengthAndOrigin entry0 {
-                    .wavelength = 2 * line.wavelength[0] - line.wavelength[1],
-                    .origin = trans_idx,
-                    .line_grid_limiter = true
-                };
-                WavelengthAndOrigin entry1 {
-                    .wavelength = 2 * line.wavelength[line.wavelength.size()-1] - line.wavelength[line.wavelength.size()-2],
-                    .origin = trans_idx,
-                    .line_grid_limiter = true
-                };
-                default_grid.emplace_back(entry0);
-                default_grid.emplace_back(entry1);
             }
         }
     }
@@ -566,19 +555,10 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models, const T
         }
     };
 
-    std::vector<U> new_grid;
-    new_grid.reserve(n_max_wavelengths);
-    std::vector<TransitionIndex> gov_trans;
-    gov_trans.reserve(n_max_wavelengths);
-    auto ptr = default_grid.begin();
-    while (ptr != default_grid.end()) {
-        const U wave = ptr->wavelength;
+    auto get_governing_trans = [&](U wave) {
         get_active_trans(wave);
         if (active_trans.size() == 0) {
-            // NOTE(cmo): This is probably injected by limit_line_edge_bins, but
-            // if there's no background continuum, we can't do anything with it.
-            ++ptr;
-            continue;
+            return -1;
         }
         bool lines_only = is_line(active_trans[0]);
         U min_weight = FP(1e8);
@@ -594,40 +574,68 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models, const T
                 }
             }
         }
+        return governing_trans;
+    };
 
-        if (ptr->origin == governing_trans || ptr->line_grid_limiter) {
-            bool add_wavelength = true;
-            if (ptr->line_grid_limiter) {
-                // NOTE(cmo): Check if previous or next wavelength matches the
-                // line this wavelength is attached to. If not, we can get rid
-                // of this point.
-                // We have already checked that there is _something_ active to
-                // "govern" of this wavelength
-                add_wavelength = false;
-                if ((ptr-1) >= default_grid.begin()) {
-                    add_wavelength = add_wavelength || ((ptr-1)->origin == ptr->origin);
-                }
-                if (ptr+1 < default_grid.end()) {
-                    add_wavelength = add_wavelength || ((ptr+1)->origin == ptr->origin);
-                }
-            }
-            if (add_wavelength) {
-                new_grid.emplace_back(ptr->wavelength);
-                TransitionIndex trans_idx;
-                if (is_line(governing_trans)) {
-                    trans_idx.atom = lines(governing_trans).atom;
-                    trans_idx.kr = governing_trans - line_start(trans_idx.atom);
-                    trans_idx.line = true;
-                } else {
-                    trans_idx.atom = continua(governing_trans - total_n_line).atom;
-                    trans_idx.kr = governing_trans - total_n_line - cont_start(trans_idx.atom);
-                    trans_idx.line = false;
-                }
-                gov_trans.emplace_back(trans_idx);
-            }
+    auto to_transition_index = [&](int governing_trans) {
+        TransitionIndex trans_idx;
+        if (is_line(governing_trans)) {
+            trans_idx.atom = lines(governing_trans).atom;
+            trans_idx.kr = governing_trans - line_start(trans_idx.atom);
+            trans_idx.line = true;
+        } else {
+            trans_idx.atom = continua(governing_trans - total_n_line).atom;
+            trans_idx.kr = governing_trans - total_n_line - cont_start(trans_idx.atom);
+            trans_idx.line = false;
         }
+        return trans_idx;
+    };
 
-        ++ptr;
+    std::vector<U> new_grid;
+    new_grid.reserve(n_max_wavelengths);
+    std::vector<TransitionIndex> gov_trans;
+    gov_trans.reserve(n_max_wavelengths);
+    std::vector<int> gov_idx;
+    gov_idx.reserve(n_max_wavelengths);
+    for (const auto& entry : default_grid) {
+        const int governing_trans = get_governing_trans(entry.wavelength);
+        if (entry.origin == governing_trans) {
+            new_grid.emplace_back(entry.wavelength);
+            gov_trans.emplace_back(to_transition_index(governing_trans));
+            gov_idx.emplace_back(governing_trans);
+        }
+    }
+
+    auto compute_transition_ranges = [&]() {
+        std::vector<TransitionWaveRange<U>> result(blue_wavelengths.size());
+        for (int kr = 0; kr < blue_wavelengths.size(); ++kr) {
+            result[kr] = TransitionWaveRange<U>{
+                .blue_idx = int(std::lower_bound(new_grid.begin(), new_grid.end(), blue_wavelengths[kr]) - new_grid.begin()),
+                .red_idx = int(std::upper_bound(new_grid.begin(), new_grid.end(), red_wavelengths[kr]) - new_grid.begin()),
+                .blue = blue_wavelengths[kr],
+                .red = red_wavelengths[kr],
+                .continuum = !is_line(kr)
+            };
+        }
+        return result;
+    };
+    constexpr int max_hole_passes = 4;
+    WavelengthBins<U> bins;
+    for (int pass = 0; pass <= max_hole_passes; ++pass) {
+        bins = clamped_wavelength_bins(new_grid, compute_transition_ranges(), gov_idx);
+        if (bins.holes.size() == 0) {
+            break;
+        }
+        if (pass == max_hole_passes) {
+            throw std::runtime_error("Unable to fill the wavelength grid's holes between transitions.");
+        }
+        for (const U wave : bins.holes) {
+            const int idx = std::lower_bound(new_grid.begin(), new_grid.end(), wave) - new_grid.begin();
+            const int governing_trans = get_governing_trans(wave);
+            new_grid.insert(new_grid.begin() + idx, wave);
+            gov_trans.insert(gov_trans.begin() + idx, to_transition_index(governing_trans));
+            gov_idx.insert(gov_idx.begin() + idx, governing_trans);
+        }
     }
 
     yakl::Array<T, 1, yakl::memHost> wavelength("wavelength", new_grid.size());
@@ -637,11 +645,9 @@ AtomicDataHostDevice<T> to_atomic_data(std::vector<ModelAtom<U>> models, const T
         governing_trans(la) = gov_trans[la];
     }
     yakl::Array<T, 1, yakl::memHost> wavelength_bin("wavelength", new_grid.size());
-    wavelength_bin(0) = FP(0.5) * (new_grid[1] - new_grid[0]);
-    for (int la = 1; la < wavelength.extent(0) - 1; ++la) {
-        wavelength_bin(la) = FP(0.5) * (new_grid[la + 1] - new_grid[la - 1]);
+    for (int la = 0; la < new_grid.size(); ++la) {
+        wavelength_bin(la) = bins.bin[la];
     }
-    wavelength_bin(wavelength.extent(0) - 1) = FP(0.5) * (new_grid[wavelength.extent(0) - 1] - new_grid[wavelength.extent(0) - 2]);
     JasPack(host_data, wavelength, governing_trans, wavelength_bin);
 
     int n_sigma = 0;

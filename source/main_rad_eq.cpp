@@ -169,12 +169,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
         const auto& model_config = config.atom_configs[i];
         crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
     }
-    AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(
-        crtaf_models,
-        ToAtomicDataOptions{
-            .limit_line_edge_bins=config.limit_line_edge_bins
-        }
-    );
+    AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
     state.adata = atomic_data.device;
     state.adata_host = atomic_data.host;
     state.have_h = atomic_data.have_h_model;
@@ -1319,11 +1314,9 @@ int main(int argc, char** argv) {
     }
     config.rad_loss = RadLossType::Integrated;
     config.final_dense_fs = false;
-    config.limit_line_edge_bins = true;
     fmt::println("Setting required config vars for rad_eq:");
     fmt::println("rad_loss = \"Integrated\"");
     fmt::println("final_dense_fs = false");
-    fmt::println("limit_line_edge_bins = true");
 
     Kokkos::initialize(argc, argv);
     yakl::init(

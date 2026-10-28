@@ -528,12 +528,7 @@ int main(int argc, char** argv) {
             const auto& model_config = config.dexrt.atom_configs[i];
             crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
         }
-        AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(
-            crtaf_models,
-            ToAtomicDataOptions{
-                .limit_line_edge_bins=false
-            }
-        );
+        AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
         state.adata = atomic_data.device;
 
         const i32 max_mip_level = 0;
