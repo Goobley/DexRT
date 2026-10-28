@@ -69,11 +69,6 @@ void init_state (State* state, const DexrtConfig& config) {
     }
     state->incl_quad.muy = muy.createDeviceCopy();
     state->incl_quad.wmuy = wmuy.createDeviceCopy();
-
-#ifdef DEXRT_USE_MAGMA
-    magma_init();
-    magma_queue_create(0, &state->magma_queue);
-#endif
 }
 
 void setup_wavelength_batch(const State& state, int la_start, int la_end) {
@@ -504,12 +499,11 @@ void save_results(State& state, const CascadeState& casc_state, i32 num_iter) {
         nc.write(block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
     }
 
-    const std::vector<GammaMat>* collisional = nullptr;
+    CollisionalRatesOutput collisional_store;
+    const CollisionalRatesOutput* collisional = nullptr;
     if (out_cfg.collisional_rates) {
-        // NOTE(claude): Refills Gamma with the raw collisional rates (no
-        // fixup_gamma, so the diagonal stays zero). Gamma is not read again.
-        compute_collisions_to_gamma(&state);
-        collisional = &state.Gamma;
+        collisional_store = compute_collisional_rates_output(state);
+        collisional = &collisional_store;
     }
     write_rate_diagnostics(
         state,
@@ -636,7 +630,6 @@ int main(int argc, char** argv) {
                     while ((lte_max_change > FP(1e-5) || lte_i < 6) && lte_i < max_iters) {
                         lte_i += 1;
                         compute_nh0(state);
-                        compute_collisions_to_gamma(&state);
                         lte_max_change = stat_eq(&state, StatEqOptions{
                             .ignore_change_below_ntot_frac=FP(1e-7)
                         });
@@ -688,14 +681,7 @@ int main(int argc, char** argv) {
                     state.println("==== FS {} ====", i);
                     compute_nh0(state);
 
-                    if (state.mpi_state.rank == 0) {
-                        compute_collisions_to_gamma(&state);
-                    } else {
-                        for (int ia = 0; ia < state.Gamma.size(); ++ia) {
-                            state.Gamma[ia] = FP(0.0);
-                        }
-                        yakl::fence();
-                    }
+                    zero_precon_R(state.precon_R);
                     state.rate_diag.zero();
 
                     bool print_worst_wphi = first_iter;
@@ -729,7 +715,7 @@ int main(int argc, char** argv) {
                     wave_dist.wait_for_all(state.mpi_state);
 
                     state.println("  == Statistical equilibrium ==");
-                    wave_dist.reduce_Gamma(&state);
+                    wave_dist.reduce_precon_R(&state);
                     max_change = stat_eq(
                         &state,
                         StatEqOptions{
@@ -855,7 +841,6 @@ int main(int argc, char** argv) {
             yakl::timer_stop("DexRT");
             save_results(state, casc_state, num_iter);
         }
-        finalize_state(&state);
     }
     yakl::finalize();
     finalise_mpi();

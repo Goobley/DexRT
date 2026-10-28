@@ -361,6 +361,31 @@ YAKL_INLINE EmisOpac emis_opac(
         }
     }
 
+    // NOTE(cmo): Update n_star is often done for wave = 0, but if a continuum
+    // starts on wave = 1 onwards, this ensures its nstar is still computed.
+    // TODO(cmo): I think we should look at just using the Boltzmann factor here rather
+    // than pulling out the LTE populations.
+    if (conts && args.update_n_star) {
+        for (int ia = 0; ia < adata.num_level.extent(0); ++ia) {
+            const auto n_star = slice_pops(
+                n_star_scratch,
+                adata,
+                ia
+            );
+            const auto lte_data = extract_lte_terms_dev(adata, ia);
+            lte_pops(
+                lte_data.energy,
+                lte_data.g,
+                lte_data.stage,
+                atmos.temperature,
+                atmos.ne,
+                lte_data.abundance * atmos.nhtot,
+                n_star,
+                k
+            );
+        }
+    }
+
     if (conts) {
         bool any_active = false || (active_set_cont.initialized() && active_set_cont.extent(0) > 0);
         if (!active_set_cont.initialized()) {
@@ -376,26 +401,6 @@ YAKL_INLINE EmisOpac emis_opac(
             return result;
         }
 
-        if (args.update_n_star) {
-            for (int ia = 0; ia < adata.num_level.extent(0); ++ia) {
-                const auto n_star = slice_pops(
-                    n_star_scratch,
-                    adata,
-                    ia
-                );
-                const auto lte_data = extract_lte_terms_dev(adata, ia);
-                lte_pops(
-                    lte_data.energy,
-                    lte_data.g,
-                    lte_data.stage,
-                    atmos.temperature,
-                    atmos.ne,
-                    lte_data.abundance * atmos.nhtot,
-                    n_star,
-                    k
-                );
-            }
-        }
         if (active_set_cont.initialized()) {
             for (int i = 0; i < active_set_cont.extent(0); ++i) {
                 const int kr = active_set_cont(i);

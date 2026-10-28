@@ -171,7 +171,6 @@ target_include_directories(dexrt SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_link_libraries(dexrt "${LDLIBS}")
@@ -201,7 +200,6 @@ target_include_directories(dexrt_rad_eq SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_link_libraries(dexrt_rad_eq "${LDLIBS}")
@@ -229,7 +227,6 @@ target_include_directories(dexrt_3d SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_include_directories(dexrt_3d PUBLIC
@@ -260,7 +257,6 @@ target_include_directories(dexrt_ray SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_include_directories(dexrt_ray PUBLIC
@@ -291,7 +287,6 @@ target_include_directories(dexrt_ray_3d SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
     "${NETCDF_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
     "${CUDA_MATH_INCLUDE_PATH}"
 )
 target_include_directories(dexrt_ray PUBLIC

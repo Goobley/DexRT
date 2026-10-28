@@ -5,12 +5,13 @@
 #include "Collisions.hpp"
 #include "State.hpp"
 #include "State3d.hpp"
+#include "GammaMatrix.hpp"
 
 template <typename State>
 void set_zero_radiation_pops(State* st, int atom) {
     const auto& state = *st;
     JasUnpack(state, adata);
-    const auto& Gamma = state.Gamma[atom];
+    const auto& precon_R = state.precon_R[atom];
     const int level_start = state.adata_host.level_start(atom);
     const int num_level = state.adata_host.num_level(atom);
     const int line_start = state.adata_host.line_start(atom);
@@ -18,10 +19,11 @@ void set_zero_radiation_pops(State* st, int atom) {
     const int cont_start = state.adata_host.cont_start(atom);
     const int num_cont = state.adata_host.num_cont(atom);
     const int num_wave = state.adata_host.wavelength.extent(0);
-    const i64 num_space = Gamma.extent(2);
+    const i64 num_space = precon_R.extent(2);
     const auto& wavelength = adata.wavelength;
     const auto& temperature = state.atmos.temperature;
     const auto& ne = state.atmos.ne;
+    precon_R = GammaFp(0.0);
 
     dex_parallel_for(
         "Zero radiation initialisation: Lines",
@@ -29,7 +31,7 @@ void set_zero_radiation_pops(State* st, int atom) {
         KOKKOS_LAMBDA (i64 ks) {
             for (int kr = line_start; kr < line_start + num_line; ++kr) {
                 const auto& line = adata.lines(kr);
-                Kokkos::atomic_add(&Gamma(line.i, line.j, ks), line.Aji);
+                precon_R(kr - line_start, PRECON_R_DOWN, ks) += line.Aji;
             }
         }
     );
@@ -57,7 +59,7 @@ void set_zero_radiation_pops(State* st, int atom) {
                 const auto& sigma_grid = get_sigma(adata, cont);
                 const fp_t Uji = ne_k * saha_boltzmann * twohc2_kW_nm2 / (cube(lambda) * square(lambda) * FP(1e-18)) * sigma_grid.sigma(la - cont.blue_idx);
 
-                Kokkos::atomic_add(&Gamma(cont.i, cont.j, ks), Uji * wl_weight);
+                Kokkos::atomic_add(&precon_R(num_line + kr - cont_start, PRECON_R_DOWN, ks), GammaFp(Uji * wl_weight));
             }
         }
     );
@@ -79,7 +81,6 @@ void set_initial_pops_special(State* state) {
         return;
     }
 
-    compute_collisions_to_gamma(state);
     for (int ia = 0; ia < state->adata_host.init_pops_scheme.extent(0); ++ia) {
         const auto intial_pops = state->adata_host.init_pops_scheme(ia);
 

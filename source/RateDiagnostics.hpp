@@ -23,11 +23,11 @@ typedef yakl::Array<RadLossFp, 3, yakl::memDevice> ContEnergyMat;
  * State::Gamma), and is empty unless the associated output flag is set.
  */
 struct RateDiagnostics {
-    /// [i, j, ks] per atom. R(j, i, ks) == R_{i->j}, i.e. the same slot
-    /// convention as Gamma, but accumulated with psi_star = 0, so these are the
-    /// true (lambda iteration) radiative rates rather than preconditioned ones.
-    /// [s-1]
-    std::vector<GammaMat> radiative_rates;
+    /// [t, 2, ks] per atom, the same layout as precon_R (lines, then
+    /// continua; slot 0 up i -> j, 1 down j -> i), but accumulated with
+    /// psi_star = 0, so these are the true (lambda iteration) radiative rates
+    /// rather than preconditioned ones. [s-1]
+    std::vector<PreconRMat> radiative_rates;
     /// [c, i, ks] per atom. Energy absorbed by the photoionisation i -> c,
     /// integrated over direction and wavelength, and multiplied by n_i. [kW m-3]
     std::vector<ContEnergyMat> cont_energy_absorb;
@@ -98,8 +98,9 @@ struct RateDiagnostics {
         for (int ia = 0; ia < num_atom; ++ia) {
             const int n_level = adata.num_level(ia);
             if (out_cfg.radiative_rates) {
+                const int n_trans = adata.num_line(ia) + adata.num_cont(ia);
                 radiative_rates.emplace_back(
-                    GammaMat("radiative_rates", n_level, n_level, num_active_cells)
+                    PreconRMat("radiative_rates", n_trans, 2, num_active_cells)
                 );
             }
             if (out_cfg.cont_energy_balance) {
@@ -128,6 +129,11 @@ struct RateDiagnostics {
         }
         yakl::fence();
     }
+};
+
+struct CollisionalRatesOutput {
+    std::vector<Fp3d> rates;
+    std::vector<yakl::Array<i32, 2, yakl::memHost>> pairs;
 };
 
 /// The bits of the surrounding output conventions that differ between dexrt and
@@ -174,17 +180,65 @@ inline void write_rate_diag_array(
     nc.write(out, name, {d0_name, d1_name, opts.z_dim, opts.x_dim});
 }
 
+/// The transitions of atom ia, as indexed by precon_R and radiative_rates:
+/// transition_levels_<ia> [t, 2] (lower i, upper j, 0-based within the atom),
+/// transition_type_<ia> [t] (0 line, 1 continuum), transition_lambda0_<ia> [t]
+/// (line centre, or the edge of the continuum) [nm], the
+/// level energies [eV] and statistical weights g.
+template <typename AtomicDataHost, typename NcT>
+inline void write_transition_table(
+    const AtomicDataHost& adata,
+    int ia,
+    NcT& nc,
+    const std::string& trans_dim,
+    const RateDiagOutputOpts& opts
+) {
+    const int num_line = adata.num_line(ia);
+    const int num_trans = num_line + adata.num_cont(ia);
+    yakl::Array<i32, 2, yakl::memHost> levels("transition_levels", num_trans, 2);
+    yakl::Array<i32, 1, yakl::memHost> type("transition_type", num_trans);
+    yakl::Array<f64, 1, yakl::memHost> lambda0("transition_lambda0", num_trans);
+    for (int t = 0; t < num_trans; ++t) {
+        if (t < num_line) {
+            const auto& l = adata.lines(adata.line_start(ia) + t);
+            levels(t, 0) = l.i;
+            levels(t, 1) = l.j;
+            type(t) = 0;
+            lambda0(t) = l.lambda0;
+        } else {
+            const auto& c = adata.continua(adata.cont_start(ia) + t - num_line);
+            levels(t, 0) = c.i;
+            levels(t, 1) = c.j;
+            type(t) = 1;
+            lambda0(t) = adata.wavelength(c.red_idx - 1);
+        }
+    }
+    const int num_level = adata.num_level(ia);
+    yakl::Array<f64, 1, yakl::memHost> energy("level_energy", num_level);
+    yakl::Array<f64, 1, yakl::memHost> g("level_g", num_level);
+    for (int i = 0; i < num_level; ++i) {
+        energy(i) = adata.energy(adata.level_start(ia) + i);
+        g(i) = adata.g(adata.level_start(ia) + i);
+    }
+    const std::string level_dim = fmt::format("level_{}{}", ia, opts.suffix);
+    nc.write(levels, fmt::format("transition_levels_{}{}", ia, opts.suffix), {trans_dim, "lower_upper" + opts.suffix});
+    nc.write(type, fmt::format("transition_type_{}{}", ia, opts.suffix), {trans_dim});
+    nc.write(lambda0, fmt::format("transition_lambda0_{}{}", ia, opts.suffix), {trans_dim});
+    nc.write(energy, fmt::format("level_energy_{}{}", ia, opts.suffix), {level_dim});
+    nc.write(g, fmt::format("level_g_{}{}", ia, opts.suffix), {level_dim});
+}
+
 /**
- * Write the enabled rate diagnostics. `collisional_rates` is the buffer the
- * collisional rates were computed into (state.Gamma -- it is dead by output
- * time in both codes); pass nullptr to skip them.
+ * Write the enabled rate diagnostics. `collisional_rates` are the per-pair
+ * collisional rates (compute_collisional_rates_output); pass nullptr to skip
+ * them.
  */
 template <typename StateT, typename NcT>
 inline void write_rate_diagnostics(
     const StateT& state,
     NcT& nc,
     const RateDiagOutputOpts& opts,
-    const std::vector<GammaMat>* collisional_rates = nullptr
+    const CollisionalRatesOutput* collisional_rates = nullptr
 ) {
     const auto& out_cfg = state.config.output;
     const auto& diag = state.rate_diag;
@@ -194,15 +248,17 @@ inline void write_rate_diagnostics(
     // have the same extent: xarray does not support repeated dims, and warns
     // that most of its functionality then fails silently.
     for (int ia = 0; ia < diag.radiative_rates.size(); ++ia) {
+        const std::string trans_dim = fmt::format("transition_{}{}", ia, opts.suffix);
         write_rate_diag_array(
             diag.radiative_rates[ia],
             block_map,
             nc,
             fmt::format("radiative_rates_{}{}", ia, opts.suffix),
-            fmt::format("level_to_{}", ia),
-            fmt::format("level_from_{}", ia),
+            trans_dim,
+            "up_down" + opts.suffix,
             opts
         );
+        write_transition_table(state.adata_host, ia, nc, trans_dim, opts);
     }
 
     if (opts.energy_scale != RadLossFp(1.0)) {
@@ -249,15 +305,21 @@ inline void write_rate_diagnostics(
     if (out_cfg.collisional_rates && collisional_rates) {
         // NOTE(claude): indexed by position in adata, like radiative_rates, so
         // collisional_rates_<ia> and radiative_rates_<ia> are the same atom.
-        for (int ia = 0; ia < collisional_rates->size(); ++ia) {
+        for (int ia = 0; ia < collisional_rates->rates.size(); ++ia) {
+            const std::string pair_dim = fmt::format("collision_pair_{}{}", ia, opts.suffix);
             write_rate_diag_array(
-                (*collisional_rates)[ia],
+                collisional_rates->rates[ia],
                 block_map,
                 nc,
                 fmt::format("collisional_rates_{}{}", ia, opts.suffix),
-                fmt::format("level_to_{}", ia),
-                fmt::format("level_from_{}", ia),
+                pair_dim,
+                "up_down" + opts.suffix,
                 opts
+            );
+            nc.write(
+                collisional_rates->pairs[ia],
+                fmt::format("collision_pair_levels_{}{}", ia, opts.suffix),
+                {pair_dim, "lower_upper" + opts.suffix}
             );
         }
     }

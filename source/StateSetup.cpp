@@ -1,4 +1,5 @@
 #include "StateSetup.hpp"
+#include "GammaMatrix.hpp"
 #include "CascadeState.hpp"
 #include "Populations.hpp"
 #include "CrtafParser.hpp"
@@ -167,10 +168,10 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config, const AtmosZ
 
     if (config.mode == DexrtMode::NonLte) {
         for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
-            const int n_level = state.adata_host.num_level(ia);
-            state.Gamma.emplace_back(
-                decltype(state.Gamma)::value_type("Gamma", n_level, n_level, num_active_cells)
+            state.precon_R.emplace_back(
+                PreconRMat("precon_R", num_transitions(state.adata_host, ia), 2, num_active_cells)
             );
+            state.precon_R.back() = GammaFp(0.0);
         }
         state.rate_diag.allocate(state.adata_host, config.output, num_active_cells);
         state.wphi = Rad16Array("wphi", state.adata.lines.extent(0), num_active_cells);
@@ -278,12 +279,6 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     return c0_rays;
 }
 
-void finalize_state(State* state) {
-#ifdef DEXRT_USE_MAGMA
-    magma_queue_destroy(state->magma_queue);
-    magma_finalize();
-#endif
-}
 
 /// Loads the populations, ne, and nh_tot from restart_path. Returns the current
 /// iteration number.  Will crash/throw exception if file can't be found or

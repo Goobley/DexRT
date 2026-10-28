@@ -90,7 +90,6 @@ set_target_properties(
 target_include_directories(dexrt_test SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
 )
 target_include_directories(dexrt_test PUBLIC "../source/")
 target_include_directories(dexrt_test PUBLIC "../YAKL/src")
@@ -113,8 +112,7 @@ target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 #     "${GCC_INCLUDE_PATH}"
 #     "${MPI_INCLUDE_PATH}"
 #     "${NETCDF_INCLUDE_PATH}"
-#     "${MAGMA_INCLUDE_PATH}"
-# )
+# # )
 # target_include_directories(lw_comparison_2d PUBLIC "../source/")
 # target_include_directories(lw_comparison_2d PUBLIC "../YAKL/src")
 # target_include_directories(lw_comparison_2d PUBLIC ../fmt/include)
@@ -141,8 +139,7 @@ target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 #     "${GCC_INCLUDE_PATH}"
 #     "${MPI_INCLUDE_PATH}"
 #     "${NETCDF_INCLUDE_PATH}"
-#     "${MAGMA_INCLUDE_PATH}"
-# )
+# # )
 # target_include_directories(diffuse_source PUBLIC "../source/")
 # target_include_directories(diffuse_source PUBLIC "../YAKL/src")
 # target_include_directories(diffuse_source PUBLIC ../fmt/include)
@@ -169,8 +166,7 @@ target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 #     "${GCC_INCLUDE_PATH}"
 #     "${MPI_INCLUDE_PATH}"
 #     "${NETCDF_INCLUDE_PATH}"
-#     "${MAGMA_INCLUDE_PATH}"
-# )
+# # )
 # target_include_directories(solid_source PUBLIC "../source/")
 # target_include_directories(solid_source PUBLIC "../YAKL/src")
 # target_include_directories(solid_source PUBLIC ../fmt/include)
@@ -197,8 +193,7 @@ target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 #     "${GCC_INCLUDE_PATH}"
 #     "${MPI_INCLUDE_PATH}"
 #     "${NETCDF_INCLUDE_PATH}"
-#     "${MAGMA_INCLUDE_PATH}"
-# )
+# # )
 # target_include_directories(static_lte_fs PUBLIC "../source/")
 # target_include_directories(static_lte_fs PUBLIC "../YAKL/src")
 # target_include_directories(static_lte_fs PUBLIC ../fmt/include)

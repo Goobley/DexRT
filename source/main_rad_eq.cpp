@@ -1,4 +1,5 @@
 #include <math.h>
+#include "GammaMatrix.hpp"
 #include <limits>
 #include "Config.hpp"
 #include "Types.hpp"
@@ -210,10 +211,10 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
 
     if (config.mode == DexrtMode::NonLte) {
         for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
-            const int n_level = state.adata_host.num_level(ia);
-            state.Gamma.emplace_back(
-                decltype(state.Gamma)::value_type("Gamma", n_level, n_level, num_active_cells)
+            state.precon_R.emplace_back(
+                PreconRMat("precon_R", num_transitions(state.adata_host, ia), 2, num_active_cells)
             );
+            state.precon_R.back() = GammaFp(0.0);
         }
         state.wphi = Rad16Array("wphi", state.adata.lines.extent(0), num_active_cells);
     }
@@ -265,18 +266,6 @@ void init_state (State* state, const DexrtConfig& config) {
     }
     state->incl_quad.muy = muy.createDeviceCopy();
     state->incl_quad.wmuy = wmuy.createDeviceCopy();
-
-#ifdef DEXRT_USE_MAGMA
-    magma_init();
-    magma_queue_create(0, &state->magma_queue);
-#endif
-}
-
-void finalize_state(State* state) {
-#ifdef DEXRT_USE_MAGMA
-    magma_queue_destroy(state->magma_queue);
-    magma_finalize();
-#endif
 }
 
 struct RestartState {
@@ -968,14 +957,7 @@ int iterate_non_lte(
         state.println("==== FS {} ====", i);
         compute_nh0(state);
 
-        if (state.mpi_state.rank == 0) {
-            compute_collisions_to_gamma(&state);
-        } else {
-            for (int ia = 0; ia < state.Gamma.size(); ++ia) {
-                state.Gamma[ia] = FP(0.0);
-            }
-            yakl::fence();
-        }
+        zero_precon_R(state.precon_R);
 
         bool print_worst_wphi = first_iter;
         compute_profile_normalisation(state, casc_state, print_worst_wphi);
@@ -1008,7 +990,7 @@ int iterate_non_lte(
         wave_dist.wait_for_all(state.mpi_state);
 
         state.println("  == Statistical equilibrium ==");
-        wave_dist.reduce_Gamma(&state);
+        wave_dist.reduce_precon_R(&state);
         max_change = stat_eq(
             &state,
             StatEqOptions{
@@ -1427,7 +1409,6 @@ int main(int argc, char** argv) {
             while ((lte_max_change > FP(1e-5) || lte_i < 6) && lte_i < max_iters) {
                 lte_i += 1;
                 compute_nh0(state);
-                compute_collisions_to_gamma(&state);
                 lte_max_change = stat_eq(&state, StatEqOptions{
                     .ignore_change_below_ntot_frac=FP(1e-7)
                 });
@@ -1592,7 +1573,6 @@ int main(int argc, char** argv) {
         wave_dist.reduce_J(&state);
         yakl::timer_stop("DexRT");
         save_results(state, casc_state, num_iter);
-        finalize_state(&state);
     }
     yakl::finalize();
     finalise_mpi();

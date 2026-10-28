@@ -15,9 +15,6 @@
 
 #include <fmt/core.h>
 
-#ifdef DEXRT_USE_MAGMA
-    #include <magma_v2.h>
-#endif
 
 struct State {
     DexrtConfig config;
@@ -43,14 +40,11 @@ struct State {
     Rad16Array J_stage; /// J encoded for the copy to J_cpu (HALF_RADIATION_STORAGE only).
     yakl::Array<RadLossFp, 2, yakl::memDevice> rad_loss; /// [wave_batch || 1, ks] follows same logic as J, but also can be pre-integrated (i.e. all wavelength bins integrated)
     yakl::Array<RadLossFp, 2, yakl::memHost> rad_loss_cpu; /// [num_wave || 1, ks] per wavelength if not pre-integrated.
-    std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
+    std::vector<PreconRMat> precon_R; /// [t, 2, ks] the preconditioned radiative rates (GammaMatrix.hpp) -- Gamma is assembled in shared memory adding the collisions in stat_eq
     RateDiagnostics rate_diag; /// Optional per-transition output diagnostics
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;
-#ifdef DEXRT_USE_MAGMA
-    magma_queue_t magma_queue;
-#endif
 
     template <typename ...T>
     void println(fmt::format_string<T...> fmt, T&&... args) const {

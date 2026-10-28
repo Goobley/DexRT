@@ -42,7 +42,7 @@ static void dynamic_compute_gamma_impl(
         wl_ray_weights(wave) = gamma_wavelength_weight(state.adata_host, la_start + wave) / fp_t(c0_dirs_to_average<RcMode>());
     }
 
-    const GammaAccumArrayState store = gamma_accum_array_state(state.Gamma, &state.rate_diag);
+    const GammaAccumArrayState store = gamma_accum_array_state(state.precon_R, &state.rate_diag);
     const auto& I_ext = casc_state.I_ext;
     const auto& one_minus_alo = casc_state.one_minus_alo;
     const auto& incl_quad = state.incl_quad;

@@ -22,7 +22,6 @@ struct AtmosZWindow {
 CascadeRays init_atmos_atoms(State* st, const DexrtConfig& config, const AtmosZWindow* window = nullptr);
 /// Loads eta/chi for DexrtMode::GivenFs.
 CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config);
-void finalize_state(State* state);
 
 /// Loads the populations, ne, and nh_tot from restart_path. Returns the current
 /// iteration number.

@@ -136,8 +136,8 @@ static void dynamic_compute_gamma_impl(
     const int num_cascades = casc_state.num_cascades;
     const auto spatial_bounds = mr_block_map.block_map.loop_bounds();
     const fp_t wl_ray_weight = gamma_wavelength_weight(state.adata_host, la) / fp_t(ray_set.num_az_rays * ray_set.num_polar_rays);
-    // NOTE(cmo): No rate diagnostics in 3D.
-    const GammaAccumArrayState out = gamma_accum_array_state(state.Gamma, nullptr);
+    // NOTE(cmo): No rate diagnostics in 3D yet.
+    const GammaAccumArrayState out = gamma_accum_array_state(state.precon_R, nullptr);
     const auto& I_ext = casc_state.I_ext;
     const auto& one_minus_alo = casc_state.one_minus_alo;
     dex_parallel_for(

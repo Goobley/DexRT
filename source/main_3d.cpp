@@ -1,4 +1,5 @@
 #include "State3d.hpp"
+#include "GammaMatrix.hpp"
 #include "CascadeState3d.hpp"
 #include "RcUtilsModes3d.hpp"
 #include "StaticFormalSolution3d.hpp"
@@ -156,10 +157,10 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
 
     // if (config.mode == DexrtMode::NonLte) {
         for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
-            const int n_level = state.adata_host.num_level(ia);
-            state.Gamma.emplace_back(
-                decltype(state.Gamma)::value_type("Gamma", n_level, n_level, num_active_cells)
+            state.precon_R.emplace_back(
+                PreconRMat("precon_R", num_transitions(state.adata_host, ia), 2, num_active_cells)
             );
+            state.precon_R.back() = GammaFp(0.0);
         }
         state.wphi = Rad16Array("wphi", state.adata.lines.extent(0), num_active_cells);
     // }
@@ -776,7 +777,6 @@ int main(int argc, char** argv) {
                 while ((lte_max_change > FP(1e-5) || lte_i < 6) && lte_i < max_iters) {
                     lte_i += 1;
                     compute_nh0(state);
-                    compute_collisions_to_gamma(&state);
                     lte_max_change = stat_eq(&state, StatEqOptions{
                         .ignore_change_below_ntot_frac=FP(1e-7)
                     });
@@ -828,14 +828,7 @@ int main(int argc, char** argv) {
                     pbar.restart();
                 }
                 compute_nh0(state);
-                if (state.mpi_state.rank == 0) {
-                    compute_collisions_to_gamma(&state);
-                } else {
-                    for (int ia = 0; ia < state.Gamma.size(); ++ia) {
-                        state.Gamma[ia] = FP(0.0);
-                    }
-                    Kokkos::fence();
-                }
+                zero_precon_R(state.precon_R);
 
                 compute_profile_normalisation(state, casc_state, first_iter);
                 state.J = FP(0.0);
@@ -864,7 +857,7 @@ int main(int argc, char** argv) {
                     break;
                 }
                 state.println("{}  == Statistical equilibrium ==", show_iteration_progress ? "\n" : "");
-                wave_dist.reduce_Gamma(&state);
+                wave_dist.reduce_precon_R(&state);
                 max_change = stat_eq(
                     &state,
                     StatEqOptions{

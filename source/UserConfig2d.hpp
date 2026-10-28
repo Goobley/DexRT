@@ -44,10 +44,11 @@ typedef uint64_t u64;
 // good idea what you're doing!
 typedef f64 StatEqPrecision;
 
-// Set the precision used in the accumulation of the Gamma matrix. Single
-// precision is usually fine.
-// typedef fp_t GammaFp;
-typedef f64 GammaFp;
+// Set the precision used in the accumulation of the Gamma matrix (the
+// per-transition precon_R; Gamma itself is assembled in StatEqPrecision).
+// Single precision is usually fine.
+typedef fp_t GammaFp;
+// typedef f64 GammaFp;
 
 // Set the precision used in the accumulation of the radiative losses
 // typedef fp_t RadLossFp;
@@ -218,6 +219,10 @@ constexpr fp_t INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH = FP(2.0);
 // CoreAndVoigt. Code will throw an error if this is too small, but there are
 // performance benefits for keeping it smaller.
 constexpr int CORE_AND_VOIGT_MAX_LINES = 4;
+
+// The maximum number of active atoms the Gamma accumulation supports. Code will
+// throw an error if this is too small.
+constexpr int GAMMA_MAX_ATOMS = 8;
 
 // Whether to conserve pressure in the charge conservation Newton-Raphson, or in
 // the separate secondary iteration.

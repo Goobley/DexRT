@@ -154,31 +154,18 @@ struct WavelengthDistributor {
     }
 
     template <typename State>
-    inline void reduce_Gamma(State* state) {
+    inline void reduce_precon_R(State* state) {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(test_lock);
-        for (int ia = 0; ia < state->Gamma.size(); ++ia) {
+        auto reduce = [&](GammaFp* ptr, i64 size) {
             if (state->mpi_state.rank == 0) {
-                MPI_Reduce(
-                    MPI_IN_PLACE,
-                    state->Gamma[ia].data(),
-                    state->Gamma[ia].size(),
-                    get_GammaFpMpi(),
-                    MPI_SUM,
-                    0,
-                    state->mpi_state.comm
-                );
+                MPI_Reduce(MPI_IN_PLACE, ptr, size, get_GammaFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
             } else {
-                MPI_Reduce(
-                    state->Gamma[ia].data(),
-                    nullptr,
-                    state->Gamma[ia].size(),
-                    get_GammaFpMpi(),
-                    MPI_SUM,
-                    0,
-                    state->mpi_state.comm
-                );
+                MPI_Reduce(ptr, nullptr, size, get_GammaFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
             }
+        };
+        for (const auto& arr : state->precon_R) {
+            reduce(arr.data(), arr.size());
         }
 #endif
     }

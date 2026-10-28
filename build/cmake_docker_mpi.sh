@@ -1,9 +1,6 @@
 #!/bin/bash
 
 GCC_INCLUDE_PATH=$(g++ --print-file-name=include)
-MAGMA_INCLUDE_PATH="/usr/local/magma/include"
-MAGMA_LIB_PATH="${MAGMA_INCLUDE_PATH}/../lib/"
-MAGMA_LIB="-lmagma"
 
 # NOTE(cmo): You will need to get this into your runenv too
 module purge
