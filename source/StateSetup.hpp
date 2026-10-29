@@ -30,7 +30,9 @@ void save_snapshot(const State& state, int num_iter);
 void load_initial_pops(State* st, const std::string& initial_pops_path);
 
 void copy_J_plane_to_host(const State& state, int la_start, int la_end);
-void copy_rad_loss_plane_to_host(const State& state, int la_start, int la_end);
+void zero_rad_loss(const State& state);
+void finalise_rad_loss_batch(const State& state, int la_start, int la_end);
+void copy_rad_loss_to_host(const State& state);
 
 #else
 #endif

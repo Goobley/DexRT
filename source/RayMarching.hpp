@@ -290,11 +290,12 @@ YAKL_INLINE bool next_intersection(RayMarchState2d* state) {
     return new_t <= s.max_t;
 }
 
-template <typename Alo>
-YAKL_INLINE RadianceInterval<Alo> merge_intervals(
-    RadianceInterval<Alo> closer,
-    RadianceInterval<Alo> further
+template <typename Alo, typename Loss>
+YAKL_INLINE RadianceInterval<Alo, Loss> merge_intervals(
+    RadianceInterval<Alo, Loss> closer,
+    RadianceInterval<Alo, Loss> further
 ) {
+    static_assert(std::is_same_v<Loss, DexEmpty>, "Loss intervals start from the upper cascade's intensity, they aren't merged.");
     fp_t transmission = std::exp(-closer.tau);
     closer.I += transmission * further.I;
     if constexpr (!std::is_same_v<Alo, DexEmpty>) {
@@ -307,12 +308,15 @@ YAKL_INLINE RadianceInterval<Alo> merge_intervals(
     return closer;
 }
 
-template <typename Alo>
+template <typename Alo, typename Loss>
 YAKL_INLINE void accumulate_weighted_interval(
-    RadianceInterval<Alo>& acc,
-    const RadianceInterval<Alo>& ri,
+    RadianceInterval<Alo, Loss>& acc,
+    const RadianceInterval<Alo, Loss>& ri,
     fp_t weight
 ) {
+    if constexpr (!std::is_same_v<Loss, DexEmpty>) {
+        acc.loss += weight * ri.loss;
+    }
     acc.I += weight * ri.I;
     if constexpr (STORE_TAU_CASCADES) {
         acc.tau += weight * ri.tau;
@@ -454,7 +458,18 @@ struct Raymarch2dArgs {
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const MultiResMipChain& mip_chain;
     const DynamicState& dyn_state;
+    /// Initial intensity (far end), i.e. the interpolated upper cascade -- this can avoid a merge call
+    fp_t I_start = FP(0.0);
 };
+
+/// Mean transmission exp(-chi s) over the full chord through a cell, given the
+/// optical depth from its face to its centre: (1 - exp(-2 tau)) / (2 tau)
+YAKL_INLINE fp_t chord_mean_transmission(fp_t tau) {
+    if (tau <= FP(0.0)) {
+        return FP(1.0);
+    }
+    return -std::expm1(-FP(2.0) * tau) / (FP(2.0) * tau);
+}
 
 YAKL_INLINE RaySegment<2> ray_seg_from_ray_props(const RayProps& ray) {
     fp_t t1 = (ray.end(0) - ray.start(0)) / ray.dir(0);
@@ -594,9 +609,10 @@ template <
     int RcMode=0,
     typename Bc,
     typename DynamicState,
-    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>,
+    typename Loss=std::conditional_t<bool(RcMode & RC_COMPUTE_LOSS), fp_t, DexEmpty>
 >
-YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
+YAKL_INLINE RadianceInterval<Alo, Loss> multi_level_dda_raymarch_2d(
     const Raymarch2dArgs<Bc, DynamicState>& args
 ) {
     JasUnpack(args, casc_state_bc, ray, distance_scale, mu, incl, incl_weight, wave, la, offset, dyn_state);
@@ -611,8 +627,8 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
     MRIdxGen idx_gen(args.mr_block_map);
     auto s = MultiLevelDDA<BLOCK_SIZE, ENTRY_SIZE>(idx_gen);
     const bool marcher = s.init(ray_seg, args.max_mip_to_sample, &start_clipped);
-    RadianceInterval<Alo> result{
-        .I = FP(0.0),
+    RadianceInterval<Alo, Loss> result{
+        .I = args.I_start,
         .tau = FP(0.0)
     };
     // NOTE(cmo): always_sample_bc is a problem with LS
@@ -648,6 +664,9 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
 
     // NOTE(cmo): one_m_edt is also the ALO -- divide by chi_s for PsiStar_lambda_omegahat
     fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0), edt = FP(1.0);
+    constexpr bool compute_loss = (RcMode & RC_COMPUTE_LOSS) && !std::is_same_v<Loss, DexEmpty>;
+    // NOTE(cmo): Probe cell terms for loss, I_f is its incoming face intensity.
+    fp_t loss_I_f = FP(0.0), loss_S = FP(0.0), loss_tau = FP(0.0);
     // NOTE(cmo): implicit assumption muy != 1.0
     const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
     fp_t lambda;
@@ -690,12 +709,20 @@ YAKL_INLINE RadianceInterval<Alo> multi_level_dda_raymarch_2d(
             if constexpr (compute_alo) {
                 result.I_ext = result.I * edt;
             }
+            if constexpr (compute_loss) {
+                loss_I_f = result.I;
+                loss_S = source_fn;
+                loss_tau = tau_mu;
+            }
             result.I = result.I * edt + source_fn * one_m_edt;
         }
     } while(s.step_through_grid());
 
     if constexpr (compute_alo) {
         result.one_minus_alo = edt;
+    }
+    if constexpr (compute_loss) {
+        result.loss = chi_s * chord_mean_transmission(loss_tau) * (loss_S - loss_I_f);
     }
     return result;
 }

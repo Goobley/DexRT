@@ -194,33 +194,24 @@ struct WavelengthDistributor {
 #endif
     }
 
+    /// Reduces both the host rad_loss and the device rad_loss_integrated to rank 0, so they stay consistent.
     template <typename State>
     inline void reduce_rad_loss(State* state) {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(test_lock);
-        RadLossFp* rad_loss_ptr = state->rad_loss_cpu.data();
-        i64 rad_loss_size = state->rad_loss_cpu.size();
-        if (state->mpi_state.rank == 0) {
-            MPI_Reduce(
-                MPI_IN_PLACE,
-                rad_loss_ptr,
-                rad_loss_size,
-                get_RadLossFpMpi(),
-                MPI_SUM,
-                0,
-                state->mpi_state.comm
-            );
-        } else {
-            MPI_Reduce(
-                rad_loss_ptr,
-                nullptr,
-                rad_loss_size,
-                get_RadLossFpMpi(),
-                MPI_SUM,
-                0,
-                state->mpi_state.comm
-            );
+        if (!state->rad_loss.initialized()) {
+            return;
         }
+        auto reduce = [&](RadLossFp* ptr, i64 size) {
+            if (state->mpi_state.rank == 0) {
+                MPI_Reduce(MPI_IN_PLACE, ptr, size, get_RadLossFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
+            } else {
+                MPI_Reduce(ptr, nullptr, size, get_RadLossFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
+            }
+        };
+        yakl::fence();
+        reduce(state->rad_loss_cpu.data(), state->rad_loss_cpu.size());
+        reduce(state->rad_loss_integrated.data(), state->rad_loss_integrated.size());
 #endif
     }
 

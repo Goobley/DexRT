@@ -256,8 +256,8 @@ int main(int argc, char** argv) {
         if (config.dexrt.mode == DexrtMode::GivenFs) {
             throw std::runtime_error(fmt::format("Models run in GivenFs mode not supported by {}", argv[0]));
         }
-        if (config.dexrt.boundary != BoundaryType::Promweaver) {
-            throw std::runtime_error(fmt::format("Only promweaver boundaries are supported by {}", argv[0]));
+        if (config.dexrt.boundary != BoundaryType::Promweaver && config.dexrt.boundary != BoundaryType::Zero) {
+            throw std::runtime_error(fmt::format("Only promweaver and zero boundaries are supported by {}", argv[0]));
         }
         std::vector<ModelAtom<f64>> crtaf_models;
         // TODO(cmo): Override atoms in ray config
@@ -306,13 +306,6 @@ int main(int argc, char** argv) {
         }
         for (int mu : mu_iterator) {
             state.ray_set = compute_ray_set<yakl::memDevice>(config, state.atmos, mu);
-            // TODO(cmo): Hoist this if possible
-            PwBc<> pw_bc = load_bc(
-                config.dexrt.atmos_path,
-                state.ray_set.wavelength,
-                config.dexrt.boundary,
-                PromweaverResampleType::Interpolation
-            );
 
             if (
                 !state.ray_I.initialized()
@@ -330,13 +323,27 @@ int main(int argc, char** argv) {
                     state.ray_set.start_coord.extent(0)
                 );
             }
-            DexRayStateAndBc<PwBc<>> ray_state{
-                .state = state,
-                .bc = pw_bc
+            auto solve_and_write = [&]<typename Bc>(const Bc& bc) {
+                DexRayStateAndBc<Bc> ray_state{
+                    .state = state,
+                    .bc = bc
+                };
+                compute_ray_intensity(&ray_state, config);
+                // NOTE(cmo): state isn't captured by reference (the arrays are), so if the depth data arrays are modified, this won't propagate back to the original state, so we pass ray_state.state.
+                write_output_plane(out, ray_state.state, config, mu);
             };
-            compute_ray_intensity(&ray_state, config);
-            // NOTE(cmo): state isn't captured by reference (the arrays are), so if the depth data arrays are modified, this won't propagate back to the original state, so we pass ray_state.state.
-            write_output_plane(out, ray_state.state, config, mu);
+            if (config.dexrt.boundary == BoundaryType::Zero) {
+                solve_and_write(ZeroBc{});
+            } else {
+                // TODO(cmo): Hoist this if possible
+                PwBc<> pw_bc = load_bc(
+                    config.dexrt.atmos_path,
+                    state.ray_set.wavelength,
+                    config.dexrt.boundary,
+                    PromweaverResampleType::Interpolation
+                );
+                solve_and_write(pw_bc);
+            }
         }
     }
     yakl::finalize();

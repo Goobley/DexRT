@@ -81,9 +81,7 @@ void setup_wavelength_batch(const State& state, int la_start, int la_end) {
 
 void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
     copy_J_plane_to_host(state, la_start, la_end);
-    if (state.rad_loss.initialized()) {
-        copy_rad_loss_plane_to_host(state, la_start, la_end);
-    }
+    finalise_rad_loss_batch(state, la_start, la_end);
 
     const i32 wave_batch_idx = la_start / state.c0_size.wave_batch;
     JasUnpack(state, max_block_mip, mr_block_map);
@@ -457,6 +455,7 @@ void save_results(State& state, const CascadeState& casc_state, i32 num_iter) {
 
     if (out_cfg.wavelength && state.adata.wavelength.initialized()) {
         nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
+        nc.write(state.adata_host.wavelength_bin, "wavelength_bin", {"wavelength"});
     }
     if (out_cfg.pops && state.pops.initialized()) {
         maybe_rehydrate_and_write(state.pops, "pops", {"level"});
@@ -579,6 +578,7 @@ int main(int argc, char** argv) {
                 finalise_wavelength_batch(state, la_start, la_end);
             }
 
+            copy_rad_loss_to_host(state);
             yakl::timer_stop("DexRT");
             save_results(state, casc_state, 1);
         } else {
@@ -688,10 +688,7 @@ int main(int argc, char** argv) {
                     compute_profile_normalisation(state, casc_state, print_worst_wphi);
                     state.J = FP(0.0);
                     state.J_cpu.fill(FP(0.0));
-                    if (state.rad_loss.initialized()) {
-                        state.rad_loss = FP(0.0);
-                        state.rad_loss_cpu = FP(0.0);
-                    }
+                    zero_rad_loss(state);
                     yakl::fence();
                     WavelengthBatch wave_batch;
                     wave_dist.wait_for_all(state.mpi_state);
@@ -774,10 +771,7 @@ int main(int argc, char** argv) {
                     state.rate_diag.zero();
                     state.J = FP(0.0);
                     state.J_cpu.fill(FP(0.0));
-                    if (state.rad_loss.initialized()) {
-                        state.rad_loss = FP(0.0);
-                        state.rad_loss_cpu = FP(0.0);
-                    }
+                    zero_rad_loss(state);
                     yakl::fence();
                     wave_dist.reset();
                     WavelengthBatch wave_batch;
@@ -805,10 +799,7 @@ int main(int argc, char** argv) {
                 state.J = FP(0.0);
                 compute_nh0(state);
                 state.J_cpu.fill(FP(0.0));
-                if (state.rad_loss.initialized()) {
-                    state.rad_loss = FP(0.0);
-                    state.rad_loss_cpu = FP(0.0);
-                }
+                zero_rad_loss(state);
                 yakl::fence();
                 wave_dist.reset();
                 WavelengthBatch wave_batch;
@@ -837,6 +828,8 @@ int main(int argc, char** argv) {
                 wave_dist.wait_for_all(state.mpi_state);
             }
             wave_dist.reduce_J(&state);
+            copy_rad_loss_to_host(state);
+            wave_dist.reduce_rad_loss(&state);
             wave_dist.reduce_rate_diagnostics(&state);
             yakl::timer_stop("DexRT");
             save_results(state, casc_state, num_iter);

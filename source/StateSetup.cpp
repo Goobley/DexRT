@@ -91,17 +91,26 @@ void allocate_rad_loss(State* state) {
         wave_dim = state->given_state.emis.extent(2);
     }
 
-    int rad_loss_leading_dim = c0_size.wave_batch;
     int rad_loss_cpu_leading_dim = wave_dim;
     if (config.rad_loss == RadLossType::Integrated) {
-        rad_loss_leading_dim = 1;
         rad_loss_cpu_leading_dim = 1;
     }
 
-    state->rad_loss = decltype(state->rad_loss)("L", yakl::DimsT<i64>(rad_loss_leading_dim, num_cells));
+    state->rad_loss = decltype(state->rad_loss)("L", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
+    state->rad_loss_integrated = decltype(state->rad_loss_integrated)("LIntegrated", yakl::DimsT<i64>(num_cells));
     state->rad_loss_cpu = decltype(state->rad_loss_cpu)("LHost", yakl::DimsT<i64>(rad_loss_cpu_leading_dim, num_cells));
-    state->rad_loss_cpu = FP(0.0);
-    state->rad_loss = FP(0.0);
+    zero_rad_loss(*state);
+}
+
+/// Zero all of the rad_loss arrays, e.g. at the start of an iteration
+void zero_rad_loss(const State& state) {
+    if (!state.rad_loss.initialized()) {
+        return;
+    }
+    state.rad_loss = FP(0.0);
+    state.rad_loss_integrated = FP(0.0);
+    state.rad_loss_cpu = FP(0.0);
+    yakl::fence();
 }
 
 CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config, const AtmosZWindow* window) {
@@ -417,25 +426,47 @@ void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
     page_rows_to_host(state.J_cpu, la_start, state.J, la_end - la_start, state.J_stage);
 }
 
-/// Copy rad_loss from GPU to plane of host array
-void copy_rad_loss_plane_to_host(const State& state, int la_start, int la_end) {
+/// Add the batch's rad_loss into rad_loss_integrated, and copy its planes to
+/// the host if we're storing them per wavelength
+void finalise_rad_loss_batch(const State& state, int la_start, int la_end) {
     if (!state.rad_loss.initialized()) {
         return;
     }
 
-    int wave_batch = la_end - la_start;
-    const auto rad_loss_copy = state.rad_loss.createHostCopy();
+    const int wave_batch = la_end - la_start;
+    JasUnpack(state, rad_loss, rad_loss_integrated);
+    dex_parallel_for(
+        "Integrate rad_loss batch",
+        FlatLoop<1>(rad_loss.extent(1)),
+        YAKL_LAMBDA (i64 ks) {
+            RadLossFp batch_loss = RadLossFp(0.0);
+            for (int wave = 0; wave < wave_batch; ++wave) {
+                batch_loss += rad_loss(wave, ks);
+            }
+            rad_loss_integrated(ks) += batch_loss;
+        }
+    );
+    yakl::fence();
+
     if (state.config.rad_loss == RadLossType::PerWavelength) {
+        const auto rad_loss_copy = state.rad_loss.createHostCopy();
         // TODO(cmo): Replace with a memcpy?
         for (int wave = 0; wave < wave_batch; ++wave) {
             for (i64 ks = 0; ks < rad_loss_copy.extent(1); ++ks) {
                 state.rad_loss_cpu(la_start + wave, ks) = rad_loss_copy(wave, ks);
             }
         }
-    } else {
-        KOKKOS_ASSERT(rad_loss_copy.extent(0) == 1);
-        for (i64 ks = 0; ks < rad_loss_copy.extent(1); ++ks) {
-            state.rad_loss_cpu(0, ks) += rad_loss_copy(0, ks);
-        }
+    }
+}
+
+/// Copy rad_loss_integrated to the host array if we're storing the integrated
+/// loss (the per wavelength planes are copied in finalise_rad_loss_batch)
+void copy_rad_loss_to_host(const State& state) {
+    if (!state.rad_loss.initialized() || state.config.rad_loss != RadLossType::Integrated) {
+        return;
+    }
+    const auto integrated = state.rad_loss_integrated.createHostCopy();
+    for (i64 ks = 0; ks < integrated.extent(0); ++ks) {
+        state.rad_loss_cpu(0, ks) = integrated(ks);
     }
 }

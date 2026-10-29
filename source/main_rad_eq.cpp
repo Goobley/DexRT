@@ -130,6 +130,17 @@ void allocate_J(State* state) {
     // contents should probably be moved first, but we don't have these terms yet.
 }
 
+/// Zero all of the rad_loss arrays, e.g. at the start of an iteration
+void zero_rad_loss(const State& state) {
+    if (!state.rad_loss.initialized()) {
+        return;
+    }
+    state.rad_loss = FP(0.0);
+    state.rad_loss_integrated = FP(0.0);
+    state.rad_loss_cpu = FP(0.0);
+    yakl::fence();
+}
+
 void allocate_rad_loss(State* state) {
     JasUnpack((*state), config, mr_block_map, c0_size, adata);
     if (config.rad_loss == RadLossType::None) {
@@ -141,17 +152,15 @@ void allocate_rad_loss(State* state) {
         wave_dim = state->given_state.emis.extent(2);
     }
 
-    int rad_loss_leading_dim = c0_size.wave_batch;
     int rad_loss_cpu_leading_dim = wave_dim;
     if (config.rad_loss == RadLossType::Integrated) {
-        rad_loss_leading_dim = 1;
         rad_loss_cpu_leading_dim = 1;
     }
 
-    state->rad_loss = decltype(state->rad_loss)("L", yakl::DimsT<i64>(rad_loss_leading_dim, num_cells));
+    state->rad_loss = decltype(state->rad_loss)("L", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
+    state->rad_loss_integrated = decltype(state->rad_loss_integrated)("LIntegrated", yakl::DimsT<i64>(num_cells));
     state->rad_loss_cpu = decltype(state->rad_loss_cpu)("LHost", yakl::DimsT<i64>(rad_loss_cpu_leading_dim, num_cells));
-    state->rad_loss_cpu = FP(0.0);
-    state->rad_loss = FP(0.0);
+    zero_rad_loss(*state);
 }
 
 CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
@@ -453,32 +462,54 @@ void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
     page_rows_to_host(state.J_cpu, la_start, state.J, la_end - la_start, state.J_stage);
 }
 
-void copy_rad_loss_plane_to_host(const State& state, int la_start, int la_end) {
+/// Add the batch's rad_loss into rad_loss_integrated, and copy its planes to
+/// the host if we're storing them per wavelength
+void finalise_rad_loss_batch(const State& state, int la_start, int la_end) {
     if (!state.rad_loss.initialized()) {
         return;
     }
 
-    // TODO(cmo): This whole function is silly if we're in integrated.
-    int wave_batch = la_end - la_start;
-    const auto rad_loss_copy = state.rad_loss.createHostCopy();
+    const int wave_batch = la_end - la_start;
+    JasUnpack(state, rad_loss, rad_loss_integrated);
+    dex_parallel_for(
+        "Integrate rad_loss batch",
+        FlatLoop<1>(rad_loss.extent(1)),
+        YAKL_LAMBDA (i64 ks) {
+            RadLossFp batch_loss = RadLossFp(0.0);
+            for (int wave = 0; wave < wave_batch; ++wave) {
+                batch_loss += rad_loss(wave, ks);
+            }
+            rad_loss_integrated(ks) += batch_loss;
+        }
+    );
+    yakl::fence();
+
     if (state.config.rad_loss == RadLossType::PerWavelength) {
+        const auto rad_loss_copy = state.rad_loss.createHostCopy();
         // TODO(cmo): Replace with a memcpy?
         for (int wave = 0; wave < wave_batch; ++wave) {
             for (i64 ks = 0; ks < rad_loss_copy.extent(1); ++ks) {
                 state.rad_loss_cpu(la_start + wave, ks) = rad_loss_copy(wave, ks);
             }
         }
-    } else {
-        KOKKOS_ASSERT(rad_loss_copy.extent(0) == 1);
-        for (i64 ks = 0; ks < rad_loss_copy.extent(1); ++ks) {
-            state.rad_loss_cpu(0, ks) = rad_loss_copy(0, ks);
-        }
+    }
+}
+
+/// Copy rad_loss_integrated to the host array if we're storing the integrated
+/// loss (the per wavelength planes are copied in finalise_rad_loss_batch)
+void copy_rad_loss_to_host(const State& state) {
+    if (!state.rad_loss.initialized() || state.config.rad_loss != RadLossType::Integrated) {
+        return;
+    }
+    const auto integrated = state.rad_loss_integrated.createHostCopy();
+    for (i64 ks = 0; ks < integrated.extent(0); ++ks) {
+        state.rad_loss_cpu(0, ks) = integrated(ks);
     }
 }
 
 void setup_wavelength_batch(const State& state, int la_start, int la_end) {
     state.J = FP(0.0);
-    if (state.rad_loss.initialized() && state.config.rad_loss != RadLossType::Integrated) {
+    if (state.rad_loss.initialized()) {
         state.rad_loss = FP(0.0);
     }
     yakl::fence();
@@ -486,9 +517,7 @@ void setup_wavelength_batch(const State& state, int la_start, int la_end) {
 
 void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
     copy_J_plane_to_host(state, la_start, la_end);
-    if (state.rad_loss.initialized()) {
-        copy_rad_loss_plane_to_host(state, la_start, la_end);
-    }
+    finalise_rad_loss_batch(state, la_start, la_end);
 
     const i32 wave_batch_idx = la_start / state.c0_size.wave_batch;
     JasUnpack(state, max_block_mip, mr_block_map);
@@ -958,10 +987,7 @@ int iterate_non_lte(
         compute_profile_normalisation(state, casc_state, print_worst_wphi);
         state.J = FP(0.0);
         state.J_cpu.fill(FP(0.0));
-        if (state.rad_loss.initialized()) {
-            state.rad_loss = FP(0.0);
-            state.rad_loss_cpu = FP(0.0);
-        }
+        zero_rad_loss(state);
         yakl::fence();
         WavelengthBatch wave_batch;
         wave_dist.wait_for_all(state.mpi_state);
@@ -983,6 +1009,7 @@ int iterate_non_lte(
         }
         yakl::fence();
         wave_dist.wait_for_all(state.mpi_state);
+        copy_rad_loss_to_host(state);
 
         state.println("  == Statistical equilibrium ==");
         wave_dist.reduce_precon_R(&state);
@@ -1039,7 +1066,7 @@ struct CoolingTimes {
 };
 
 CoolingTimes characteristic_cooling_time(const State& state, bool conserving_energy) {
-    JasUnpack(state, atmos, pops, adata, rad_loss);
+    JasUnpack(state, atmos, pops, adata, rad_loss_integrated);
 
     constexpr fp_t gamma = (FP(5.0) / FP(3.0));
     constexpr fp_t igm1 = FP(1.0) / (gamma - FP(1.0));
@@ -1059,7 +1086,7 @@ CoolingTimes characteristic_cooling_time(const State& state, bool conserving_ene
         "Characteristic cooling",
         FlatLoop<1>(num_cells),
         YAKL_LAMBDA (i64 ks) {
-            const fp_t L = std::abs(rad_loss(0, ks) * RAD_LOSS_TO_SI);
+            const fp_t L = std::abs(rad_loss_integrated(ks) * RAD_LOSS_TO_SI);
             if (L < RAD_EQ_MIN_RAD_LOSS) {
                 cooling_time(ks) = quiescent;
                 return;
@@ -1140,17 +1167,17 @@ void dump_properties(const State& state, int iter, fp_t time) {
     if (state.atmos.e_int.initialized()) {
         nc.write(state.atmos.e_int, "e_int", {"ks"});
     }
-    nc.write(state.rad_loss, "rad_loss", {"0", "ks"});
+    nc.write(state.rad_loss_integrated, "rad_loss", {"ks"});
     nc.write(state.pops, "pops", {"level", "ks"});
 }
 
 void copy_current_loss(const State& state, const RadLossArr& dst) {
-    JasUnpack(state, rad_loss);
+    JasUnpack(state, rad_loss_integrated);
     dex_parallel_for(
         "Copy rad_loss",
-        FlatLoop<1>(rad_loss.extent(1)),
+        FlatLoop<1>(rad_loss_integrated.extent(0)),
         YAKL_LAMBDA (i64 ks) {
-            dst(ks) = rad_loss(0, ks);
+            dst(ks) = rad_loss_integrated(ks);
         }
     );
     yakl::fence();
@@ -1161,7 +1188,7 @@ void copy_current_loss(const State& state, const RadLossArr& dst) {
 /// Caunt & Korpi (2001), A&A 375, 1073 (astro-ph/0102068), Eq. B.2;
 /// Verschelde, MCS 471 Lecture 32 <homepages.math.uic.edu/~jan/mcs471/variablestep.pdf>.
 void compute_ab2_loss(const State& state, const Ab2History& hist, f64 r) {
-    JasUnpack(state, rad_loss);
+    JasUnpack(state, rad_loss_integrated);
     const auto& loss_prev = hist.loss_prev;
     const auto& loss_eff = hist.loss_eff;
     const RadLossFp w_cur = RadLossFp(1.0) + RadLossFp(0.5) * r;
@@ -1169,9 +1196,9 @@ void compute_ab2_loss(const State& state, const Ab2History& hist, f64 r) {
 
     dex_parallel_for(
         "AB2 loss blend",
-        FlatLoop<1>(rad_loss.extent(1)),
+        FlatLoop<1>(rad_loss_integrated.extent(0)),
         YAKL_LAMBDA (i64 ks) {
-            loss_eff(ks) = w_cur * rad_loss(0, ks) - w_prev * loss_prev(ks);
+            loss_eff(ks) = w_cur * rad_loss_integrated(ks) - w_prev * loss_prev(ks);
         }
     );
     yakl::fence();
@@ -1197,7 +1224,7 @@ fp_t compute_error_atol(const State& state) {
 /// Largest dt whose AB2 error estimate, dt^2 |L^n - L^{n-1}| / (2 dt_prev),
 /// stays within atol + rtol |y|. Solved for directly, giving the next step size (no need to reject).
 f64 ab2_error_limited_dt(const State& state, const Ab2History& hist) {
-    JasUnpack(state, atmos, rad_loss);
+    JasUnpack(state, atmos, rad_loss_integrated);
     const auto& loss_prev = hist.loss_prev;
     const bool have_e_int = atmos.e_int.initialized();
     const fp_t atol = compute_error_atol(state);
@@ -1205,9 +1232,9 @@ f64 ab2_error_limited_dt(const State& state, const Ab2History& hist) {
     f64 max_scaled_dl;
     dex_parallel_reduce(
         "AB2 error estimate",
-        FlatLoop<1>(rad_loss.extent(1)),
+        FlatLoop<1>(rad_loss_integrated.extent(0)),
         KOKKOS_LAMBDA (i64 ks, f64& running_max) {
-            const f64 dL = std::abs(rad_loss(0, ks) - loss_prev(ks)) * RAD_LOSS_TO_SI;
+            const f64 dL = std::abs(rad_loss_integrated(ks) - loss_prev(ks)) * RAD_LOSS_TO_SI;
             const fp_t q = have_e_int ? atmos.e_int(ks) : atmos.pressure(ks);
             const fp_t scale = atol + RAD_EQ_RTOL * std::abs(q);
             running_max = std::max(running_max, dL / scale);

@@ -80,7 +80,6 @@ struct DexrtConfig {
     int initial_lambda_iterations = 2;
     int max_cascade = 5;
     RadLossType rad_loss = RadLossType::None;
-    bool rad_loss_use_flux_divergence = false;
     DexrtMipConfig mip_config;
     DexrtNgConfig ng;
 };
@@ -171,11 +170,6 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
             throw std::runtime_error(fmt::format("Unexpected radiative loss type: {}", mode));
         }
     }
-
-    if (file["rad_loss_use_flux_divergence"]) {
-        config.rad_loss_use_flux_divergence = file["rad_loss_use_flux_divergence"].as<bool>();
-    }
-
 }
 
 inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
@@ -400,6 +394,17 @@ inline void parse_mip_config(DexrtConfig* cfg, const YAML::Node& file) {
             config.mip_config.mip_levels[0]
         ));
     }
+    // NOTE(cmo): The losses are averaged over the chord through the probe's
+    // cell, so the last step of the C0 march must be from its face to its centre.
+    if (config.rad_loss != RadLossType::None && config.mip_config.mip_levels[0] != 0) {
+        throw std::runtime_error(fmt::format(
+            "mip_config.mip_levels[0] must be 0 when computing rad_loss (got {}): the loss needs C0 sampled at the probe's own cell.",
+            config.mip_config.mip_levels[0]
+        ));
+    }
+    if (config.rad_loss != RadLossType::None && RC_CONFIG != RcConfiguration::Vanilla) {
+        throw std::runtime_error("rad_loss is only implemented for the Vanilla RC_CONFIG.");
+    }
 }
 
 inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file) {
@@ -437,9 +442,6 @@ inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file)
         } else {
             throw std::runtime_error(fmt::format("Unexpected program mode: {}", mode));
         }
-    }
-    if (file["store_J_on_cpu"]) {
-        fmt::println("store_J_on_cpu is ignored -- it is always the case now.");
     }
 
     if (file["max_cascade"]) {

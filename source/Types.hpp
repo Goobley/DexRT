@@ -154,18 +154,16 @@ struct InclQuadrature {
 
 struct DexEmpty {};
 
-template <typename Alo=DexEmpty>
+template <typename Alo=DexEmpty, typename Loss=DexEmpty>
 struct RadianceInterval {
     fp_t I = FP(0.0);
     fp_t tau = FP(0.0);
-    /// ALO terms of the probe's own segment: I = I_ext + psi_star * eta_probe,
-    /// and one_minus_alo = 1 - psi_star * chi_probe (exp(-dtau) for this
-    /// piecewise-constant segment; higher order adds the non-local source
-    /// weights), as psi_star
-    /// \approx 1 in thick media, this helps form this term stably in lower
-    /// precision. psi_star isn't stored: it's (1 - one_minus_alo) / chi_probe.
+    /// Contribution to probe's intensity from outside cell. Thus I = I_ext + psi* eta_probe
     Alo I_ext{};
+    /// 1 - psi* chi_probe. This form helps avoid roundoff in thick cells
     Alo one_minus_alo{};
+    /// Radiative loss along the full chord of the probe's cell (C0 only): chi (S - I_f) chord_avg_trans(tau)
+    Loss loss{};
 };
 
 /// deprecated but needs removing from API
