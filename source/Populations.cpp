@@ -114,7 +114,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
             continue;
         }
         JasUnpack((*state), pops);
-        const auto& precon_R = state->precon_R[ia];
+        const auto precon_R = atom_precon_R(state->precon_R, state->adata_host, ia);
         const auto atom = extract_atom(state->adata, state->adata_host, ia);
         const auto& atmos = state->atmos;
         const auto& nh_lte = state->nh_lte;

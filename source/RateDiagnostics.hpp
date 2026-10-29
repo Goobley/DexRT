@@ -5,6 +5,7 @@
 #include "Types.hpp"
 #include "DexrtConfig.hpp"
 #include "MiscSparse.hpp"
+#include "TransitionIndex.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -23,11 +24,11 @@ typedef yakl::Array<RadLossFp, 3, yakl::memDevice> ContEnergyMat;
  * State::Gamma), and is empty unless the associated output flag is set.
  */
 struct RateDiagnostics {
-    /// [t, 2, ks] per atom, the same layout as precon_R (lines, then
+    /// [t, 2, ks], the same layout as precon_R (each atom's lines, then
     /// continua; slot 0 up i -> j, 1 down j -> i), but accumulated with
     /// psi_star = 0, so these are the true (lambda iteration) radiative rates
     /// rather than preconditioned ones. [s-1]
-    std::vector<PreconRMat> radiative_rates;
+    PreconRMat radiative_rates;
     /// [c, i, ks] per atom. Energy absorbed by the photoionisation i -> c,
     /// integrated over direction and wavelength, and multiplied by n_i. [kW m-3]
     std::vector<ContEnergyMat> cont_energy_absorb;
@@ -86,7 +87,7 @@ struct RateDiagnostics {
         const DexrtOutputConfig& out_cfg,
         i64 num_active_cells
     ) {
-        radiative_rates.clear();
+        radiative_rates = PreconRMat();
         cont_energy_absorb.clear();
         cont_energy_emit.clear();
 
@@ -94,15 +95,13 @@ struct RateDiagnostics {
             throw std::runtime_error("RateDiagnostics::allocate called before init_stage_index");
         }
 
+        if (out_cfg.radiative_rates) {
+            const int n_trans = adata.lines.extent(0) + adata.continua.extent(0);
+            radiative_rates = PreconRMat("radiative_rates", n_trans, 2, num_active_cells);
+        }
         const int num_atom = adata.num_level.extent(0);
         for (int ia = 0; ia < num_atom; ++ia) {
             const int n_level = adata.num_level(ia);
-            if (out_cfg.radiative_rates) {
-                const int n_trans = adata.num_line(ia) + adata.num_cont(ia);
-                radiative_rates.emplace_back(
-                    PreconRMat("radiative_rates", n_trans, 2, num_active_cells)
-                );
-            }
             if (out_cfg.cont_energy_balance) {
                 const int n_stage = num_ion_stage[ia];
                 cont_energy_absorb.emplace_back(
@@ -118,8 +117,8 @@ struct RateDiagnostics {
 
     /// Zeroed everywhere Gamma is, so the arrays hold the final formal solution.
     void zero() const {
-        for (const auto& arr : radiative_rates) {
-            arr = GammaFp(0.0);
+        if (radiative_rates.initialized()) {
+            radiative_rates = GammaFp(0.0);
         }
         for (const auto& arr : cont_energy_absorb) {
             arr = RadLossFp(0.0);
@@ -247,10 +246,11 @@ inline void write_rate_diagnostics(
     // NOTE(claude): The two level axes get distinct dim names even though they
     // have the same extent: xarray does not support repeated dims, and warns
     // that most of its functionality then fails silently.
-    for (int ia = 0; ia < diag.radiative_rates.size(); ++ia) {
+    const int num_atom = diag.radiative_rates.initialized() ? state.adata_host.num_level.extent(0) : 0;
+    for (int ia = 0; ia < num_atom; ++ia) {
         const std::string trans_dim = fmt::format("transition_{}{}", ia, opts.suffix);
         write_rate_diag_array(
-            diag.radiative_rates[ia],
+            atom_precon_R(diag.radiative_rates, state.adata_host, ia),
             block_map,
             nc,
             fmt::format("radiative_rates_{}{}", ia, opts.suffix),

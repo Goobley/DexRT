@@ -34,7 +34,7 @@ struct State3d {
     Fp2d J; /// [1, ks] -- the current wavelength, paged to J_cpu after each ([num_wave, ks] in GivenFs)
     Rad16ArrayHost J_cpu; /// [num_wave, ks] -- The full J in host memory.
     Rad16Array J_stage; /// J encoded for the copy to J_cpu (HALF_RADIATION_STORAGE only).
-    std::vector<PreconRMat> precon_R; /// [t, 2, ks] the preconditioned radiative rates (GammaMatrix.hpp)
+    PreconRMat precon_R; /// [t, 2, ks] the preconditioned radiative rates (GammaMatrix.hpp)
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;

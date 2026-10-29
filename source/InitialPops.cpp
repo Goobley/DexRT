@@ -11,7 +11,7 @@ template <typename State>
 void set_zero_radiation_pops(State* st, int atom) {
     const auto& state = *st;
     JasUnpack(state, adata);
-    const auto& precon_R = state.precon_R[atom];
+    const auto precon_R = atom_precon_R(state.precon_R, state.adata_host, atom);
     const int level_start = state.adata_host.level_start(atom);
     const int num_level = state.adata_host.num_level(atom);
     const int line_start = state.adata_host.line_start(atom);

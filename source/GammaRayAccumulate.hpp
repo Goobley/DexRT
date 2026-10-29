@@ -28,31 +28,25 @@ inline fp_t gamma_wavelength_weight(const AtomicData<fp_t, yakl::memHost>& adata
 /// Repack Gamma (and diagnostics if requested) for each atom, so it can be
 /// accumulated in one kernel
 struct GammaAccumArrayState {
-    PreconRMat precon_R[GAMMA_MAX_ATOMS];
-    PreconRMat rad_rates[GAMMA_MAX_ATOMS];
+    PreconRMat precon_R;
+    PreconRMat rad_rates;
     ContEnergyMat cont_absorb[GAMMA_MAX_ATOMS];
     ContEnergyMat cont_emit[GAMMA_MAX_ATOMS];
     yakl::Array<i32, 1, yakl::memDevice> level_stage_idx;
 };
 
-inline GammaAccumArrayState gamma_accum_array_state(const std::vector<PreconRMat>& precon_R, const RateDiagnostics* diag) {
-    if (precon_R.size() > GAMMA_MAX_ATOMS) {
-        throw std::runtime_error(fmt::format("At most {} active atoms are supported (GAMMA_MAX_ATOMS).", GAMMA_MAX_ATOMS));
+inline GammaAccumArrayState gamma_accum_array_state(const PreconRMat& precon_R, const RateDiagnostics* diag) {
+    if (diag && diag->cont_energy_absorb.size() > GAMMA_MAX_ATOMS) {
+        throw std::runtime_error(fmt::format("At most {} atoms are supported with cont_energy_balance (GAMMA_MAX_ATOMS).", GAMMA_MAX_ATOMS));
     }
     GammaAccumArrayState result;
-    for (int ia = 0; ia < precon_R.size(); ++ia) {
-        result.precon_R[ia] = precon_R[ia];
-        if (diag) {
-            if (!diag->radiative_rates.empty()) {
-                result.rad_rates[ia] = diag->radiative_rates[ia];
-            }
-            if (!diag->cont_energy_absorb.empty()) {
-                result.cont_absorb[ia] = diag->cont_energy_absorb[ia];
-                result.cont_emit[ia] = diag->cont_energy_emit[ia];
-            }
-        }
-    }
+    result.precon_R = precon_R;
     if (diag) {
+        result.rad_rates = diag->radiative_rates;
+        for (int ia = 0; ia < diag->cont_energy_absorb.size(); ++ia) {
+            result.cont_absorb[ia] = diag->cont_energy_absorb[ia];
+            result.cont_emit[ia] = diag->cont_energy_emit[ia];
+        }
         result.level_stage_idx = diag->level_stage_idx;
     }
     return result;
@@ -199,7 +193,7 @@ YAKL_INLINE void accumulate_gamma_line(
             .uv = t.uv,
             .psi_star = d.psi_star,
             .wlamu = wlamu,
-            .R = store.precon_R[l.atom],
+            .R = store.precon_R,
             .t = trans,
             .k = ks
         },
@@ -209,7 +203,7 @@ YAKL_INLINE void accumulate_gamma_line(
         chi_other
     );
 
-    const PreconRMat& rad_rates = store.rad_rates[l.atom];
+    const PreconRMat& rad_rates = store.rad_rates;
     if (rad_rates.initialized()) {
         // NOTE(cmo): psi_star = 0 => the true radiative rates.
         add_to_gamma<false>(GammaAccumState{
@@ -358,7 +352,7 @@ YAKL_INLINE void accumulate_gamma_continua(const GammaCell& cell, const AtmosPoi
         const GammaAccumState acc{
             .uv = uv,
             .wlamu = wlamu,
-            .R = store.precon_R[cont.atom],
+            .R = store.precon_R,
             .t = trans,
             .k = ks
         };
@@ -375,7 +369,7 @@ YAKL_INLINE void accumulate_gamma_continua(const GammaCell& cell, const AtmosPoi
         );
 
         const fp_t I = pre_int.I_ext + pre_int.psi_star * cell.statics.eta.value() + pre_int.psi_eta_lines;
-        const PreconRMat& rad_rates = store.rad_rates[cont.atom];
+        const PreconRMat& rad_rates = store.rad_rates;
         if (rad_rates.initialized()) {
             // NOTE(cmo): psi_star = 0 => the true radiative rates.
             add_gamma_terms<false>(

@@ -21,7 +21,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     const int num_eqn = num_level + 1;
     const i64 num_space = pops.extent(1);
     JasUnpack(state->atmos, ne, nh_tot, pressure, temperature);
-    const auto& precon_RH = state->precon_R[0];
+    const auto precon_R_H = atom_precon_R(state->precon_R, state->adata_host, 0);
     const auto& adata = state->adata;
 
     const fp_t total_abund = state->config.total_abund;
@@ -93,7 +93,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
             );
             team.team_barrier();
             fixup_gamma(team, dCk);
-            scatter_add_precon_R(team, adata, 0, precon_RH, ks, Gammak);
+            scatter_add_precon_R(team, adata, 0, precon_R_H, ks, Gammak);
             fixup_gamma(team, Gammak);
 
             ScratchView<T**> dF(team.team_scratch(0), num_eqn, num_eqn);
@@ -162,7 +162,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
                     if (x < num_cont) {
                         const int kr = x;
                         const auto& cont = H_atom.continua(kr);
-                        const T precon_Rji = precon_RH(H_atom.lines.extent(0) + kr, PRECON_R_DOWN, ks);
+                        const T precon_Rji = precon_R_H(H_atom.lines.extent(0) + kr, PRECON_R_DOWN, ks);
                         const T entry = -(precon_Rji / ne_k) * new_popsk(cont.j);
                         Kokkos::atomic_add(&dF(cont.i, num_eqn-1), entry);
                     }

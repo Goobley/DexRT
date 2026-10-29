@@ -164,9 +164,7 @@ struct WavelengthDistributor {
                 MPI_Reduce(ptr, nullptr, size, get_GammaFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
             }
         };
-        for (const auto& arr : state->precon_R) {
-            reduce(arr.data(), arr.size());
-        }
+        reduce(state->precon_R.data(), state->precon_R.size());
 #endif
     }
 
@@ -230,10 +228,10 @@ struct WavelengthDistributor {
             }
         };
         const auto& diag = state->rate_diag;
-        // NOTE(cmo): The vectors containing these arrays are empty if the
-        // diagnostic is not requested, so these loop will do nothing.
-        for (const auto& arr : diag.radiative_rates) {
-            reduce(arr.data(), arr.size(), get_GammaFpMpi());
+        // NOTE(cmo): These are unallocated (or empty) if the diagnostic is not
+        // requested.
+        if (diag.radiative_rates.initialized()) {
+            reduce(diag.radiative_rates.data(), diag.radiative_rates.size(), get_GammaFpMpi());
         }
         for (const auto& arr : diag.cont_energy_absorb) {
             reduce(arr.data(), arr.size(), get_RadLossFpMpi());

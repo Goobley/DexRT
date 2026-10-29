@@ -214,12 +214,8 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
     state.pops = Fp2d("pops", n_level_total, num_active_cells);
 
     if (config.mode == DexrtMode::NonLte) {
-        for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
-            state.precon_R.emplace_back(
-                PreconRMat("precon_R", num_transitions(state.adata_host, ia), 2, num_active_cells)
-            );
-            state.precon_R.back() = GammaFp(0.0);
-        }
+        state.precon_R = PreconRMat("precon_R", num_transitions(state.adata_host), 2, num_active_cells);
+        state.precon_R = GammaFp(0.0);
         state.wphi = Rad16Array("wphi", state.adata.lines.extent(0), num_active_cells);
     }
 

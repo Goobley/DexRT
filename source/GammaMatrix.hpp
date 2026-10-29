@@ -4,50 +4,9 @@
 #include "Types.hpp"
 #include "JasPP.hpp"
 #include "EmisOpac.hpp"
+#include "TransitionIndex.hpp"
 
-/// precon_R[t, slot, ks]: per atom, transition t (lines, then continua), the
-/// upward rate i -> j (Gamma(j, i)) and the downward rate j -> i (Gamma(i, j)),
-/// preconditioned. Assembled into Gamma with the collisions in stat_eq and friends.
-constexpr int PRECON_R_UP = 0;
-constexpr int PRECON_R_DOWN = 1;
-
-/// Index of line kr in its atom's precon_R.
-template <int mem_space>
-YAKL_INLINE int line_transition_idx(const AtomicData<fp_t, mem_space>& adata, int kr) {
-    const int atom = adata.lines(kr).atom;
-    return kr - adata.line_start(atom);
-}
-
-/// Index of continuum kr in its atom's precon_R.
-template <int mem_space>
-YAKL_INLINE int cont_transition_idx(const AtomicData<fp_t, mem_space>& adata, int kr) {
-    const int atom = adata.continua(kr).atom;
-    return adata.num_line(atom) + kr - adata.cont_start(atom);
-}
-
-template <int mem_space>
-inline int num_transitions(const AtomicData<fp_t, mem_space>& adata, int atom) {
-    return adata.num_line(atom) + adata.num_cont(atom);
-}
-
-struct TransitionLevels {
-    int i;
-    int j;
-};
-
-/// Lower (i) and upper (j) level of transition t of atom.
-template <int mem_space>
-YAKL_INLINE TransitionLevels transition_levels(const AtomicData<fp_t, mem_space>& adata, int atom, int t) {
-    const int num_line = adata.num_line(atom);
-    if (t < num_line) {
-        const auto& l = adata.lines(adata.line_start(atom) + t);
-        return TransitionLevels{.i = l.i, .j = l.j};
-    }
-    const auto& c = adata.continua(adata.cont_start(atom) + t - num_line);
-    return TransitionLevels{.i = c.i, .j = c.j};
-}
-
-/// Add the atom's precon_R at ks into the dense Gammak(i, j) (team scratch, no
+/// Add the atom's precon_R (see atom_precon_R) at ks into the dense Gammak(i, j) (team scratch, no
 /// diagonal). Ends with a team barrier.
 template <typename Team, typename Mat>
 KOKKOS_INLINE_FUNCTION void scatter_add_precon_R(
@@ -89,11 +48,8 @@ KOKKOS_INLINE_FUNCTION void fixup_gamma(const Team& team, const Mat& Gammak) {
     team.team_barrier();
 }
 
-template <typename Arrays>
-inline void zero_precon_R(const Arrays& precon_R) {
-    for (const auto& R : precon_R) {
-        R = GammaFp(0.0);
-    }
+inline void zero_precon_R(const PreconRMat& precon_R) {
+    precon_R = GammaFp(0.0);
     yakl::fence();
 }
 
