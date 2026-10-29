@@ -6,6 +6,7 @@
 #include "RcUtilsModes3d.hpp"
 #include "BlockMap.hpp"
 #include "MpiWrapper.hpp"
+#include "Rad16BitStorage.hpp"
 
 struct GivenEmisOpac3d {
     fp_t voxel_scale;
@@ -28,11 +29,12 @@ struct State3d {
     AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
-    Fp2d wphi; /// [kr, ks]
+    Rad16Array wphi; /// [kr, ks]
     Fp2d pops; /// [num_level, ks]
-    Fp2d J; // [la, ks]
-    Fp2dHost J_cpu; /// [num_wave, ks] -- The full J in host memory, if we're paging after each batch.
-    std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
+    Fp2d J; /// [1, ks] -- the current wavelength, paged to J_cpu after each ([num_wave, ks] in GivenFs)
+    Rad16ArrayHost J_cpu; /// [num_wave, ks] -- The full J in host memory.
+    Rad16Array J_stage; /// J encoded for the copy to J_cpu (HALF_RADIATION_STORAGE only).
+    PreconRMat precon_R; /// [t, 2, ks] the preconditioned radiative rates (GammaMatrix.hpp)
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;

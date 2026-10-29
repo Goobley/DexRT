@@ -1,0 +1,1598 @@
+#include <math.h>
+#include "GammaMatrix.hpp"
+#include <limits>
+#include "Config.hpp"
+#include "Types.hpp"
+#include "State.hpp"
+#include "CascadeState.hpp"
+#include "Utils.hpp"
+#include "Atmosphere.hpp"
+#include "Populations.hpp"
+#include "CrtafParser.hpp"
+#include "Collisions.hpp"
+#include "Voigt.hpp"
+#include "NgAcceleration.hpp"
+#include "StaticFormalSolution.hpp"
+#include "DynamicFormalSolution.hpp"
+#include "ChargeConservation.hpp"
+#include "PressureConservation.hpp"
+#include "EnergyConservation.hpp"
+#include "ProfileNormalisation.hpp"
+#include "PromweaverBoundary.hpp"
+#include "DexrtConfig.hpp"
+#include "BlockMap.hpp"
+#include "MiscSparse.hpp"
+#include "YAKL_netcdf.h"
+#include "Rad16Output.hpp"
+#include <algorithm>
+#include <vector>
+#include <string>
+#include <optional>
+#include <fmt/core.h>
+#include <argparse/argparse.hpp>
+#include <sstream>
+#include "GitVersion.hpp"
+#include "WavelengthParallelisation.hpp"
+#include "InitialPops.hpp"
+
+#include <random>
+
+int get_dexrt_dimensionality() {
+    return 2;
+}
+
+enum class RadEqPath {
+    Isochoric,
+    Isobaric,
+    EnergyConserving
+};
+
+constexpr const char* RadEqPathNames[] = {
+    "isochoric (fixed density)",
+    "isobaric (fixed pressure)",
+    "energy conserving (e_int, fixed density)"
+};
+
+/// Number of radiative equilibrium timesteps to take.
+constexpr int RAD_EQ_NUM_STEPS = 400;
+/// Iteration limit for each non-LTE solve inside the time loop (the initial
+/// solve uses the value from the config).
+constexpr int RAD_EQ_MAX_ITER = 50;
+/// First step is Euler, as a fraction of the shortest cooling time.
+constexpr fp_t RAD_EQ_EULER_CFL = FP(0.007);
+/// Backstop on the AB2 steps. Bounds how far the error controller can step, and
+/// keeps RAD_EQ_MAX_E_INT_LOSS_FRAC from ever binding.
+constexpr fp_t RAD_EQ_CFL_BACKSTOP = FP(0.1);
+constexpr fp_t RAD_EQ_MAX_DELTA_T = FP(50.0);
+constexpr fp_t RAD_EQ_RTOL = FP(1e-3);
+constexpr fp_t RAD_EQ_ATOL_FRAC = FP(1e-3);
+constexpr fp_t RAD_EQ_SAFETY = FP(0.9);
+constexpr fp_t RAD_EQ_MAX_GROWTH = FP(1.5);
+
+typedef yakl::Array<RadLossFp, 1, yakl::memDevice> RadLossArr;
+
+struct Ab2History {
+    RadLossArr loss_prev; /// L^{n-1}
+    RadLossArr loss_eff;  /// the AB2 combination fed to the updaters
+    f64 dt_prev = 0.0;
+    bool have_history = false;
+
+    void init(i64 num_active_cells) {
+        loss_prev = RadLossArr("L_prev", num_active_cells);
+        loss_eff = RadLossArr("L_eff", num_active_cells);
+        loss_prev = FP(0.0);
+        loss_eff = FP(0.0);
+    }
+};
+/// The population tolerance is tightened as the cooling time shortens:
+/// pop_tol = min(RAD_EQ_MAX_POP_TOL, RAD_EQ_POP_TOL_SCALE / (0.01 * t_cv))
+constexpr fp_t RAD_EQ_MAX_POP_TOL = FP(5e-4);
+constexpr fp_t RAD_EQ_POP_TOL_SCALE = FP(1e-2);
+/// Cells losing less than this (W/m3) can't meaningfully constrain the timestep.
+constexpr fp_t RAD_EQ_MIN_RAD_LOSS = FP(1e-12);
+/// Fraction of cells allowed to cool faster than the timestep tracks, rather
+/// than letting a handful of cells set it for the whole domain. Those cells are
+/// over-stepped, so keep it low enough that they stay under
+/// RAD_EQ_MAX_E_INT_LOSS_FRAC -- at 0.5% they'd be clamped every step.
+constexpr fp_t RAD_EQ_COOLING_TIME_PERCENTILE = FP(0.001);
+/// Most of the energy a cell can lose in one step, as a fraction of what it
+/// holds. Relative because the absolute scale of e_int is problem dependent
+/// (~0.1 J/m3 in a prominence, but far larger in the photosphere). The CFL
+/// condition on delta_t should keep this from ever binding.
+constexpr fp_t RAD_EQ_MAX_E_INT_LOSS_FRAC = FP(0.9);
+/// Floor on temperature (K), matching min_temperature in EnergyConservation.hpp.
+constexpr fp_t RAD_EQ_MIN_TEMPERATURE = FP(1e3);
+/// Losses come out of the formal solver in kW/m3.
+constexpr fp_t RAD_LOSS_TO_SI = FP(1e3);
+
+void allocate_J(State* state) {
+    JasUnpack((*state), config, mr_block_map, c0_size, adata);
+    const auto& block_map = mr_block_map.block_map;
+    const bool sparse = config.sparse_calculation;
+    i64 num_cells = mr_block_map.block_map.get_num_active_cells();
+    i32 wave_dim = adata.wavelength.extent(0);
+    if (config.mode == DexrtMode::GivenFs) {
+        wave_dim = state->given_state.emis.extent(2);
+    }
+
+    if (!sparse) {
+        num_cells = i64(block_map.num_x_tiles()) * block_map.num_z_tiles() * square(BLOCK_SIZE);
+    }
+
+    state->J = Fp2d("J", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
+    state->J_cpu = Rad16ArrayHost("JHost", wave_dim, num_cells);
+    if constexpr (HALF_RADIATION_STORAGE) {
+        state->J_stage = Rad16Array("JStage", c0_size.wave_batch, num_cells);
+    }
+    state->J = FP(0.0);
+    state->J_cpu.fill(FP(0.0));
+    // TODO(cmo): If we have scattering terms and are updating J, the old
+    // contents should probably be moved first, but we don't have these terms yet.
+}
+
+/// Zero all of the rad_loss arrays, e.g. at the start of an iteration
+void zero_rad_loss(const State& state) {
+    if (!state.rad_loss.initialized()) {
+        return;
+    }
+    state.rad_loss = FP(0.0);
+    state.rad_loss_integrated = FP(0.0);
+    state.rad_loss_cpu = FP(0.0);
+    yakl::fence();
+}
+
+void allocate_rad_loss(State* state) {
+    JasUnpack((*state), config, mr_block_map, c0_size, adata);
+    if (config.rad_loss == RadLossType::None) {
+        return;
+    }
+    i64 num_cells = mr_block_map.block_map.get_num_active_cells();
+    i32 wave_dim = adata.wavelength.extent(0);
+    if (config.mode == DexrtMode::GivenFs) {
+        wave_dim = state->given_state.emis.extent(2);
+    }
+
+    int rad_loss_cpu_leading_dim = wave_dim;
+    if (config.rad_loss == RadLossType::Integrated) {
+        rad_loss_cpu_leading_dim = 1;
+    }
+
+    state->rad_loss = decltype(state->rad_loss)("L", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
+    state->rad_loss_integrated = decltype(state->rad_loss_integrated)("LIntegrated", yakl::DimsT<i64>(num_cells));
+    state->rad_loss_cpu = decltype(state->rad_loss_cpu)("LHost", yakl::DimsT<i64>(rad_loss_cpu_leading_dim, num_cells));
+    zero_rad_loss(*state);
+}
+
+CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
+    if (!(config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte)) {
+        return CascadeRays{};
+    }
+
+    State& state = *st;
+
+    Atmosphere atmos = load_atmos(config.atmos_path);
+    std::vector<ModelAtom<f64>> crtaf_models;
+    crtaf_models.reserve(config.atom_paths.size());
+    for (int i = 0; i < config.atom_paths.size(); ++i) {
+        const auto& p = config.atom_paths[i];
+        const auto& model_config = config.atom_configs[i];
+        crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
+    }
+    AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
+    state.adata = atomic_data.device;
+    state.adata_host = atomic_data.host;
+    state.have_h = atomic_data.have_h_model;
+    state.atoms = extract_atoms(atomic_data.device, atomic_data.host);
+    GammaAtomsAndMapping gamma_atoms = extract_atoms_with_gamma_and_mapping(atomic_data.device, atomic_data.host);
+    state.atoms_with_gamma = gamma_atoms.atoms;
+    state.atoms_with_gamma_mapping = gamma_atoms.mapping;
+
+    BlockMap<BLOCK_SIZE> block_map;
+    block_map.init(atmos, config.threshold_temperature);
+    i32 max_mip_level = 0;
+    for (int i = 0; i <= config.max_cascade; ++i) {
+        max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
+    }
+    if (state.config.mode != DexrtMode::GivenFs && LINE_SCHEME == LineCoeffCalc::Classic) {
+        max_mip_level = 0;
+        state.println("Mips not supported with LineCoeffCalc::Classic");
+    }
+    state.mr_block_map.init(block_map, max_mip_level);
+
+    state.atmos = sparsify_atmosphere(atmos, block_map);
+
+    state.phi = VoigtProfile<fp_t>(
+        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
+        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
+    );
+    state.nh_lte = HPartFn();
+    state.println("Scale: {} m", state.atmos.voxel_scale);
+
+    i64 num_active_cells = block_map.get_num_active_cells();
+
+    const int n_level_total = state.adata.energy.extent(0);
+    state.pops = Fp2d("pops", n_level_total, num_active_cells);
+
+    if (config.mode == DexrtMode::NonLte) {
+        state.precon_R = PreconRMat("precon_R", num_transitions(state.adata_host), 2, num_active_cells);
+        state.precon_R = GammaFp(0.0);
+        state.wphi = Rad16Array("wphi", state.adata.lines.extent(0), num_active_cells);
+    }
+
+    // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
+    state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary, PromweaverResampleType::FluxConserving);
+    state.boundary = config.boundary;
+
+    // NOTE(cmo): This doesn't actually know that things will be allocated sparse
+    CascadeRays c0_rays;
+    const auto space_dims = atmos.temperature.get_dimensions();
+    c0_rays.num_probes(0) = space_dims(1);
+    c0_rays.num_probes(1) = space_dims(0);
+    c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
+    c0_rays.num_incl = NUM_INCL;
+    c0_rays.wave_batch = WAVE_BATCH;
+
+    state.max_block_mip = decltype(state.max_block_mip)(
+        "max_block_mip",
+        (state.adata.wavelength.extent(0) + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
+        block_map.num_z_tiles(),
+        block_map.num_x_tiles()
+    );
+    return c0_rays;
+}
+
+void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
+}
+
+void init_state (State* state, const DexrtConfig& config) {
+    state->config = config;
+    setup_comm(state);
+
+    CascadeRays c0_rays;
+    c0_rays = init_atmos_atoms(state, config);
+
+    constexpr int RcMode = RC_flags_storage_2d();
+    state->c0_size = cascade_rays_to_storage<RcMode>(c0_rays);
+
+    allocate_J(state);
+    allocate_rad_loss(state);
+    init_cascade_sized_arrays(state, config);
+
+    Fp1dHost muy("muy", NUM_INCL);
+    Fp1dHost wmuy("wmuy", NUM_INCL);
+    for (int i = 0; i < NUM_INCL; ++i) {
+        muy(i) = INCL_RAYS[i];
+        wmuy(i) = INCL_WEIGHTS[i];
+    }
+    state->incl_quad.muy = muy.createDeviceCopy();
+    state->incl_quad.wmuy = wmuy.createDeviceCopy();
+}
+
+struct RestartState {
+    int num_iter;
+    f64 current_time;
+    /// Index of the radiative equilibrium step that was in progress.
+    int rad_eq_step;
+};
+
+RestartState handle_restart(State* st, const std::string& restart_path, Ab2History* ab2) {
+    State& state(*st);
+    yakl::SimpleNetCDF nc;
+    nc.open(restart_path, yakl::NETCDF_MODE_READ);
+
+    i64 num_active = nc.getDimSize("ks");
+    i64 num_level = nc.getDimSize("level");
+    if (num_active != state.atmos.temperature.extent(0)) {
+        throw std::runtime_error("Restart atmosphere size does not match loaded size, have you changed a parameter (e.g. threshold_temperature)?");
+    }
+    if (num_level != state.pops.extent(0)) {
+        throw std::runtime_error("Restart number of levels does not match size set in config. Have the models changed?");
+    }
+
+    nc.read(state.pops, "pops");
+    if (nc.varExists("ne")) {
+        nc.read(state.atmos.ne, "ne");
+    }
+    if (nc.varExists("nh_tot")) {
+        nc.read(state.atmos.nh_tot, "nh_tot");
+    }
+    if (nc.varExists("temperature")) {
+        nc.read(state.atmos.temperature, "temperature");
+    }
+    if (nc.varExists("pressure")) {
+        nc.read(state.atmos.pressure, "pressure");
+    }
+    if (nc.varExists("e_int")) {
+        if (!state.atmos.e_int.initialized()) {
+            throw std::runtime_error("Restart file contains e_int, but the atmosphere does not; are these from the same setup?");
+        }
+        nc.read(state.atmos.e_int, "e_int");
+    }
+
+    int ncid = nc.file.ncid;
+    int num_iter = 0;
+    int ierr = nc_get_att_int(ncid, NC_GLOBAL, "num_iter", &num_iter);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to get num_iter from restart file: {}", nc_strerror(ierr)));
+    }
+    f64 current_time = 0.0;
+    nc_get_att_double(ncid, NC_GLOBAL, "current_time", &current_time);
+
+    // -1 means the snapshot predates the time loop (or the attribute, for older
+    // files), so we resume at step 0.
+    int rad_eq_step = -1;
+    nc_get_att_int(ncid, NC_GLOBAL, "rad_eq_step", &rad_eq_step);
+
+    f64 dt_prev = 0.0;
+    if (nc.varExists("loss_prev") && nc_get_att_double(ncid, NC_GLOBAL, "dt_prev", &dt_prev) == NC_NOERR && dt_prev > 0.0) {
+        nc.read(ab2->loss_prev, "loss_prev");
+        ab2->dt_prev = dt_prev;
+        ab2->have_history = true;
+    }
+
+    return RestartState{
+        .num_iter = num_iter,
+        .current_time = current_time,
+        .rad_eq_step = rad_eq_step
+    };
+}
+
+void save_snapshot(const State& state, int num_iter, f64 current_time, int rad_eq_step, const Ab2History& ab2) {
+    if (state.mpi_state.rank != 0) {
+        return;
+    }
+
+    yakl::SimpleNetCDF nc;
+    std::string name(state.config.output_path);
+    std::string ext(".nc");
+    std::string new_ext("_snapshot.nc");
+    auto nc_pos = name.rfind(ext);
+    if (nc_pos == std::string::npos) {
+        // NOTE(cmo): Didn't find it, so just append
+        name += new_ext;
+    } else {
+        name.replace(nc_pos, ext.size(), new_ext);
+    }
+
+    nc.create(name, yakl::NETCDF_MODE_REPLACE);
+    state.println("Saving snapshot to {}...", name);
+
+    int ncid = nc.file.ncid;
+    int ierr = nc_put_att_int(ncid, NC_GLOBAL, "num_iter", NC_INT, 1, &num_iter);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to write num_iter to snapshot file: {}", nc_strerror(ierr)));
+    }
+    ierr = nc_put_att_double(ncid, NC_GLOBAL, "current_time", NC_DOUBLE, 1, &current_time);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to write current_time to snapshot file: {}", nc_strerror(ierr)));
+    }
+    ierr = nc_put_att_int(ncid, NC_GLOBAL, "rad_eq_step", NC_INT, 1, &rad_eq_step);
+    if (ierr != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to write rad_eq_step to snapshot file: {}", nc_strerror(ierr)));
+    }
+    if (ab2.have_history) {
+        ierr = nc_put_att_double(ncid, NC_GLOBAL, "dt_prev", NC_DOUBLE, 1, &ab2.dt_prev);
+        if (ierr != NC_NOERR) {
+            throw std::runtime_error(fmt::format("Unable to write dt_prev to snapshot file: {}", nc_strerror(ierr)));
+        }
+        nc.write(ab2.loss_prev, "loss_prev", {"ks"});
+    }
+
+    nc.write(state.pops, "pops", {"level", "ks"});
+    if (state.config.conserve_charge) {
+        nc.write(state.atmos.ne, "ne", {"ks"});
+    }
+    if (state.config.conserve_pressure) {
+        nc.write(state.atmos.nh_tot, "nh_tot", {"ks"});
+    }
+    nc.write(state.atmos.temperature, "temperature", {"ks"});
+    nc.write(state.atmos.pressure, "pressure", {"ks"});
+    if (state.config.conserve_energy) {
+        nc.write(state.atmos.e_int, "e_int", {"ks"});
+    }
+}
+
+void load_initial_pops(State* st, const std::string& initial_pops_path) {
+    State& state(*st);
+    yakl::SimpleNetCDF nc;
+    nc.open(initial_pops_path, yakl::NETCDF_MODE_READ);
+
+    bool load_sparse = nc.dimExists("ks");
+    state.println(
+        "Loading populations from {}, appear to be {}.",
+        initial_pops_path,
+        load_sparse ? "sparse" : "dense"
+    );
+
+    i64 num_level = nc.getDimSize("level");
+    if (num_level != state.pops.extent(0)) {
+        throw std::runtime_error("Restart number of levels does not match size set in config. Have the models changed?");
+    }
+
+    if (load_sparse) {
+        i64 num_active = nc.getDimSize("ks");
+        if (num_active != state.pops.extent(1)) {
+            throw std::runtime_error("Initial pops spatial dimension (ks) does not match loaded size, have you changed a parameter (e.g. threshold_temperature)?");
+        }
+        nc.read(state.pops, "pops");
+    } else {
+        i64 nx = nc.getDimSize("x");
+        i64 nz = nc.getDimSize("z");
+
+        if (nx != state.atmos.num_x || nz != state.atmos.num_z) {
+            throw std::runtime_error(
+                fmt::format(
+                    "Initial pops file dimensions [x: {}, z: {}] do not match atmos: [{}, {}]",
+                    nx,
+                    nz,
+                    state.atmos.num_x,
+                    state.atmos.num_z
+                )
+            );
+        }
+        Fp3d temp_pops("temp_pops", num_level, nz, nx);
+        nc.read(temp_pops, "pops");
+
+        JasUnpack(state, mr_block_map, pops);
+        auto bounds = mr_block_map.block_map.loop_bounds();
+        dex_parallel_for(
+            "Sparsify new pops",
+            FlatLoop<3>(
+                num_level,
+                bounds.dim(0),
+                bounds.dim(1)
+            ),
+            YAKL_LAMBDA (i32 level, i64 tile_idx, i32 block_idx) {
+                IdxGen idx_gen(mr_block_map);
+
+                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
+                pops(level, ks) = temp_pops(level, coord.z, coord.x);
+            }
+        );
+        yakl::fence();
+    }
+}
+
+void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
+    page_rows_to_host(state.J_cpu, la_start, state.J, la_end - la_start, state.J_stage);
+}
+
+/// Add the batch's rad_loss into rad_loss_integrated, and copy its planes to
+/// the host if we're storing them per wavelength
+void finalise_rad_loss_batch(const State& state, int la_start, int la_end) {
+    if (!state.rad_loss.initialized()) {
+        return;
+    }
+
+    const int wave_batch = la_end - la_start;
+    JasUnpack(state, rad_loss, rad_loss_integrated);
+    dex_parallel_for(
+        "Integrate rad_loss batch",
+        FlatLoop<1>(rad_loss.extent(1)),
+        YAKL_LAMBDA (i64 ks) {
+            RadLossFp batch_loss = RadLossFp(0.0);
+            for (int wave = 0; wave < wave_batch; ++wave) {
+                batch_loss += rad_loss(wave, ks);
+            }
+            rad_loss_integrated(ks) += batch_loss;
+        }
+    );
+    yakl::fence();
+
+    if (state.config.rad_loss == RadLossType::PerWavelength) {
+        const auto rad_loss_copy = state.rad_loss.createHostCopy();
+        // TODO(cmo): Replace with a memcpy?
+        for (int wave = 0; wave < wave_batch; ++wave) {
+            for (i64 ks = 0; ks < rad_loss_copy.extent(1); ++ks) {
+                state.rad_loss_cpu(la_start + wave, ks) = rad_loss_copy(wave, ks);
+            }
+        }
+    }
+}
+
+/// Copy rad_loss_integrated to the host array if we're storing the integrated
+/// loss (the per wavelength planes are copied in finalise_rad_loss_batch)
+void copy_rad_loss_to_host(const State& state) {
+    if (!state.rad_loss.initialized() || state.config.rad_loss != RadLossType::Integrated) {
+        return;
+    }
+    const auto integrated = state.rad_loss_integrated.createHostCopy();
+    for (i64 ks = 0; ks < integrated.extent(0); ++ks) {
+        state.rad_loss_cpu(0, ks) = integrated(ks);
+    }
+}
+
+void setup_wavelength_batch(const State& state, int la_start, int la_end) {
+    state.J = FP(0.0);
+    if (state.rad_loss.initialized()) {
+        state.rad_loss = FP(0.0);
+    }
+    yakl::fence();
+}
+
+void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
+    copy_J_plane_to_host(state, la_start, la_end);
+    finalise_rad_loss_batch(state, la_start, la_end);
+
+    const i32 wave_batch_idx = la_start / state.c0_size.wave_batch;
+    JasUnpack(state, max_block_mip, mr_block_map);
+    dex_parallel_for(
+        "Copy max mip",
+        FlatLoop<1>(state.mr_block_map.block_map.loop_bounds().dim(0)),
+        YAKL_LAMBDA (i64 tile_idx) {
+            MRIdxGen idx_gen(mr_block_map);
+            Coord2 coord = idx_gen.loop_coord(0, tile_idx, 0);
+            Coord2 tile_coord = idx_gen.compute_tile_coord(tile_idx);
+            i32 mip_level = idx_gen.get_sample_level(coord);
+            max_block_mip(wave_batch_idx, tile_coord.z, tile_coord.x) = mip_level;
+        }
+    );
+    yakl::fence();
+}
+
+/// Add Dex's metadata to the file using attributes. The netcdf layer needs extending to do this, so I'm just throwing it in manually.
+void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i32 num_iter) {
+    const auto ncwrap = [&] (int ierr, int line) {
+        if (ierr != NC_NOERR) {
+            state.println("NetCDF Error writing attributes at main.cpp:{}", line);
+            state.println("{}",nc_strerror(ierr));
+            yakl::yakl_throw(nc_strerror(ierr));
+        }
+    };
+    int ncid = file.file.ncid;
+    if (ncid == -999) {
+        throw std::runtime_error("File appears to have been closed before writing attributes!");
+    }
+
+    std::string name = "dexrt (2d)";
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "program", name.size(), name.c_str()),
+        __LINE__
+    );
+
+    std::string precision = "f64";
+#ifdef DEXRT_SINGLE_PREC
+    precision = "f32";
+#endif
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "precision", precision.size(), precision.c_str()),
+        __LINE__
+    );
+    std::string method(RcConfigurationNames[int(RC_CONFIG)]);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "RC_method", method.size(), method.c_str()),
+        __LINE__
+    );
+
+    if (RC_CONFIG == RcConfiguration::ParallaxFixInner) {
+        i32 inner_parallax_merge_lim = INNER_PARALLAX_MERGE_ABOVE_CASCADE;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "inner_parallax_merge_above_cascade", NC_INT, 1, &inner_parallax_merge_lim),
+            __LINE__
+        );
+    }
+    if (RC_CONFIG == RcConfiguration::ParallaxFix) {
+        i32 parallax_merge_lim = PARALLAX_MERGE_ABOVE_CASCADE;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "parallax_merge_above_cascade", NC_INT, 1, &parallax_merge_lim),
+            __LINE__
+        );
+    }
+
+    std::string raymarch_type(RaymarchTypeNames[int(RAYMARCH_TYPE)]);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "raymarch_type", raymarch_type.size(), raymarch_type.c_str()),
+        __LINE__
+    );
+    if (RAYMARCH_TYPE == RaymarchType::LineSweep) {
+        i32 line_sweep_on_and_above = LINE_SWEEP_START_CASCADE;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "line_sweep_start_cascade", NC_INT, 1, &line_sweep_on_and_above),
+            __LINE__
+        );
+    }
+
+    f64 probe0_length = PROBE0_LENGTH;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "probe0_length", NC_DOUBLE, 1, &probe0_length),
+        __LINE__
+    );
+    i32 probe0_num_rays = PROBE0_NUM_RAYS;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "probe0_num_rays", NC_INT, 1, &probe0_num_rays),
+        __LINE__
+    );
+    i32 probe0_spacing = PROBE0_SPACING;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "probe0_spacing", NC_INT, 1, &probe0_spacing),
+        __LINE__
+    );
+    i32 cascade_branching = CASCADE_BRANCHING_FACTOR;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "cascade_branching_factor", NC_INT, 1, &cascade_branching),
+        __LINE__
+    );
+    i32 multiple_branching_factors = VARY_BRANCHING_FACTOR;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "multiple_branching_factors", NC_INT, 1, &multiple_branching_factors),
+        __LINE__
+    );
+    if (VARY_BRANCHING_FACTOR) {
+        i32 upper_branching = UPPER_BRANCHING_FACTOR;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "upper_branching_factor", NC_INT, 1, &upper_branching),
+            __LINE__
+        );
+        i32 branch_switch = BRANCHING_FACTOR_SWITCH;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "branching_factor_switch", NC_INT, 1, &branch_switch),
+            __LINE__
+        );
+    }
+    i32 max_cascade = state.config.max_cascade;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "max_cascade", NC_INT, 1, &max_cascade),
+        __LINE__
+    );
+    i32 last_casc_to_inf = LAST_CASCADE_TO_INFTY;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "last_casc_to_infty", NC_INT, 1, &last_casc_to_inf),
+        __LINE__
+    );
+    f64 last_casc_dist = LAST_CASCADE_MAX_DIST;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "last_cascade_max_distance", NC_DOUBLE, 1, &last_casc_dist),
+        __LINE__
+    );
+    i32 preaverage = PREAVERAGE;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "preaverage", NC_INT, 1, &preaverage),
+        __LINE__
+    );
+    i32 dir_by_dir = DIR_BY_DIR;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "dir_by_dir", NC_INT, 1, &dir_by_dir),
+        __LINE__
+    );
+    i32 pingpong = PINGPONG_BUFFERS;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "pingpong_buffers", NC_INT, 1, &pingpong),
+        __LINE__
+    );
+    i32 store_tau_cascades = STORE_TAU_CASCADES;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "store_tau_cascades", NC_INT, 1, &store_tau_cascades),
+        __LINE__
+    );
+    f64 thermal_vel_frac = ANGLE_INVARIANT_THERMAL_VEL_FRAC;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "angle_invariant_thermal_vel_frac", NC_DOUBLE, 1, &thermal_vel_frac),
+        __LINE__
+    );
+    i32 conserve_pressure_nr = CONSERVE_PRESSURE_NR;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "conserve_pressure_nr", NC_INT, 1, &conserve_pressure_nr),
+        __LINE__
+    );
+    i32 extra_safe_source_fn = EXTRA_SAFE_SOURCE_FN;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "extra_safe_source_fn", NC_INT, 1, &extra_safe_source_fn),
+        __LINE__
+    );
+    i32 report_nan_intensity = REPORT_NAN_INTENSITY;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "report_nan_intensity", NC_INT, 1, &report_nan_intensity),
+        __LINE__
+    );
+
+
+    i32 warp_size = DEXRT_WARP_SIZE;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "warp_size", NC_INT, 1, &warp_size),
+        __LINE__
+    );
+    i32 wave_batch = WAVE_BATCH;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "wave_batch", NC_INT, 1, &wave_batch),
+        __LINE__
+    );
+    i32 num_incl = NUM_INCL;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_incl", NC_INT, 1, &num_incl),
+        __LINE__
+    );
+    f64 incl_rays[NUM_INCL];
+    f64 incl_weights[NUM_INCL];
+    for (int i = 0; i < NUM_INCL; ++i) {
+        incl_rays[i] = INCL_RAYS[i];
+        incl_weights[i] = INCL_WEIGHTS[i];
+    }
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "incl_rays", NC_DOUBLE, num_incl, incl_rays),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "incl_weights", NC_DOUBLE, num_incl, incl_weights),
+        __LINE__
+    );
+    i32 num_atom = state.adata_host.num_level.extent(0);
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_atom", NC_INT, 1, &num_atom),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_level", NC_INT, num_atom, state.adata_host.num_level.get_data()),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_line", NC_INT, state.adata_host.num_line.extent(0), state.adata_host.num_line.get_data()),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "line_start", NC_INT, state.adata_host.line_start.extent(0), state.adata_host.line_start.get_data()),
+        __LINE__
+    );
+    yakl::Array<f64, 1, yakl::memHost> lambda0("lambda0", state.adata_host.lines.extent(0));
+    for (int i = 0; i < lambda0.extent(0); ++i) {
+        lambda0(i) = state.adata_host.lines(i).lambda0;
+    }
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "lambda0", NC_DOUBLE, lambda0.extent(0), lambda0.get_data()),
+        __LINE__
+    );
+
+    // NOTE(cmo): Hack to save timing data. These functions only print to stdout -- want to redirect that.
+    auto cout_buf = std::cout.rdbuf();
+    std::ostringstream timer_buffer;
+    std::cout.rdbuf(timer_buffer.rdbuf());
+    yakl::timer_finalize();
+    std::cout.rdbuf(cout_buf);
+    std::string timer_data = timer_buffer.str();
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "timing", timer_data.size(), timer_data.c_str()),
+        __LINE__
+    );
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_iter", NC_INT, 1, &num_iter),
+        __LINE__
+    );
+
+    std::string output_format = state.config.output.sparse ? "sparse" : "full";
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "output_format", output_format.size(), output_format.c_str()),
+        __LINE__
+    );
+    i32 final_dense_fs = state.config.final_dense_fs;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "final_dense_fs", NC_INT, 1, &final_dense_fs),
+        __LINE__
+    );
+
+    std::string line_scheme_name(LineCoeffCalcNames[int(LINE_SCHEME)]);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "line_calculation_scheme", line_scheme_name.size(), line_scheme_name.c_str()),
+        __LINE__
+    );
+
+    i32 block_size = BLOCK_SIZE;
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "block_size", NC_INT, 1, &block_size),
+        __LINE__
+    );
+    i32 nx_blocks = state.mr_block_map.block_map.num_x_tiles();
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_x_blocks", NC_INT, 1, &nx_blocks),
+        __LINE__
+    );
+    i32 nz_blocks = state.mr_block_map.block_map.num_z_tiles();
+    ncwrap(
+        nc_put_att_int(ncid, NC_GLOBAL, "num_z_blocks", NC_INT, 1, &nz_blocks),
+        __LINE__
+    );
+
+    if constexpr (LINE_SCHEME == LineCoeffCalc::VelocityInterp) {
+        i32 interp_bins = INTERPOLATE_DIRECTIONAL_BINS;
+        ncwrap(
+            nc_put_att_int(ncid, NC_GLOBAL, "interpolate_directional_bins", NC_INT, 1, &interp_bins),
+            __LINE__
+        );
+
+        f64 interp_max_width = INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH;
+        ncwrap(
+            nc_put_att_double(ncid, NC_GLOBAL, "interpolate_direction_max_thermal_width", NC_DOUBLE, 1, &interp_max_width),
+            __LINE__
+        );
+    }
+
+    ncwrap(
+        nc_put_att_int(
+            ncid, NC_GLOBAL, "mip_levels", NC_INT,
+            state.config.max_cascade+1,
+            state.config.mip_config.mip_levels.data()
+        ),
+        __LINE__
+    );
+
+    std::string git_hash(GIT_HASH);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "git_hash", git_hash.size(), git_hash.c_str()),
+        __LINE__
+    );
+
+    f64 voxel_scale = state.atmos.voxel_scale;
+    ncwrap(
+        nc_put_att_double(ncid, NC_GLOBAL, "voxel_scale", NC_DOUBLE, 1, &voxel_scale),
+        __LINE__
+    );
+
+    const auto& config_path(state.config.own_path);
+    ncwrap(
+        nc_put_att_text(ncid, NC_GLOBAL, "config_path", config_path.size(), config_path.c_str()),
+        __LINE__
+    );
+}
+
+void save_results(const State& state, const CascadeState& casc_state, i32 num_iter) {
+    const auto& config = state.config;
+    const auto& out_cfg = config.output;
+    if (state.mpi_state.rank != 0) {
+        return;
+    }
+
+    yakl::SimpleNetCDF nc;
+    nc.create(config.output_path, yakl::NETCDF_MODE_REPLACE);
+    state.println("Saving output to {}...", config.output_path);
+    add_netcdf_attributes(state, nc, num_iter);
+    const auto& block_map = state.mr_block_map.block_map;
+
+    bool sparse_J = state.config.sparse_calculation && (state.J_cpu.extent(1) == state.atmos.temperature.extent(0));
+
+    auto maybe_rehydrate_and_write = [&](
+        auto arr,
+        const std::string& name,
+        std::vector<std::string> leading_dim_names
+    ) {
+        auto& dim_names = leading_dim_names;
+        if (out_cfg.sparse) {
+            dim_names.insert(dim_names.end(), {"ks"});
+            nc.write(arr, name, dim_names);
+        } else {
+            auto hydrated = rehydrate_sparse_quantity(block_map, arr);
+            dim_names.insert(dim_names.end(), {"z", "x"});
+            nc.write(hydrated, name, dim_names);
+        }
+    };
+
+    if (out_cfg.J) {
+        if (sparse_J && out_cfg.sparse) {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "ks"}, [](const Fp2dHost& rows) {
+                return rows;
+            });
+        } else if (sparse_J) {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "x"}, [&](const Fp2dHost& rows) {
+                return rehydrate_sparse_quantity(block_map, rows);
+            });
+        } else {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "x"}, [&](const Fp2dHost& rows) {
+                return rows.reshape(rows.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
+            });
+        }
+        nc.write(state.max_block_mip, "max_mip_block", {"wavelength_batch", "tile_z", "tile_x"});
+    }
+    if (out_cfg.rad_loss) {
+        std::string leading_dim = config.rad_loss == RadLossType::Integrated ? "wavelength_integrated" : "wavelength";
+        maybe_rehydrate_and_write(state.rad_loss_cpu, "rad_loss", {leading_dim});
+    }
+
+    if (out_cfg.wavelength && state.adata.wavelength.initialized()) {
+        nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
+    }
+    if (out_cfg.pops && state.pops.initialized()) {
+        maybe_rehydrate_and_write(state.pops, "pops", {"level"});
+    }
+    if (out_cfg.lte_pops) {
+        Fp2d lte_pops = state.pops.createDeviceObject();
+        compute_lte_pops(&state, lte_pops);
+        yakl::fence();
+        maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});
+    }
+    if (out_cfg.ne && state.atmos.ne.initialized()) {
+        maybe_rehydrate_and_write(state.atmos.ne, "ne", {});
+    }
+    if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
+        maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
+    }
+    if (out_cfg.temperature && state.atmos.temperature.initialized()) {
+        maybe_rehydrate_and_write(state.atmos.temperature, "temperature", {});
+        maybe_rehydrate_and_write(state.atmos.pressure, "pressure", {});
+    }
+    if (state.atmos.e_int.initialized()) {
+        maybe_rehydrate_and_write(state.atmos.e_int, "e_int", {});
+    }
+    if (out_cfg.psi_star && casc_state.I_ext.initialized()) {
+        nc.write(casc_state.I_ext, "I_ext", {"casc_shape"});
+        nc.write(casc_state.one_minus_alo, "one_minus_alo", {"casc_shape"});
+    }
+    if (out_cfg.active) {
+        // NOTE(cmo): Currently active is always written dense
+        const auto& active_char = reify_active_c0(block_map);
+        nc.write(active_char, "active", {"z", "x"});
+    }
+    for (int casc : out_cfg.cascades) {
+        // NOTE(cmo): The validity of these + necessary warning were checked/output in the config parsing step
+        std::string name = fmt::format("I_C{}", casc);
+        std::string shape = fmt::format("casc_shape_{}", casc);
+        nc.write(casc_state.i_cascades[casc], name, {shape});
+        if constexpr (STORE_TAU_CASCADES) {
+            name = fmt::format("tau_C{}", casc);
+            nc.write(casc_state.tau_cascades[casc], name, {shape});
+        }
+    }
+    if (out_cfg.sparse) {
+        nc.write(block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
+    }
+    nc.close();
+}
+
+struct ActualSubiterations {
+    bool actually_conserve_charge;
+    bool actually_conserve_pressure;
+    bool actually_conserve_energy;
+};
+
+int iterate_non_lte(
+    WavelengthDistributor& wave_dist,
+    State& state,
+    const CascadeState& casc_state,
+    const ActualSubiterations& opts,
+    f64 current_time,
+    int rad_eq_step,
+    const Ab2History& ab2
+) {
+    JasUnpack(state, config);
+    JasUnpack(opts, actually_conserve_charge, actually_conserve_pressure, actually_conserve_energy);
+    const int initial_lambda_iterations = config.initial_lambda_iterations;
+    const int max_iters = config.max_iter;
+    const fp_t non_lte_tol = config.pop_tol;
+    auto& waves = state.adata_host.wavelength;
+    fp_t max_change = FP(1.0);
+    state.println("-- Non-LTE Iterations ({} wavelengths) --", state.adata_host.wavelength.extent(0));
+    NgAccelerator ng;
+    if (config.ng.enable) {
+        ng.init(
+            NgAccelArgs{
+                .num_level=(i64)state.pops.extent(0),
+                .num_space=(i64)state.pops.extent(1),
+                .accel_tol=config.ng.threshold,
+                .lower_tol=config.ng.lower_threshold
+            }
+        );
+        ng.accelerate(state, FP(1.0));
+    }
+    bool first_iter = true;
+    bool accelerated = false;
+    int i = 0;
+    while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
+        state.println("==== FS {} ====", i);
+        compute_nh0(state);
+
+        zero_precon_R(state.precon_R);
+
+        bool print_worst_wphi = first_iter;
+        compute_profile_normalisation(state, casc_state, print_worst_wphi);
+        state.J = FP(0.0);
+        state.J_cpu.fill(FP(0.0));
+        zero_rad_loss(state);
+        yakl::fence();
+        WavelengthBatch wave_batch;
+        wave_dist.wait_for_all(state.mpi_state);
+        wave_dist.reset();
+        while (wave_dist.next_batch(state.mpi_state, &wave_batch)) {
+            setup_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+            bool lambda_iterate = i < initial_lambda_iterations;
+            dynamic_formal_sol_rc(
+                state,
+                casc_state,
+                DynamicFormalSolRcOptions {
+                    .la_start = wave_batch.la_start,
+                    .la_end = wave_batch.la_end,
+                    .lambda_iterate = lambda_iterate,
+                    .compute_rad_loss = config.rad_loss != RadLossType::None
+                }
+            );
+            finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
+        }
+        yakl::fence();
+        wave_dist.wait_for_all(state.mpi_state);
+        copy_rad_loss_to_host(state);
+
+        state.println("  == Statistical equilibrium ==");
+        wave_dist.reduce_precon_R(&state);
+        max_change = stat_eq(
+            &state,
+            StatEqOptions{
+                .ignore_change_below_ntot_frac=std::min(FP(1e-6), non_lte_tol)
+            }
+        );
+        if (i > 0 && actually_conserve_charge) {
+            fp_t nr_update = nr_post_update(
+                &state,
+                NrPostUpdateOptions{
+                    .ignore_change_below_ntot_frac = std::min(FP(1e-6), non_lte_tol),
+                    .conserve_pressure = CONSERVE_PRESSURE_NR && actually_conserve_pressure
+                }
+            );
+            wave_dist.update_ne(&state);
+            max_change = std::max(nr_update, max_change);
+            if (!CONSERVE_PRESSURE_NR && actually_conserve_pressure) {
+                fp_t nh_tot_update = simple_conserve_pressure(&state);
+                max_change = std::max(nh_tot_update, max_change);
+            }
+            if (actually_conserve_energy) {
+                fp_t temp_update = simple_conserve_energy(&state);
+                max_change = std::max(temp_update, max_change);
+            }
+            if (actually_conserve_pressure) {
+                wave_dist.update_nh_tot(&state);
+            }
+        }
+        if (config.ng.enable) {
+            accelerated = ng.accelerate(state, max_change);
+            if (accelerated) {
+                state.println("  ~~ Ng Acceleration! (📉 or 💣) ~~");
+            }
+        }
+        wave_dist.update_pops(&state);
+        i += 1;
+        if (
+            (state.config.snapshot_frequency != 0) &&
+            (i % state.config.snapshot_frequency == 0)
+        ) {
+            save_snapshot(state, i, current_time, rad_eq_step, ab2);
+        }
+        first_iter = false;
+    }
+    return i;
+}
+
+struct CoolingTimes {
+    fp_t percentile; /// what the timestep is built from
+    fp_t minimum;    /// the worst cell; delta_t / this is its fractional e_int loss
+};
+
+CoolingTimes characteristic_cooling_time(const State& state, bool conserving_energy) {
+    JasUnpack(state, atmos, pops, adata, rad_loss_integrated);
+
+    constexpr fp_t gamma = (FP(5.0) / FP(3.0));
+    constexpr fp_t igm1 = FP(1.0) / (gamma - FP(1.0));
+    constexpr fp_t quiescent = FP(1e30);
+    using namespace ConstantsFP;
+
+    // NOTE(claude): When we're conserving energy, e_int is the reservoir we're
+    // actually draining, so use it directly rather than reconstructing an
+    // estimate from the pressure and populations. On the other paths e_int is
+    // never advanced, so an atmosphere that happens to provide it would give us
+    // a stale reservoir that drifts further from the gas on every step.
+    const bool have_e_int = conserving_energy && atmos.e_int.initialized();
+
+    const i64 num_cells = pops.extent(1);
+    Fp1d cooling_time("cooling_time", num_cells);
+    dex_parallel_for(
+        "Characteristic cooling",
+        FlatLoop<1>(num_cells),
+        YAKL_LAMBDA (i64 ks) {
+            const fp_t L = std::abs(rad_loss_integrated(ks) * RAD_LOSS_TO_SI);
+            if (L < RAD_EQ_MIN_RAD_LOSS) {
+                cooling_time(ks) = quiescent;
+                return;
+            }
+
+            fp_t e_int;
+            if (have_e_int) {
+                e_int = atmos.e_int(ks);
+            } else {
+                e_int = igm1 * atmos.pressure(ks);
+                for (int i = 0; i < adata.energy.extent(0); ++i) {
+                    e_int += pops(i, ks) * adata.energy(i) * eV;
+                }
+            }
+            cooling_time(ks) = e_int / L;
+        }
+    );
+    yakl::fence();
+
+    auto host = cooling_time.createHostCopy();
+    fp_t* begin = host.data();
+    i64 idx = i64(RAD_EQ_COOLING_TIME_PERCENTILE * num_cells);
+    idx = std::min(idx, num_cells - 1);
+    std::nth_element(begin, begin + idx, begin + num_cells);
+    return CoolingTimes{
+        .percentile = begin[idx],
+        .minimum = *std::min_element(begin, begin + idx + 1)
+    };
+}
+
+fp_t mean_temperature(const State& state) {
+    JasUnpack(state, atmos);
+    const auto& temperature = atmos.temperature;
+
+    const fp_t threshold = state.config.threshold_temperature;
+    const bool have_temperature_threshold = threshold > FP(0.0);
+    f64 result;
+    dex_parallel_reduce(
+        "Temperature sum",
+        FlatLoop<1>(temperature.extent(0)),
+        KOKKOS_LAMBDA (i64 ks, f64& running_sum) {
+            const fp_t T = temperature(ks);
+            if (have_temperature_threshold && T >= threshold) {
+                return;
+            }
+            running_sum += temperature(ks);
+        },
+        Kokkos::Sum<f64>(result)
+    );
+    i64 num_active;
+    if (!have_temperature_threshold) {
+        num_active = temperature.extent(0);
+    } else {
+        dex_parallel_reduce(
+            "Active cell sum",
+            FlatLoop<1>(temperature.extent(0)),
+            KOKKOS_LAMBDA (i64 ks, i64& running_sum) {
+                if (temperature(ks) < threshold) {
+                    running_sum += 1;
+                }
+            },
+            Kokkos::Sum<i64>(num_active)
+        );
+    }
+    return result / num_active;
+}
+
+void dump_properties(const State& state, int iter, fp_t time) {
+    yakl::SimpleNetCDF nc;
+    std::string filename = fmt::format("re_iteration_{:03d}.nc", iter);
+    nc.create(filename, yakl::NETCDF_MODE_REPLACE);
+
+    nc.write(time, "time");
+    nc.write(state.atmos.temperature, "temperature", {"ks"});
+    nc.write(state.atmos.pressure, "pressure", {"ks"});
+    nc.write(state.atmos.ne, "ne", {"ks"});
+    nc.write(state.atmos.nh_tot, "nh_tot", {"ks"});
+    if (state.atmos.e_int.initialized()) {
+        nc.write(state.atmos.e_int, "e_int", {"ks"});
+    }
+    nc.write(state.rad_loss_integrated, "rad_loss", {"ks"});
+    nc.write(state.pops, "pops", {"level", "ks"});
+}
+
+void copy_current_loss(const State& state, const RadLossArr& dst) {
+    JasUnpack(state, rad_loss_integrated);
+    dex_parallel_for(
+        "Copy rad_loss",
+        FlatLoop<1>(rad_loss_integrated.extent(0)),
+        YAKL_LAMBDA (i64 ks) {
+            dst(ks) = rad_loss_integrated(ks);
+        }
+    );
+    yakl::fence();
+}
+
+/// Adams-Bashforth 2
+/// Reduces to the textbook (3/2, -1/2) when r == 1.
+/// Caunt & Korpi (2001), A&A 375, 1073 (astro-ph/0102068), Eq. B.2;
+/// Verschelde, MCS 471 Lecture 32 <homepages.math.uic.edu/~jan/mcs471/variablestep.pdf>.
+void compute_ab2_loss(const State& state, const Ab2History& hist, f64 r) {
+    JasUnpack(state, rad_loss_integrated);
+    const auto& loss_prev = hist.loss_prev;
+    const auto& loss_eff = hist.loss_eff;
+    const RadLossFp w_cur = RadLossFp(1.0) + RadLossFp(0.5) * r;
+    const RadLossFp w_prev = RadLossFp(0.5) * r;
+
+    dex_parallel_for(
+        "AB2 loss blend",
+        FlatLoop<1>(rad_loss_integrated.extent(0)),
+        YAKL_LAMBDA (i64 ks) {
+            loss_eff(ks) = w_cur * rad_loss_integrated(ks) - w_prev * loss_prev(ks);
+        }
+    );
+    yakl::fence();
+}
+
+fp_t compute_error_atol(const State& state) {
+    JasUnpack(state, atmos);
+    const bool have_e_int = atmos.e_int.initialized();
+    const auto& q = have_e_int ? atmos.e_int : atmos.pressure;
+
+    fp_t max_q;
+    dex_parallel_reduce(
+        "Error scale",
+        FlatLoop<1>(q.extent(0)),
+        KOKKOS_LAMBDA (i64 ks, fp_t& running_max) {
+            running_max = std::max(running_max, std::abs(q(ks)));
+        },
+        Kokkos::Max<fp_t>(max_q)
+    );
+    return RAD_EQ_ATOL_FRAC * max_q;
+}
+
+/// Largest dt whose AB2 error estimate, dt^2 |L^n - L^{n-1}| / (2 dt_prev),
+/// stays within atol + rtol |y|. Solved for directly, giving the next step size (no need to reject).
+f64 ab2_error_limited_dt(const State& state, const Ab2History& hist) {
+    JasUnpack(state, atmos, rad_loss_integrated);
+    const auto& loss_prev = hist.loss_prev;
+    const bool have_e_int = atmos.e_int.initialized();
+    const fp_t atol = compute_error_atol(state);
+
+    f64 max_scaled_dl;
+    dex_parallel_reduce(
+        "AB2 error estimate",
+        FlatLoop<1>(rad_loss_integrated.extent(0)),
+        KOKKOS_LAMBDA (i64 ks, f64& running_max) {
+            const f64 dL = std::abs(rad_loss_integrated(ks) - loss_prev(ks)) * RAD_LOSS_TO_SI;
+            const fp_t q = have_e_int ? atmos.e_int(ks) : atmos.pressure(ks);
+            const fp_t scale = atol + RAD_EQ_RTOL * std::abs(q);
+            running_max = std::max(running_max, dL / scale);
+        },
+        Kokkos::Max<f64>(max_scaled_dl)
+    );
+
+    if (max_scaled_dl <= FP(0.0)) {
+        // No limit from this term in this case
+        return std::numeric_limits<f64>::infinity();
+    }
+    return std::sqrt(2.0 * hist.dt_prev / max_scaled_dl);
+}
+
+void update_temperature_explicit(const State& state, const RadLossArr& loss, fp_t delta_t, bool isobaric) {
+    JasUnpack(state, atmos);
+    // 1/c_p vs 1/c_v, in units of T/P.
+    const fp_t inv_heat_capacity = isobaric ? (FP(2.0) / FP(5.0)) : (FP(2.0) / FP(3.0));
+    const fp_t min_temperature = RAD_EQ_MIN_TEMPERATURE;
+
+    fp_t max_temp_change;
+    dex_parallel_reduce(
+        "Update temperature (rad loss)",
+        FlatLoop<1>(loss.extent(0)),
+        KOKKOS_LAMBDA (i64 ks, fp_t& running_max) {
+            const fp_t L = loss(ks) * RAD_LOSS_TO_SI;
+            const fp_t T = atmos.temperature(ks);
+
+            const fp_t temperature_update = inv_heat_capacity * L * T / atmos.pressure(ks) * delta_t;
+            const fp_t new_temperature = std::max(T - temperature_update, min_temperature);
+            atmos.temperature(ks) = new_temperature;
+            if (!isobaric) {
+                atmos.pressure(ks) *= new_temperature / T;
+            }
+            running_max = std::max(running_max, std::abs(new_temperature - T));
+        },
+        Kokkos::Max<fp_t>(max_temp_change)
+    );
+    fmt::println("Max temperature change: {} K", max_temp_change);
+}
+
+void advance_e_int(const State& state, const RadLossArr& loss, fp_t delta_t) {
+    JasUnpack(state, atmos);
+    using namespace ConstantsFP;
+    const fp_t total_abund = state.config.total_abund;
+    const fp_t min_temperature = RAD_EQ_MIN_TEMPERATURE;
+    const fp_t min_e_int_frac = FP(1.0) - RAD_EQ_MAX_E_INT_LOSS_FRAC;
+
+    fp_t max_frac_change;
+    dex_parallel_reduce(
+        "Advance e_int (rad loss)",
+        FlatLoop<1>(loss.extent(0)),
+        KOKKOS_LAMBDA (i64 ks, fp_t& running_max) {
+            const fp_t L = loss(ks) * RAD_LOSS_TO_SI;
+            const fp_t e_int = atmos.e_int(ks);
+            const fp_t delta_e = L * delta_t;
+
+            const fp_t min_e_int = min_e_int_frac * e_int;
+            fp_t new_e_int = e_int - delta_e;
+            if (new_e_int < min_e_int) {
+                new_e_int = min_e_int;
+            }
+            atmos.e_int(ks) = new_e_int;
+            running_max = std::max(running_max, std::abs(FP(1.0) - new_e_int / e_int));
+
+            const fp_t T = atmos.temperature(ks);
+            const fp_t N = total_abund * atmos.nh_tot(ks) + atmos.ne(ks);
+            const fp_t new_temperature = std::max(
+                T - (FP(2.0) / FP(3.0)) * L * T / atmos.pressure(ks) * delta_t,
+                min_temperature
+            );
+            atmos.temperature(ks) = new_temperature;
+            atmos.pressure(ks) = N * k_B * new_temperature;
+        },
+        Kokkos::Max<fp_t>(max_frac_change)
+    );
+    fmt::println("Max fractional e_int change: {}", max_frac_change);
+    if (max_frac_change >= RAD_EQ_MAX_E_INT_LOSS_FRAC) {
+        fmt::println("  !! e_int loss was limited -- delta_t is too large for the losses !!");
+    }
+}
+
+int main(int argc, char** argv) {
+    init_mpi(argc, argv);
+
+    argparse::ArgumentParser program("DexRT Rad Eq");
+    program.add_argument("--config")
+        .default_value(std::string("dexrt.yaml"))
+        .help("Path to config file")
+        .metavar("FILE");
+    program.add_argument("--restart-from")
+        .nargs(1)
+        .help("Path to snapshot file")
+        .metavar("FILE");
+    program.add_epilog("DexRT Radiance Cascade based non-LTE solver with evolution towards radiative equilibrium (2d).");
+
+    program.parse_known_args(argc, argv);
+
+    std::optional<std::string> restart_path = program.present("--restart-from");
+
+    DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
+    if (config.mode != DexrtMode::NonLte) {
+        throw std::runtime_error("dexrt_rad_eq only supports non-lte problems.");
+    }
+    config.rad_loss = RadLossType::Integrated;
+    config.final_dense_fs = false;
+    fmt::println("Setting required config vars for rad_eq:");
+    fmt::println("rad_loss = \"Integrated\"");
+    fmt::println("final_dense_fs = false");
+
+    Kokkos::initialize(argc, argv);
+    yakl::init(
+        yakl::InitConfig()
+            .set_pool_size_mb(config.mem_pool_gb * 1024)
+    );
+
+    {
+        State state;
+        init_state(&state, config);
+        state.println(
+            "Precision: {}, radiation storage: {}",
+            sizeof(fp_t) == 8 ? "f64" : "f32",
+            HALF_RADIATION_STORAGE ? "16-bit" : "fp_t"
+        );
+        if (state.mpi_state.num_ranks > 1) {
+            throw std::runtime_error("dexrt_rad_eq does not yet support multiple MPI ranks: rad_loss is not reduced across them.");
+        }
+        CascadeState casc_state;
+        casc_state.init(state, config.max_cascade);
+        yakl::timer_start("DexRT");
+        state.max_block_mip = -1;
+        yakl::fence();
+
+        // NOTE(cmo): Set up model
+        compute_lte_pops(&state);
+        if (state.config.initial_pops_path.size() > 0) {
+            load_initial_pops(&state, state.config.initial_pops_path);
+        }
+        const bool non_lte = config.mode == DexrtMode::NonLte;
+        const bool do_restart = bool(restart_path);
+        // NOTE(cmo): If the pops came from a file they're not LTE, so neither
+        // the LTE n_e/pressure loop (which drives them back to LTE through
+        // stat_eq) nor the special initial pops schemes should run.
+        const bool pops_provided = do_restart || (config.initial_pops_path.size() > 0);
+        const bool conserve_charge = config.conserve_charge;
+        const bool actually_conserve_charge = state.have_h && conserve_charge;
+        if (!actually_conserve_charge && conserve_charge) {
+            throw std::runtime_error("Charge conservation enabled without a model H!");
+        }
+        const bool conserve_pressure = config.conserve_pressure;
+        if (conserve_pressure && !conserve_charge) {
+            throw std::runtime_error("Cannot enable pressure conservation without charge conservation.");
+        }
+        const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
+        const bool conserve_energy = config.conserve_energy;
+        if (conserve_energy && !conserve_charge) {
+            throw std::runtime_error("Cannot enable energy conservation without charge conservation.");
+        }
+        const bool actually_conserve_energy = actually_conserve_charge && conserve_energy;
+        if (actually_conserve_energy && !state.atmos.e_int.initialized()) {
+            throw std::runtime_error(
+                fmt::format(
+                    "Energy conservation requires an \"e_int\" variable in the atmosphere ({}), which does not provide one.",
+                    config.atmos_path
+                )
+            );
+        }
+        RadEqPath rad_eq_path = RadEqPath::Isochoric;
+        if (actually_conserve_energy) {
+            rad_eq_path = RadEqPath::EnergyConserving;
+        } else if (actually_conserve_pressure) {
+            rad_eq_path = RadEqPath::Isobaric;
+        }
+        state.println("Radiative equilibrium path: {}", RadEqPathNames[int(rad_eq_path)]);
+        const int initial_lambda_iterations = config.initial_lambda_iterations;
+        const int max_iters = config.max_iter;
+
+        const fp_t non_lte_tol = config.pop_tol;
+        auto& waves = state.adata_host.wavelength;
+        fp_t max_change = FP(1.0);
+        int num_iter = 1;
+
+        WavelengthDistributor wave_dist;
+        wave_dist.init(state.mpi_state, waves.extent(0), state.c0_size.wave_batch);
+
+        int i = 0;
+        if (actually_conserve_charge && !pops_provided) {
+            // TODO(cmo): Make all of these parameters configurable
+            state.println("-- Iterating LTE n_e/pressure --");
+            fp_t lte_max_change = FP(1.0);
+            int lte_i = 0;
+            while ((lte_max_change > FP(1e-5) || lte_i < 6) && lte_i < max_iters) {
+                lte_i += 1;
+                compute_nh0(state);
+                lte_max_change = stat_eq(&state, StatEqOptions{
+                    .ignore_change_below_ntot_frac=FP(1e-7)
+                });
+                if (lte_i < 2) {
+                    continue;
+                }
+                // NOTE(cmo): Ignore what the lte_change actually is
+                // from stat eq... it will "converge" essentially
+                // instantly due to linearity, so whilst the error may
+                // be above a threshold, it's unlikely to get
+                // meaningfully better after the second iteration
+                fp_t nr_update = nr_post_update(&state, NrPostUpdateOptions{
+                    .ignore_change_below_ntot_frac = FP(1e-7),
+                    .conserve_pressure = false
+                });
+                lte_max_change = nr_update;
+                if (actually_conserve_pressure) {
+                    fp_t nh_tot_update = simple_conserve_pressure(&state);
+                    lte_max_change = std::max(nh_tot_update, lte_max_change);
+                }
+            }
+            state.println("Ran for {} iterations", lte_i);
+        }
+
+        if (!pops_provided) {
+            set_initial_pops_special(&state);
+        }
+
+        f64 current_time = 0.0;
+        // NOTE(claude): The step a snapshot was taken during: its e_int advance and
+        // time increment have already been applied, so we resume on the step
+        // after it, and the solve below finishes converging that step.
+        int snapshot_step = -1;
+        Ab2History ab2;
+        ab2.init(state.atmos.temperature.extent(0));
+        if (do_restart) {
+            RestartState restart = handle_restart(&state, *restart_path, &ab2);
+            i = restart.num_iter;
+            current_time = restart.current_time;
+            snapshot_step = restart.rad_eq_step;
+            state.println(
+                "Resuming at step {} (t = {:.6g} s), AB2 history {}",
+                snapshot_step + 1,
+                current_time,
+                ab2.have_history ? "restored" : "absent (one Euler step to rebuild)"
+            );
+        }
+        const int first_step = snapshot_step + 1;
+
+        // NOTE(claude): Perform initial iteration. On a cold start energy
+        // conservation is left off so this converges the populations at the
+        // temperature provided by the atmosphere, rather than remapping it onto
+        // the provided e_int. On a restart we're resuming mid-evolution, where
+        // the temperature is already the evolved one, so holding it fixed here
+        // would pull the state away from what we're continuing, and the
+        // cold-start iteration budget doesn't apply either.
+        if (do_restart) {
+            state.config.max_iter = RAD_EQ_MAX_ITER;
+        }
+        i = iterate_non_lte(
+            wave_dist,
+            state,
+            casc_state,
+            ActualSubiterations{
+                .actually_conserve_charge=actually_conserve_charge,
+                .actually_conserve_pressure=actually_conserve_pressure,
+                .actually_conserve_energy=do_restart && actually_conserve_energy
+            },
+            current_time,
+            snapshot_step,
+            ab2
+        );
+
+        state.config.max_iter = RAD_EQ_MAX_ITER;
+
+        state.println(
+            "Error control: rtol = {:e}, atol = {:e} * max(e_int)",
+            RAD_EQ_RTOL,
+            RAD_EQ_ATOL_FRAC
+        );
+
+        yakl::timer_start("Radiative Equilibrium");
+
+        for (int ii = first_step; ii < RAD_EQ_NUM_STEPS; ++ii) {
+            CoolingTimes cooling = characteristic_cooling_time(state, rad_eq_path == RadEqPath::EnergyConserving);
+            const fp_t tcv = cooling.percentile;
+            fp_t mean_temp = mean_temperature(state);
+            fmt::println("\n~~~~~~~~~~~~ Step {}, t = {:.6g} s ~~~~~~~~~~~~~~", ii, current_time);
+            fmt::println("t_cv = {:e} s (min over cells {:e} s)", tcv, cooling.minimum);
+            fmt::println("mean temperature = {:e} K", mean_temp);
+
+            // First step has no history to extrapolate from: Euler, seeding L^{n-1}.
+            f64 delta_t;
+            const char* limiter;
+            if (!ab2.have_history) {
+                delta_t = std::min(f64(RAD_EQ_EULER_CFL * tcv), f64(RAD_EQ_MAX_DELTA_T));
+                limiter = "euler-cfl";
+            } else {
+                const f64 dt_err = RAD_EQ_SAFETY * ab2_error_limited_dt(state, ab2);
+                const f64 dt_growth = RAD_EQ_MAX_GROWTH * ab2.dt_prev;
+                const f64 dt_cfl = RAD_EQ_CFL_BACKSTOP * tcv;
+                delta_t = std::min(std::min(dt_err, dt_growth), std::min(dt_cfl, f64(RAD_EQ_MAX_DELTA_T)));
+                limiter = "error";
+                if (delta_t == dt_growth) {
+                    limiter = "growth";
+                } else if (delta_t == dt_cfl) {
+                    limiter = "t_cv";
+                } else if (delta_t == f64(RAD_EQ_MAX_DELTA_T)) {
+                    limiter = "max";
+                }
+                fmt::println(
+                    "dt limiters: error {:.4e}, growth {:.4e}, t_cv {:.4e}",
+                    dt_err,
+                    dt_growth,
+                    dt_cfl
+                );
+            }
+
+            dump_properties(state, ii, current_time);
+
+            if (ab2.have_history) {
+                compute_ab2_loss(state, ab2, delta_t / ab2.dt_prev);
+            } else {
+                copy_current_loss(state, ab2.loss_eff);
+            }
+            copy_current_loss(state, ab2.loss_prev);
+
+            if (rad_eq_path == RadEqPath::EnergyConserving) {
+                advance_e_int(state, ab2.loss_eff, delta_t);
+            } else {
+                update_temperature_explicit(state, ab2.loss_eff, delta_t, rad_eq_path == RadEqPath::Isobaric);
+            }
+            ab2.dt_prev = delta_t;
+            ab2.have_history = true;
+
+            fp_t pop_tol = std::min(RAD_EQ_MAX_POP_TOL, fp_t(RAD_EQ_POP_TOL_SCALE / (FP(0.01) * tcv)));
+            fmt::println("delta_t: {} ({})", delta_t, limiter);
+            fmt::println("New tol = {:e}", pop_tol);
+            fmt::println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
+
+
+            state.config.pop_tol = pop_tol;
+
+            current_time += delta_t;
+            i = iterate_non_lte(
+                wave_dist,
+                state,
+                casc_state,
+                ActualSubiterations{
+                    .actually_conserve_charge=actually_conserve_charge,
+                    .actually_conserve_pressure=actually_conserve_pressure,
+                    .actually_conserve_energy=actually_conserve_energy
+                },
+                current_time,
+                ii,
+                ab2
+            );
+        }
+        yakl::timer_stop("Radiative Equilibrium");
+
+        num_iter = i;
+        wave_dist.reduce_J(&state);
+        yakl::timer_stop("DexRT");
+        save_results(state, casc_state, num_iter);
+    }
+    yakl::finalize();
+    finalise_mpi();
+    Kokkos::finalize();
+    return 0;
+
+}

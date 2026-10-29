@@ -6,6 +6,7 @@ import numpy as np
 import astropy.units as u
 import astropy.constants as const
 import lightweaver as lw
+import lightweaver.atomic_model as lw_model
 
 lw_version_split = lw.__version__.split(".")
 lw_version_int = int(lw_version_split[0]) * 1000 + int(lw_version_split[1])
@@ -134,9 +135,19 @@ def Johnson_CI(i, Eij, Te):
     return ci
 
 
-def make_atom(extend_long_lines=False):
+def make_atom(extend_long_lines=False, add_cooling_cont=False, max_nlambda=None):
     conv = LightweaverAtomConverter()
-    model = conv.convert(H_6_atom())
+    h_model = H_6_atom()
+    if add_cooling_cont:
+        h_model.continua.append(lw_model.ExplicitContinuum(
+            j=len(h_model.levels)-1,
+            i=len(h_model.levels)-2,
+            wavelengthGrid=[2290.0, 2500.0, 3000.0, 3500.0, 4000.0],
+            alphaGrid=[1e-50, 1e-50, 1e-50, 1e-50, 1e-50],
+        )
+    )
+    lw.reconfigure_atom(h_model)
+    model = conv.convert(h_model)
     if OLD_LW:
         for l in model.lines:
             l.wavelength_grid.q_core *= 4
@@ -147,6 +158,10 @@ def make_atom(extend_long_lines=False):
                 # l.wavelength_grid.n_lambda *= 2
                 l.wavelength_grid.q_core *= 3
                 l.wavelength_grid.q_wing *= 7
+    if max_nlambda is not None:
+        for l in model.lines:
+            l.wavelength_grid.n_lambda = min(l.wavelength_grid.n_lambda, max_nlambda)
+
     visitor = crtaf.AtomicSimplificationVisitor(crtaf.default_visitors())
     model_simplified = model.simplify_visit(visitor)
     for coll_trans in model_simplified.collisions:
@@ -347,6 +362,10 @@ if __name__ == "__main__":
 
     atom = make_atom()
     with open("H_6.yaml", "w") as f:
+        f.write(atom.yaml_dumps())
+
+    atom = make_atom(add_cooling_cont=True, max_nlambda=31)
+    with open("H_6_cooling_small.yaml", "w") as f:
         f.write(atom.yaml_dumps())
 
     atom = make_atom(extend_long_lines=True)

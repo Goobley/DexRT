@@ -27,8 +27,17 @@ endif()
 if (${YAKL_AUTO_FENCE})
     set(YAKL_DEFS "${YAKL_DEFS} -DYAKL_AUTO_FENCE")
 endif()
+option(DEX_FORCE_DOUBLE_PREC "Compile with fp_t = double" OFF)
+option(DEX_HALF_RADIATION_STORAGE "Store radiation arrays (J, wphi) in 16 bits" ON)
+if (${DEX_FORCE_DOUBLE_PREC})
+    set(DEX_CXX_FLAGS "${DEX_CXX_FLAGS} -DDEXRT_FORCE_DOUBLE_PREC")
+endif()
+if (${DEX_HALF_RADIATION_STORAGE})
+    set(DEX_CXX_FLAGS "${DEX_CXX_FLAGS} -DDEXRT_HALF_RADIATION_STORAGE")
+endif()
 
 list(APPEND DEX_SOURCE_FILES
+    "../source/ProbesToCompute.cpp"
     "../source/StaticFormalSolution.cpp"
     "../source/DynamicFormalSolution.cpp"
     "../source/MiscSparse.cpp"
@@ -46,6 +55,8 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_utils.cpp
     test_emis_opac.cpp
     test_gesv.cpp
+    test_wavelength_bins.cpp
+    test_chord_loss.cpp
 )
 
 set(CMAKE_CXX_STANDARD 20)
@@ -81,7 +92,6 @@ set_target_properties(
 target_include_directories(dexrt_test SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"
     "${MPI_INCLUDE_PATH}"
-    "${MAGMA_INCLUDE_PATH}"
 )
 target_include_directories(dexrt_test PUBLIC "../source/")
 target_include_directories(dexrt_test PUBLIC "../YAKL/src")
@@ -104,8 +114,7 @@ target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 #     "${GCC_INCLUDE_PATH}"
 #     "${MPI_INCLUDE_PATH}"
 #     "${NETCDF_INCLUDE_PATH}"
-#     "${MAGMA_INCLUDE_PATH}"
-# )
+# # )
 # target_include_directories(lw_comparison_2d PUBLIC "../source/")
 # target_include_directories(lw_comparison_2d PUBLIC "../YAKL/src")
 # target_include_directories(lw_comparison_2d PUBLIC ../fmt/include)
@@ -132,8 +141,7 @@ target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 #     "${GCC_INCLUDE_PATH}"
 #     "${MPI_INCLUDE_PATH}"
 #     "${NETCDF_INCLUDE_PATH}"
-#     "${MAGMA_INCLUDE_PATH}"
-# )
+# # )
 # target_include_directories(diffuse_source PUBLIC "../source/")
 # target_include_directories(diffuse_source PUBLIC "../YAKL/src")
 # target_include_directories(diffuse_source PUBLIC ../fmt/include)
@@ -160,8 +168,7 @@ target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 #     "${GCC_INCLUDE_PATH}"
 #     "${MPI_INCLUDE_PATH}"
 #     "${NETCDF_INCLUDE_PATH}"
-#     "${MAGMA_INCLUDE_PATH}"
-# )
+# # )
 # target_include_directories(solid_source PUBLIC "../source/")
 # target_include_directories(solid_source PUBLIC "../YAKL/src")
 # target_include_directories(solid_source PUBLIC ../fmt/include)
@@ -188,8 +195,7 @@ target_link_libraries(dexrt_test Kokkos::kokkoskernels)
 #     "${GCC_INCLUDE_PATH}"
 #     "${MPI_INCLUDE_PATH}"
 #     "${NETCDF_INCLUDE_PATH}"
-#     "${MAGMA_INCLUDE_PATH}"
-# )
+# # )
 # target_include_directories(static_lte_fs PUBLIC "../source/")
 # target_include_directories(static_lte_fs PUBLIC "../YAKL/src")
 # target_include_directories(static_lte_fs PUBLIC ../fmt/include)

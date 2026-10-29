@@ -23,6 +23,54 @@ KOKKOS_INLINE_FUNCTION ivec<3> coord_to_ivec<3>(Coord<3> c) {
     return probe_coord;
 }
 
+template <class State, class FlatAtmos>
+void print_worst_wphi_entries(const State& state, const FlatAtmos& flatmos) {
+    JasUnpack(state, wphi);
+    const auto loop = FlatLoop<2>(wphi.extent(0), wphi.extent(1));
+    typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<i32, i32>> Reducer;
+    typedef Reducer::value_type ReducerType;
+    Fp1d wphi_plane("wphi max err plane", wphi.extent(0));
+
+    ReducerType max_err_loc;
+
+    dex_parallel_reduce(
+        "Compute wphi err",
+        loop,
+        KOKKOS_LAMBDA (const int kr, const int k, ReducerType& rvar) {
+            fp_t err = std::abs(FP(1.0) - wphi(kr, k));
+            if (err > rvar.val) {
+                rvar.val = err;
+                rvar.loc = Kokkos::make_pair(kr, k);
+            }
+        },
+        Reducer(max_err_loc)
+    );
+    i32 max_err_k = max_err_loc.loc.second;
+    dex_parallel_for(
+        "Copy wphi plane",
+        FlatLoop<1>(wphi.extent(0)),
+        KOKKOS_LAMBDA (const int kr) {
+            wphi_plane(kr) = wphi(kr, max_err_k);
+        }
+    );
+    Fp1d max_err_temp("temp_view", &flatmos.temperature(max_err_k), 1);
+    Fp1d max_err_nh("temp_view", &flatmos.nh_tot(max_err_k), 1);
+    Fp1d max_err_ne("temp_view", &flatmos.ne(max_err_k), 1);
+    yakl::fence();
+    auto wphi_plane_host = wphi_plane.createHostCopy();
+    auto max_err_temp_host = max_err_temp.createHostCopy();
+    auto max_err_nh_host = max_err_nh.createHostCopy();
+    auto max_err_ne_host = max_err_ne.createHostCopy();
+    std::string output = fmt::format("  Highest error normalisation factors (wphi) @ ks = {} (T={:.2e}, nh={:.2e}, ne={:.2e}): ", max_err_k, max_err_temp_host(0), max_err_nh_host(0), max_err_ne_host(0));
+    for (int kr = 0; kr < wphi_plane_host.extent(0); ++kr) {
+        output += fmt::format("({:.3f} nm: {:e})", state.adata_host.lines(kr).lambda0, wphi_plane_host(kr));
+        if (kr != wphi_plane_host.extent(0) - 1) {
+            output += ", ";
+        }
+    }
+    state.println("{}", output);
+}
+
 template <int NumDim, class State, class CascadeState>
 void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi) {
     const auto flatmos = flatten(state.atmos);
@@ -131,67 +179,76 @@ void compute_profile_normalisation(const State& state, const CascadeState& casc_
             }
             // NOTE(cmo): Store the multiplicative normalisation factor
             if (entry != FP(0.0)) {
-                wphi(kr, ks) = FP(1.0) / entry;
+                wphi.set(kr, ks, FP(1.0) / entry);
             } else {
-                wphi(kr, ks) = FP(1.0);
+                wphi.set(kr, ks, FP(1.0));
             }
         }
     );
     yakl::fence();
 
     if (print_worst_wphi) {
-        const auto loop = FlatLoop<2>(wphi.extent(0), wphi.extent(1));
-        typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<i32, i32>> Reducer;
-        typedef Reducer::value_type ReducerType;
-        Fp1d wphi_plane("wphi max err plane", wphi.extent(0));
-
-        ReducerType max_err_loc;
-
-        dex_parallel_reduce(
-            "Compute wphi err",
-            loop,
-            KOKKOS_LAMBDA (const int kr, const int k, ReducerType& rvar) {
-                fp_t err = std::abs(FP(1.0) - wphi(kr, k));
-                if (err > rvar.val) {
-                    rvar.val = err;
-                    rvar.loc = Kokkos::make_pair(kr, k);
-                }
-            },
-            Reducer(max_err_loc)
-        );
-        i32 max_err_k = max_err_loc.loc.second;
-        dex_parallel_for(
-            "Copy wphi plane",
-            FlatLoop<1>(wphi.extent(0)),
-            KOKKOS_LAMBDA (const int kr) {
-                wphi_plane(kr) = wphi(kr, max_err_k);
-            }
-        );
-        Fp1d max_err_temp("temp_view", &flatmos.temperature(max_err_k), 1);
-        Fp1d max_err_nh("temp_view", &flatmos.nh_tot(max_err_k), 1);
-        Fp1d max_err_ne("temp_view", &flatmos.ne(max_err_k), 1);
-        yakl::fence();
-        auto wphi_plane_host = wphi_plane.createHostCopy();
-        auto max_err_temp_host = max_err_temp.createHostCopy();
-        auto max_err_nh_host = max_err_nh.createHostCopy();
-        auto max_err_ne_host = max_err_ne.createHostCopy();
-        std::string output = fmt::format("  Highest error normalisation factors (wphi) @ ks = {} (T={:.2e}, nh={:.2e}, ne={:.2e}): ", max_err_k, max_err_temp_host(0), max_err_nh_host(0), max_err_ne_host(0));
-        for (int kr = 0; kr < wphi_plane_host.extent(0); ++kr) {
-            output += fmt::format("({:.3f} nm: {:e})", state.adata_host.lines(kr).lambda0, wphi_plane_host(kr));
-            if (kr != wphi_plane_host.extent(0) - 1) {
-                output += ", ";
-            }
-        }
-        state.println("{}", output);
+        print_worst_wphi_entries(state, flatmos);
     }
 }
 
-/// 2D
 void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi) {
     compute_profile_normalisation<2>(state, casc_state, print_worst_wphi);
 }
 
-/// 3D
 void compute_profile_normalisation(const State3d& state, const CascadeState3d& casc_state, bool print_worst_wphi) {
     compute_profile_normalisation<3>(state, casc_state, print_worst_wphi);
+}
+
+void compute_profile_normalisation(const State& state, const Fp2d& mu, const Fp1d& wmu, bool print_worst_wphi) {
+    const auto flatmos = flatten(state.atmos);
+    JasUnpack(state, adata, wphi, mr_block_map);
+    const auto& profile = state.phi;
+    const auto& wavelength = adata.wavelength;
+    auto bounds = mr_block_map.block_map.loop_bounds();
+    const int num_dirs = wmu.extent(0);
+
+    dex_parallel_for(
+        "Compute wphi (dir set)",
+        FlatLoop<3>(wphi.extent(0), bounds.dim(0), bounds.dim(1)),
+        YAKL_LAMBDA (int kr, i64 tile_idx, i32 block_idx) {
+            using namespace ConstantsFP;
+            fp_t entry = FP(0.0);
+
+            IdxGen idx_gen(mr_block_map);
+            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
+            const auto& line = adata.lines(kr);
+
+            const fp_t temperature = flatmos.temperature(ks);
+            const fp_t vturb = flatmos.vturb(ks);
+            const fp_t dop_width = doppler_width(line.lambda0, adata.mass(line.atom), temperature, vturb);
+            const fp_t gamma = gamma_from_broadening(line, adata.broadening, temperature, flatmos.ne(ks), flatmos.nh0(ks));
+
+            for (int la = line.blue_idx; la < line.red_idx; ++la) {
+                const fp_t lambda = wavelength(la);
+                const fp_t wl_weight = adata.wavelength_bin(la);
+                const fp_t a = damping_from_gamma(gamma, lambda, dop_width);
+                for (int d = 0; d < num_dirs; ++d) {
+                    const fp_t vel = (
+                        flatmos.vx(ks) * mu(d, 0)
+                        + flatmos.vy(ks) * mu(d, 1)
+                        + flatmos.vz(ks) * mu(d, 2)
+                    );
+                    const fp_t v = ((lambda - line.lambda0) + (vel * line.lambda0) / c) / dop_width;
+                    const fp_t p = profile(a, v) / (sqrt_pi * dop_width);
+                    entry += p * wl_weight * wmu(d);
+                }
+            }
+            if (entry != FP(0.0)) {
+                wphi.set(kr, ks, FP(1.0) / entry);
+            } else {
+                wphi.set(kr, ks, FP(1.0));
+            }
+        }
+    );
+    yakl::fence();
+
+    if (print_worst_wphi) {
+        print_worst_wphi_entries(state, flatmos);
+    }
 }

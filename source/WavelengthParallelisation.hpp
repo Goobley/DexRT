@@ -88,29 +88,22 @@ struct WavelengthDistributor {
     }
 
     inline void serve_requests(std::stop_token stop_token, const MpiState& mpi_state) {
-        MPI_Request req;
         int from[req_size];
-        bool setup_new_recv = true;
 
         auto loop_body = [&]() {
             int message_ready = 0;
             MPI_Status status;
-            MPI_Test(&req, &message_ready, &status);
+            MPI_Iprobe(MPI_ANY_SOURCE, wavelength_tag, mpi_state.comm, &message_ready, &status);
             if (message_ready) {
+                MPI_Recv(from, req_size, MPI_INT, MPI_ANY_SOURCE, wavelength_tag, mpi_state.comm, &status);
                 int rank_from = from[0];
                 int rank_batch_size = from[1];
                 int next_la = get_next_la_critical(rank_batch_size);
                 MPI_Send(&next_la, 1, MPI_INT, status.MPI_SOURCE, wavelength_tag, mpi_state.comm);
-                setup_new_recv = true;
             }
         };
 
         while (!stop_token.stop_requested()) {
-            if (setup_new_recv) {
-                MPI_Irecv(from, req_size, MPI_INT, MPI_ANY_SOURCE, wavelength_tag, mpi_state.comm, &req);
-                setup_new_recv = false;
-            }
-
             if constexpr (MPI_PROTECT_TEST) {
                 std::lock_guard<std::mutex> lock_holder(test_lock);
                 loop_body();
@@ -161,32 +154,17 @@ struct WavelengthDistributor {
     }
 
     template <typename State>
-    inline void reduce_Gamma(State* state) {
+    inline void reduce_precon_R(State* state) {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(test_lock);
-        for (int ia = 0; ia < state->Gamma.size(); ++ia) {
+        auto reduce = [&](GammaFp* ptr, i64 size) {
             if (state->mpi_state.rank == 0) {
-                MPI_Reduce(
-                    MPI_IN_PLACE,
-                    state->Gamma[ia].data(),
-                    state->Gamma[ia].size(),
-                    get_GammaFpMpi(),
-                    MPI_SUM,
-                    0,
-                    state->mpi_state.comm
-                );
+                MPI_Reduce(MPI_IN_PLACE, ptr, size, get_GammaFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
             } else {
-                MPI_Reduce(
-                    state->Gamma[ia].data(),
-                    state->Gamma[ia].data(),
-                    state->Gamma[ia].size(),
-                    get_GammaFpMpi(),
-                    MPI_SUM,
-                    0,
-                    state->mpi_state.comm
-                );
+                MPI_Reduce(ptr, nullptr, size, get_GammaFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
             }
-        }
+        };
+        reduce(state->precon_R.data(), state->precon_R.size());
 #endif
     }
 
@@ -194,28 +172,72 @@ struct WavelengthDistributor {
     inline void reduce_J(State* state) {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(test_lock);
-        fp_t* J_ptr = state->config.store_J_on_cpu ? state->J_cpu.data() : state->J.data();
-        i64 J_size = state->config.store_J_on_cpu ? state->J_cpu.size() : state->J.size();
-        if (state->mpi_state.rank == 0) {
-            MPI_Reduce(
-                MPI_IN_PLACE,
-                J_ptr,
-                J_size,
-                get_FpMpi(),
-                MPI_SUM,
-                0,
-                state->mpi_state.comm
-            );
-        } else {
-            MPI_Reduce(
-                J_ptr,
-                J_ptr,
-                J_size,
-                get_FpMpi(),
-                MPI_SUM,
-                0,
-                state->mpi_state.comm
-            );
+        if (!state->J_cpu.initialized()) {
+            return;
+        }
+        auto* J_ptr = state->J_cpu.data.data();
+        const i64 J_size = state->J_cpu.data.size();
+        // NOTE(cmo): The 16-bit encoding is monotonic, so its max is exact.
+        const auto J_type = HALF_RADIATION_STORAGE ? MPI_UINT16_T : get_FpMpi();
+        const auto J_op = HALF_RADIATION_STORAGE ? MPI_MAX : MPI_SUM;
+        MPI_Reduce(
+            state->mpi_state.rank == 0 ? MPI_IN_PLACE : J_ptr,
+            state->mpi_state.rank == 0 ? J_ptr : nullptr,
+            J_size,
+            J_type,
+            J_op,
+            0,
+            state->mpi_state.comm
+        );
+#endif
+    }
+
+    /// Reduces both the host rad_loss and the device rad_loss_integrated to rank 0, so they stay consistent.
+    template <typename State>
+    inline void reduce_rad_loss(State* state) {
+#ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
+        if (!state->rad_loss.initialized()) {
+            return;
+        }
+        auto reduce = [&](RadLossFp* ptr, i64 size) {
+            if (state->mpi_state.rank == 0) {
+                MPI_Reduce(MPI_IN_PLACE, ptr, size, get_RadLossFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
+            } else {
+                MPI_Reduce(ptr, nullptr, size, get_RadLossFpMpi(), MPI_SUM, 0, state->mpi_state.comm);
+            }
+        };
+        yakl::fence();
+        reduce(state->rad_loss_cpu.data(), state->rad_loss_cpu.size());
+        reduce(state->rad_loss_integrated.data(), state->rad_loss_integrated.size());
+#endif
+    }
+
+    /// The rate diagnostics are zeroed on every rank at the start of each formal
+    /// solution and only ever accumulate that rank's own wavelength batches, so
+    /// unlike Gamma they need reducing once, after the final iteration.
+    template <typename State>
+    inline void reduce_rate_diagnostics(State* state) {
+#ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
+        auto reduce = [&](auto* ptr, i64 size, auto mpi_type) {
+            if (state->mpi_state.rank == 0) {
+                MPI_Reduce(MPI_IN_PLACE, ptr, size, mpi_type, MPI_SUM, 0, state->mpi_state.comm);
+            } else {
+                MPI_Reduce(ptr, nullptr, size, mpi_type, MPI_SUM, 0, state->mpi_state.comm);
+            }
+        };
+        const auto& diag = state->rate_diag;
+        // NOTE(cmo): These are unallocated (or empty) if the diagnostic is not
+        // requested.
+        if (diag.radiative_rates.initialized()) {
+            reduce(diag.radiative_rates.data(), diag.radiative_rates.size(), get_GammaFpMpi());
+        }
+        for (const auto& arr : diag.cont_energy_absorb) {
+            reduce(arr.data(), arr.size(), get_RadLossFpMpi());
+        }
+        for (const auto& arr : diag.cont_energy_emit) {
+            reduce(arr.data(), arr.size(), get_RadLossFpMpi());
         }
 #endif
     }
@@ -241,6 +263,14 @@ struct WavelengthDistributor {
 #ifdef HAVE_MPI
         std::lock_guard<std::mutex> lock_holder(test_lock);
         MPI_Bcast(state->atmos.nh_tot.data(), state->atmos.nh_tot.size(), get_FpMpi(), 0, state->mpi_state.comm);
+#endif
+    }
+
+    template <typename State>
+    inline void update_temperature(State* state) {
+#ifdef HAVE_MPI
+        std::lock_guard<std::mutex> lock_holder(test_lock);
+        MPI_Bcast(state->atmos.temperature.data(), state->atmos.temperature.size(), get_FpMpi(), 0, state->mpi_state.comm);
 #endif
     }
 

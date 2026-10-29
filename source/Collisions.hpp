@@ -5,12 +5,20 @@
 #include "State.hpp"
 #include "Populations.hpp"
 #include "LteHPops.hpp"
+#include "EmisOpac.hpp"
+
+/// Local data inputs to collision functions
+template <typename NStar>
+struct CollisionCell {
+    const AtmosPointParams& atmos;
+    const NStar& n_star;
+    const HPartFn<>& nh_lte;
+};
 
 YAKL_INLINE fp_t interp_rates(
-    const SparseAtmosphere& atmos,
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    i64 ks
+    fp_t temperature
 ) {
     yakl::Array<fp_t const, 1, yakl::memDevice> temp_view(
         "temp_view",
@@ -22,241 +30,224 @@ YAKL_INLINE fp_t interp_rates(
         &atom.coll_rates(coll.start_idx),
         coll.end_idx - coll.start_idx
     );
-    return interp(atmos.temperature(ks), temp_view, rate_view);
+    return interp(temperature, temp_view, rate_view);
 }
 
-template <typename View2or3d>
-KOKKOS_FORCEINLINE_FUNCTION void store_collision_rates(
-    const CompColl<fp_t>& coll,
-    const View2or3d& C,
-    i64 ks,
-    fp_t Cup,
-    fp_t Cdown
-) {
-    constexpr int rank = ViewRank<View2or3d>::rank;
-    if constexpr (rank == 3) {
-        C(coll.i, coll.j, ks) += Cdown;
-        C(coll.j, coll.i, ks) += Cup;
-    } else {
-        C(coll.i, coll.j) += Cdown;
-        C(coll.j, coll.i) += Cup;
-    }
-}
+/// The upward (i -> j, C(j, i)) and downward (j -> i, C(i, j)) values of one rate.
+struct CollisionRates {
+    fp_t up;
+    fp_t down;
+};
 
-template <typename GammaMat>
-YAKL_INLINE void collision_omega(
-    const SparseAtmosphere& atmos,
+template <typename NStar>
+YAKL_INLINE CollisionRates collision_omega(
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const GammaMat& C,
-    const FpConst2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks
+    const CollisionCell<NStar>& cell
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, ks);
-    const fp_t Cdown = seaton_c0 * atmos.ne(ks) * rate / (atom.g(coll.j) * std::sqrt(atmos.temperature(ks)));
-    const fp_t Cup = Cdown * n_star(coll.j, ks) / n_star(coll.i, ks);
-    store_collision_rates(coll, C, ks, Cup, Cdown);
+    JasUnpack(cell, atmos, n_star);
+    const fp_t rate = interp_rates(atom, coll, atmos.temperature);
+    CollisionRates result;
+    result.down = seaton_c0 * atmos.ne * rate / (atom.g(coll.j) * std::sqrt(atmos.temperature));
+    result.up = result.down * n_star(coll.j) / n_star(coll.i);
+    return result;
 }
 
-template <typename GammaMat>
-YAKL_INLINE void collision_ci(
-    const SparseAtmosphere& atmos,
+template <typename NStar>
+YAKL_INLINE CollisionRates collision_ci(
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const GammaMat& C,
-    const FpConst2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks
+    const CollisionCell<NStar>& cell
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, ks);
+    JasUnpack(cell, atmos, n_star);
+    const fp_t rate = interp_rates(atom, coll, atmos.temperature);
     const fp_t dE = atom.energy(coll.j) - atom.energy(coll.i);
-    const fp_t Cup = (
-        (rate * atmos.ne(ks))
+    CollisionRates result;
+    result.up = (
+        (rate * atmos.ne)
         * (
-            std::exp(-dE / (k_B_eV * atmos.temperature(ks)))
-            * std::sqrt(atmos.temperature(ks))
+            std::exp(-dE / (k_B_eV * atmos.temperature))
+            * std::sqrt(atmos.temperature)
         )
     );
-    const fp_t Cdown = Cup * n_star(coll.i, ks) / n_star(coll.j, ks);
-    store_collision_rates(coll, C, ks, Cup, Cdown);
+    result.down = result.up * n_star(coll.i) / n_star(coll.j);
+    return result;
 }
 
-template <typename GammaMat>
-YAKL_INLINE void collision_ce(
-    const SparseAtmosphere& atmos,
+template <typename NStar>
+YAKL_INLINE CollisionRates collision_ce(
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const GammaMat& C,
-    const FpConst2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks
+    const CollisionCell<NStar>& cell
 ) {
     using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, ks);
+    JasUnpack(cell, atmos, n_star);
+    const fp_t rate = interp_rates(atom, coll, atmos.temperature);
     const fp_t gij = atom.g(coll.i) / atom.g(coll.j);
-    const fp_t Cdown = (rate * atmos.ne(ks)) * gij * std::sqrt(atmos.temperature(ks));
-    const fp_t Cup = Cdown * n_star(coll.j, ks) / n_star(coll.i, ks);
-    store_collision_rates(coll, C, ks, Cup, Cdown);
+    CollisionRates result;
+    result.down = (rate * atmos.ne) * gij * std::sqrt(atmos.temperature);
+    result.up = result.down * n_star(coll.j) / n_star(coll.i);
+    return result;
 }
 
-template <typename GammaMat>
-YAKL_INLINE void collision_cp(
-    const SparseAtmosphere& atmos,
+template <typename NStar>
+YAKL_INLINE CollisionRates collision_cp(
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const GammaMat& C,
-    const FpConst2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks
+    const CollisionCell<NStar>& cell
 ) {
-    using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, ks);
+    JasUnpack(cell, atmos, n_star, nh_lte);
+    const fp_t rate = interp_rates(atom, coll, atmos.temperature);
     // TODO(cmo): This is only LTE!
     fp_t n_hii;
-    nh_lte(atmos.temperature(ks), atmos.ne(ks), atmos.nh_tot(ks), &n_hii);
-    const fp_t Cdown = rate * n_hii;
-    const fp_t Cup = Cdown * n_star(coll.j, ks) / n_star(coll.i, ks);
-    store_collision_rates(coll, C, ks, Cup, Cdown);
+    nh_lte(atmos.temperature, atmos.ne, atmos.nhtot, &n_hii);
+    CollisionRates result;
+    result.down = rate * n_hii;
+    result.up = result.down * n_star(coll.j) / n_star(coll.i);
+    return result;
 }
 
-template <typename GammaMat>
-YAKL_INLINE void collision_ch(
-    const SparseAtmosphere& atmos,
+template <typename NStar>
+YAKL_INLINE CollisionRates collision_ch(
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const GammaMat& C,
-    const FpConst2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks
+    const CollisionCell<NStar>& cell
 ) {
-    using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, ks);
-    const fp_t nh0 = atmos.nh0(ks);
-    const fp_t Cup = rate * nh0;
-    const fp_t Cdown = Cup * n_star(coll.i, ks) / n_star(coll.j, ks);
-    store_collision_rates(coll, C, ks, Cup, Cdown);
+    JasUnpack(cell, atmos, n_star);
+    const fp_t rate = interp_rates(atom, coll, atmos.temperature);
+    CollisionRates result;
+    result.up = rate * atmos.nh0;
+    result.down = result.up * n_star(coll.i) / n_star(coll.j);
+    return result;
 }
 
-template <typename GammaMat>
-YAKL_INLINE void collision_charge_exc_h(
-    const SparseAtmosphere& atmos,
+template <typename NStar>
+YAKL_INLINE CollisionRates collision_charge_exc_h(
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const GammaMat& C,
-    const FpConst2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks
+    const CollisionCell<NStar>& cell
 ) {
-    using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, ks);
-    const fp_t nh0 = atmos.nh0(ks);
-    const fp_t Cdown = rate * nh0;
-    store_collision_rates(coll, C, ks, FP(0.0), Cdown);
+    JasUnpack(cell, atmos);
+    const fp_t rate = interp_rates(atom, coll, atmos.temperature);
+    return CollisionRates{.up = FP(0.0), .down = rate * atmos.nh0};
 }
 
-template <typename GammaMat>
-YAKL_INLINE void collision_charge_exc_p(
-    const SparseAtmosphere& atmos,
+template <typename NStar>
+YAKL_INLINE CollisionRates collision_charge_exc_p(
     const CompAtom<fp_t>& atom,
     const CompColl<fp_t>& coll,
-    const GammaMat& C,
-    const FpConst2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks
+    const CollisionCell<NStar>& cell
 ) {
-    using namespace ConstantsFP;
-    const fp_t rate = interp_rates(atmos, atom, coll, ks);
+    JasUnpack(cell, atmos, nh_lte);
+    const fp_t rate = interp_rates(atom, coll, atmos.temperature);
     // TODO(cmo): This is only LTE!
     fp_t n_hii;
-    nh_lte(atmos.temperature(ks), atmos.ne(ks), atmos.nh_tot(ks), &n_hii);
-    const fp_t Cup = rate * n_hii;
-    store_collision_rates(coll, C, ks, Cup, FP(0.0));
+    nh_lte(atmos.temperature, atmos.ne, atmos.nhtot, &n_hii);
+    return CollisionRates{.up = rate * n_hii, .down = FP(0.0)};
 }
 
-template <typename GammaMat>
-YAKL_INLINE void compute_collisions(
-    const SparseAtmosphere& atmos,
+template <typename NStar>
+YAKL_INLINE CollisionRates collision_rates(
     const CompAtom<fp_t>& atom,
-    const GammaMat& C,
-    const FpConst2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks
+    const CompColl<fp_t>& coll,
+    const CollisionCell<NStar>& cell
 ) {
-    for (int i = 0; i < atom.collisions.extent(0); ++i) {
-        const auto& coll = atom.collisions(i);
-        switch (coll.type) {
-            case CollRateType::Omega: {
-                collision_omega(atmos, atom, coll, C, n_star, nh_lte, ks);
-            } break;
-            case CollRateType::CI: {
-                collision_ci(atmos, atom, coll, C, n_star, nh_lte, ks);
-            } break;
-            case CollRateType::CE: {
-                collision_ce(atmos, atom, coll, C, n_star, nh_lte, ks);
-            } break;
-            case CollRateType::CP: {
-                collision_cp(atmos, atom, coll, C, n_star, nh_lte, ks);
-            } break;
-            case CollRateType::CH: {
-                collision_ch(atmos, atom, coll, C, n_star, nh_lte, ks);
-            } break;
-            case CollRateType::ChargeExcH: {
-                collision_charge_exc_h(atmos, atom, coll, C, n_star, nh_lte, ks);
-            } break;
-            case CollRateType::ChargeExcP: {
-                collision_charge_exc_p(atmos, atom, coll, C, n_star, nh_lte, ks);
-            } break;
+    switch (coll.type) {
+        case CollRateType::Omega: {
+            return collision_omega(atom, coll, cell);
+        }
+        case CollRateType::CI: {
+            return collision_ci(atom, coll, cell);
+        }
+        case CollRateType::CE: {
+            return collision_ce(atom, coll, cell);
+        }
+        case CollRateType::CP: {
+            return collision_cp(atom, coll, cell);
+        }
+        case CollRateType::CH: {
+            return collision_ch(atom, coll, cell);
+        }
+        case CollRateType::ChargeExcH: {
+            return collision_charge_exc_h(atom, coll, cell);
+        }
+        case CollRateType::ChargeExcP: {
+            return collision_charge_exc_p(atom, coll, cell);
         }
     }
+    return CollisionRates{.up = FP(0.0), .down = FP(0.0)};
 }
 
-/// Computes C and C_ne_pert for a single k.
-/// Both C and C_ne_pert should be the same size as Gamma for one spatial point (or 3d like the full Gamma array)
-/// Result will still require gamma_fixup
-template <typename View2or3d>
-KOKKOS_INLINE_FUNCTION void compute_C_ne_pert(
-    const SparseAtmosphere& atmos,
+/// Non-atomic.
+YAKL_INLINE void lte_pops_cell(
     const CompAtom<fp_t>& atom,
-    const Fp2d& n_star,
-    const HPartFn<>& nh_lte,
-    i64 ks,
-    const View2or3d& C,
-    const View2or3d& C_ne_pert,
-    fp_t ne_pert_size = FP(1e-2)
+    const AtmosPointParams& atmos,
+    const yakl::Array<fp_t, 1, yakl::memDevice>& n_star
 ) {
-    compute_collisions(atmos, atom, C, n_star, nh_lte, ks);
-    const fp_t ne_prev = atmos.ne(ks);
-    const fp_t ne_pert = ne_prev * ne_pert_size;
-    atmos.ne(ks) += ne_pert;
+    const yakl::Array<fp_t, 2, yakl::memDevice> n_star_view("n_star", n_star.data(), n_star.extent(0), 1);
     lte_pops(
         atom.energy,
         atom.g,
         atom.stage,
-        atmos.temperature(ks),
-        atmos.ne(ks),
-        atom.abundance * atmos.nh_tot(ks),
-        n_star,
-        ks
+        atmos.temperature,
+        atmos.ne,
+        atom.abundance * atmos.nhtot,
+        n_star_view,
+        0
     );
-    compute_collisions(atmos, atom, C_ne_pert, n_star, nh_lte, ks);
-    atmos.ne(ks) = ne_prev;
-    lte_pops(
-        atom.energy,
-        atom.g,
-        atom.stage,
-        atmos.temperature(ks),
-        atmos.ne(ks),
-        atom.abundance * atmos.nh_tot(ks),
-        n_star,
-        ks
+}
+
+/// Add collisional rates to a 2D (i, j) (for rate j -> i) matrix. Anticipated
+/// to be transiently stored in scratch/shared memory (same as n_star). Team
+/// barrier at the end. Needs to be called before fixing the diagonal of the
+/// rate matrix.
+template <typename Team, typename Mat>
+KOKKOS_INLINE_FUNCTION void scatter_add_collisions(
+    const Team& team,
+    const CompAtom<fp_t>& atom,
+    const AtmosPointParams& atmos,
+    const HPartFn<>& nh_lte,
+    fp_t* n_star,
+    const Mat& C
+) {
+    const yakl::Array<fp_t, 1, yakl::memDevice> n_star_k("n_star", n_star, atom.energy.extent(0));
+    Kokkos::single(Kokkos::PerTeam(team), [&]() {
+        lte_pops_cell(atom, atmos, n_star_k);
+    });
+    team.team_barrier();
+    const CollisionCell<decltype(n_star_k)> cell{
+        .atmos = atmos,
+        .n_star = n_star_k,
+        .nh_lte = nh_lte
+    };
+    Kokkos::parallel_for(
+        Kokkos::TeamVectorRange(team, atom.collisions.extent(0)),
+        [&] (const int c) {
+            const auto& coll = atom.collisions(c);
+            const CollisionRates rates = collision_rates(atom, coll, cell);
+            using CT = std::remove_cvref_t<decltype(C(0, 0))>;
+            Kokkos::atomic_add(&C(coll.i, coll.j), CT(rates.down));
+            Kokkos::atomic_add(&C(coll.j, coll.i), CT(rates.up));
+        }
     );
+    team.team_barrier();
+}
+
+/// The atmosphere at cell ks, for the collisional rates.
+template <typename Atmos>
+YAKL_INLINE AtmosPointParams collision_atmos(const Atmos& atmos, i64 ks) {
+    AtmosPointParams result;
+    result.temperature = atmos.temperature(ks);
+    result.ne = atmos.ne(ks);
+    result.nhtot = atmos.nh_tot(ks);
+    result.nh0 = atmos.nh0(ks);
+    return result;
 }
 
 template <typename State>
-void compute_collisions_to_gamma(State* state);
+CollisionalRatesOutput compute_collisional_rates_output(const State& state);
 
 #else
 #endif

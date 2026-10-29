@@ -4,6 +4,7 @@
 #include "RcConstants.hpp"
 #include "RcUtilsModes.hpp"
 #include "Utils.hpp"
+#include "Healpix.hpp"
 
 /// Returns the packed RC flags that affect cascade storage (i.e. known at compile time)
 YAKL_INLINE constexpr int RC_flags_storage_3d() {
@@ -501,59 +502,13 @@ YAKL_INLINE vec3 ray_dir(const CascadeRays3d& dims, int phi_idx, int theta_idx) 
         dir(1) = sin_phi * rr;
         dir(2) = z;
     } else if constexpr (ANGULAR_QUADRATURE_TYPE == AngularQuadratureType::Healpix) {
-        // NOTE(cmo): Only uses phi. Written in healpix_bare (BSD-3) terminology
         const i32 npix = dims.num_az_rays;
         const i32 nside = i32(std::sqrt(fp_t(npix / 12)));
         KOKKOS_ASSERT((square(nside) * 12) == npix);
-
-        // nest2hpd
-        const i32 npface = square(nside);
-        const i32 p2 = phi_idx & (npface-1);
-        const i32 px = compact_1_by_1(u32(p2));
-        const i32 py = compact_1_by_1(u32(p2) >> 1);
-        const i32 face = phi_idx / npface;
-
-        // hpd2loc
-        const f32 x = (px + FP(0.5)) / nside;
-        const f32 y = (py + FP(0.5)) / nside;
-        const i32 r = 1 - face / 4;
-        const fp_t h = r - 1 + (x + y);
-        const fp_t m = FP(2.0) - r * h;
-        fp_t z, s, phi;
-        auto jpll = [](int face) {
-            constexpr bool use_array = false;
-            constexpr bool branchless = true;
-            if constexpr (use_array) {
-                constexpr int jpll_term[12] = { 1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7 };
-                return jpll_term[face];
-            } else if constexpr (branchless) {
-                // NOTE(cmo): in the real-world case, this profiles ~1% faster
-                i32 i = face & 7;
-                i32 ge4 = (i & 4) >> 2;
-                return ge4 * 2 * (i & 3) + (1 - ge4) * (2 * i + 1);
-            } else {
-                if (face >= 8) {
-                    face -= 8;
-                }
-
-                if (face < 4) {
-                    return 2 * face + 1;
-                }
-                return (face - 4) * 2;
-            }
-        };
-        if (m < FP(1.0)) {
-            // polar cap
-            const fp_t m23 = square(m) * (FP(1.0) / FP(3.0));
-            z = r * (FP(1.0) - m23);
-            s = std::sqrt(m23 * (FP(2.0) - m23));
-            phi = (FP(0.25) * Const::pi) * (jpll(face) + (x - y) / m);
-        } else {
-            // equatorial cylinder
-            z = h * (FP(2.0) / FP(3.0));
-            s = std::sqrt((FP(1.0) + z) * (FP(1.0) - z));
-            phi = (FP(0.25) * Const::pi) * (jpll(face) + (x - y));
-        }
+        const HealpixLoc<fp_t> loc = healpix_nest_loc<fp_t, f32>(nside, phi_idx);
+        const fp_t z = loc.z;
+        const fp_t s = loc.s;
+        const fp_t phi = loc.phi;
         // loc2vec
         // NOTE(cmo): On upper cascades the base healpix quadrature seems to hit
         // pathological ray traversal slowdowns. Rotating the azimuthal angle by

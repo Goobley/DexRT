@@ -15,12 +15,14 @@
 #include "DynamicFormalSolution.hpp"
 #include "ChargeConservation.hpp"
 #include "PressureConservation.hpp"
+#include "EnergyConservation.hpp"
 #include "ProfileNormalisation.hpp"
 #include "PromweaverBoundary.hpp"
 #include "DexrtConfig.hpp"
 #include "BlockMap.hpp"
 #include "MiscSparse.hpp"
 #include "YAKL_netcdf.h"
+#include "Rad16Output.hpp"
 #include <vector>
 #include <string>
 #include <optional>
@@ -30,193 +32,12 @@
 #include "GitVersion.hpp"
 #include "WavelengthParallelisation.hpp"
 #include "InitialPops.hpp"
+#include "StateSetup.hpp"
 
 #include <random>
 
 int get_dexrt_dimensionality() {
     return 2;
-}
-
-void allocate_J(State* state) {
-    JasUnpack((*state), config, mr_block_map, c0_size, adata);
-    const auto& block_map = mr_block_map.block_map;
-    const bool sparse = config.sparse_calculation;
-    i64 num_cells = mr_block_map.block_map.get_num_active_cells();
-    i32 wave_dim = adata.wavelength.extent(0);
-    if (config.mode == DexrtMode::GivenFs) {
-        wave_dim = state->given_state.emis.extent(2);
-    }
-
-    if (!sparse) {
-        num_cells = i64(block_map.num_x_tiles()) * block_map.num_z_tiles() * square(BLOCK_SIZE);
-    }
-
-    if (config.store_J_on_cpu) {
-        state->J = Fp2d("J", yakl::DimsT<i64>(c0_size.wave_batch, num_cells));
-        state->J_cpu = Fp2dHost("JHost", yakl::DimsT<i64>(wave_dim, num_cells));
-    } else {
-        state->J = Fp2d("J", yakl::DimsT<i64>(wave_dim, num_cells));
-    }
-    state->J = FP(0.0);
-    // TODO(cmo): If we have scattering terms and are updating J, the old
-    // contents should probably be moved first, but we don't have these terms yet.
-}
-
-CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
-    if (!(config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte)) {
-        return CascadeRays{};
-    }
-
-    State& state = *st;
-
-    std::vector<ModelAtom<f64>> crtaf_models;
-    crtaf_models.reserve(config.atom_paths.size());
-    for (int i = 0; i < config.atom_paths.size(); ++i) {
-        const auto& p = config.atom_paths[i];
-        const auto& model_config = config.atom_configs[i];
-        crtaf_models.emplace_back(parse_crtaf_model<f64>(p, model_config));
-    }
-    AtomicDataHostDevice<fp_t> atomic_data = to_atomic_data<fp_t, f64>(crtaf_models);
-    state.adata = atomic_data.device;
-    state.adata_host = atomic_data.host;
-    state.have_h = atomic_data.have_h_model;
-    state.atoms = extract_atoms(atomic_data.device, atomic_data.host);
-    GammaAtomsAndMapping gamma_atoms = extract_atoms_with_gamma_and_mapping(atomic_data.device, atomic_data.host);
-    state.atoms_with_gamma = gamma_atoms.atoms;
-    state.atoms_with_gamma_mapping = gamma_atoms.mapping;
-
-    i32 max_mip_level = 0;
-    for (int i = 0; i <= config.max_cascade; ++i) {
-        max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
-    }
-    if (state.config.mode != DexrtMode::GivenFs && LINE_SCHEME == LineCoeffCalc::Classic) {
-        max_mip_level = 0;
-        state.println("Mips not supported with LineCoeffCalc::Classic");
-    }
-    state.atmos = state.mr_block_map.init_and_sparsify_atmos(config.atmos_path, config.threshold_temperature, max_mip_level);
-
-    state.phi = VoigtProfile<fp_t>(
-        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
-        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
-    );
-    state.nh_lte = HPartFn();
-    state.println("Scale: {} m", state.atmos.voxel_scale);
-
-    i64 num_active_cells = state.mr_block_map.get_num_active_cells();
-
-    const int n_level_total = state.adata.energy.extent(0);
-    state.pops = Fp2d("pops", n_level_total, num_active_cells);
-
-    if (config.mode == DexrtMode::NonLte) {
-        for (int ia = 0; ia < state.adata_host.num_level.extent(0); ++ia) {
-            const int n_level = state.adata_host.num_level(ia);
-            state.Gamma.emplace_back(
-                decltype(state.Gamma)::value_type("Gamma", n_level, n_level, num_active_cells)
-            );
-        }
-        state.wphi = Fp2d("wphi", state.adata.lines.extent(0), num_active_cells);
-    }
-
-    // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
-    state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary, PromweaverResampleType::FluxConserving);
-    state.boundary = config.boundary;
-
-    // NOTE(cmo): This doesn't actually know that things will be allocated sparse
-    CascadeRays c0_rays;
-    c0_rays.num_probes(0) = state.atmos.num_x;
-    c0_rays.num_probes(1) = state.atmos.num_z;
-    c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
-    c0_rays.num_incl = NUM_INCL;
-    c0_rays.wave_batch = WAVE_BATCH;
-
-    const auto& block_map = state.mr_block_map.block_map;
-    state.max_block_mip = decltype(state.max_block_mip)(
-        "max_block_mip",
-        (state.adata.wavelength.extent(0) + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
-        block_map.num_z_tiles(),
-        block_map.num_x_tiles()
-    );
-    return c0_rays;
-}
-
-CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
-    if (config.mode != DexrtMode::GivenFs) {
-        return CascadeRays{};
-    }
-    yakl::SimpleNetCDF nc;
-    nc.open(config.atmos_path, yakl::NETCDF_MODE_READ);
-    int x_dim = nc.getDimSize("x");
-    int z_dim = nc.getDimSize("z");
-    int wave_dim = nc.getDimSize("wavelength");
-
-    typedef yakl::Array<f32, 3, yakl::memHost> Fp3dLoad;
-
-    Fp3dLoad eta("eta", z_dim, x_dim, wave_dim);
-    Fp3dLoad chi("chi", z_dim, x_dim, wave_dim);
-    nc.read(eta, "eta");
-    nc.read(chi, "chi");
-
-    f32 voxel_scale = FP(1.0);
-    if (nc.varExists("voxel_scale")) {
-        nc.read(voxel_scale, "voxel_scale");
-    }
-    st->atmos.voxel_scale = voxel_scale;
-    st->given_state.voxel_scale = voxel_scale;
-    st->println("Scale: {} m", st->atmos.voxel_scale);
-    BlockMap<BLOCK_SIZE> block_map;
-    block_map.init(Dims<2>{.x = x_dim, .z = z_dim});
-    i32 max_mip_level = 0;
-    for (int i = 0; i <= config.max_cascade; ++i) {
-        max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
-    }
-    // NOTE(cmo): Everything is assumed active
-    st->mr_block_map.init(block_map, max_mip_level);
-
-#ifdef DEXRT_SINGLE_PREC
-    st->given_state.emis = eta.createDeviceCopy();
-    st->given_state.opac = chi.createDeviceCopy();
-#else
-    auto etad = eta.createDeviceCopy();
-    auto chid = chi.createDeviceCopy();
-    Fp3d emis("eta", z_dim, x_dim, wave_dim);
-    Fp3d opac("chi", z_dim, x_dim, wave_dim);
-    yakl::fence();
-    dex_parallel_for(
-        "Convert f32->f64",
-        FlatLoop<3>(z_dim, x_dim, wave_dim),
-        YAKL_LAMBDA (int z, int x, int la) {
-            emis(z, x, la) = etad(z, x, la);
-        }
-    );
-    dex_parallel_for(
-        "Convert f32->f64",
-        FlatLoop<3>(z_dim, x_dim, wave_dim),
-        YAKL_LAMBDA (int z, int x, int la) {
-            opac(z, x, la) = chid(z, x, la);
-        }
-    );
-    yakl::fence();
-    st->given_state.emis = emis;
-    st->given_state.opac = opac;
-#endif
-
-    // NOTE(cmo): Only zero boundaries are supported here.
-    st->boundary = BoundaryType::Zero;
-    CascadeRays c0_rays;
-    c0_rays.num_probes(0) = x_dim;
-    c0_rays.num_probes(1) = z_dim;
-    c0_rays.num_flat_dirs = PROBE0_NUM_RAYS;
-    c0_rays.num_incl = NUM_INCL;
-    c0_rays.wave_batch = WAVE_BATCH;
-
-    st->max_block_mip = decltype(st->max_block_mip)(
-        "max_block_mip",
-        (wave_dim + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
-        block_map.num_z_tiles(),
-        block_map.num_x_tiles()
-    );
-    yakl::fence();
-    return c0_rays;
 }
 
 void init_cascade_sized_arrays(State* state, const DexrtConfig& config) {
@@ -237,6 +58,7 @@ void init_state (State* state, const DexrtConfig& config) {
     state->c0_size = cascade_rays_to_storage<RcMode>(c0_rays);
 
     allocate_J(state);
+    allocate_rad_loss(state);
     init_cascade_sized_arrays(state, config);
 
     Fp1dHost muy("muy", NUM_INCL);
@@ -247,180 +69,19 @@ void init_state (State* state, const DexrtConfig& config) {
     }
     state->incl_quad.muy = muy.createDeviceCopy();
     state->incl_quad.wmuy = wmuy.createDeviceCopy();
-
-#ifdef DEXRT_USE_MAGMA
-    magma_init();
-    magma_queue_create(0, &state->magma_queue);
-#endif
-}
-
-void finalize_state(State* state) {
-#ifdef DEXRT_USE_MAGMA
-    magma_queue_destroy(state->magma_queue);
-    magma_finalize();
-#endif
-}
-
-/// Loads the populations, ne, and nh_tot from restart_path. Returns the current
-/// iteration number.  Will crash/throw exception if file can't be found or
-/// dimensions are wrong etc.
-int handle_restart(State* st, const std::string& restart_path) {
-    State& state(*st);
-    yakl::SimpleNetCDF nc;
-    nc.open(restart_path, yakl::NETCDF_MODE_READ);
-
-    i64 num_active = nc.getDimSize("ks");
-    i64 num_level = nc.getDimSize("level");
-    if (num_active != state.atmos.temperature.extent(0)) {
-        throw std::runtime_error("Restart atmosphere size does not match loaded size, have you changed a parameter (e.g. threshold_temperature)?");
-    }
-    if (num_level != state.pops.extent(0)) {
-        throw std::runtime_error("Restart number of levels does not match size set in config. Have the models changed?");
-    }
-
-    nc.read(state.pops, "pops");
-    if (nc.varExists("ne")) {
-        nc.read(state.atmos.ne, "ne");
-    }
-    if (nc.varExists("nh_tot")) {
-        nc.read(state.atmos.nh_tot, "nh_tot");
-    }
-
-    int ncid = nc.file.ncid;
-    int num_iter = 0;
-    int ierr = nc_get_att_int(ncid, NC_GLOBAL, "num_iter", &num_iter);
-    if (ierr != NC_NOERR) {
-        throw std::runtime_error(fmt::format("Unable to get num_iter from restart file: {}", nc_strerror(ierr)));
-    }
-
-    return num_iter;
-}
-
-/// Dump a snapshot. File name determined automatically (e.g. main output
-/// dexrt_output.nc -> dexrt_output_snapshot.nc)
-void save_snapshot(const State& state, int num_iter) {
-    if (state.mpi_state.rank != 0) {
-        return;
-    }
-
-    yakl::SimpleNetCDF nc;
-    std::string name(state.config.output_path);
-    std::string ext(".nc");
-    std::string new_ext("_snapshot.nc");
-    auto nc_pos = name.rfind(ext);
-    if (nc_pos == std::string::npos) {
-        // NOTE(cmo): Didn't find it, so just append
-        name += new_ext;
-    } else {
-        name.replace(nc_pos, ext.size(), new_ext);
-    }
-
-    nc.create(name, yakl::NETCDF_MODE_REPLACE);
-    state.println("Saving snapshot to {}...", name);
-
-    int ncid = nc.file.ncid;
-    int ierr = nc_put_att_int(ncid, NC_GLOBAL, "num_iter", NC_INT, 1, &num_iter);
-    if (ierr != NC_NOERR) {
-        throw std::runtime_error(fmt::format("Unable to write num_iter to snapshot file: {}", nc_strerror(ierr)));
-    }
-
-    nc.write(state.pops, "pops", {"level", "ks"});
-    if (state.config.conserve_charge) {
-        nc.write(state.atmos.ne, "ne", {"ks"});
-    }
-    if (state.config.conserve_pressure) {
-        nc.write(state.atmos.nh_tot, "nh_tot", {"ks"});
-    }
-}
-
-/// Load populations from the specified path (variable name "pops"). Will be
-/// assumed to be sparse if the ks dimension exists (e.g. from a previous run),
-/// or dense otherwise.
-void load_initial_pops(State* st, const std::string& initial_pops_path) {
-    State& state(*st);
-    yakl::SimpleNetCDF nc;
-    nc.open(initial_pops_path, yakl::NETCDF_MODE_READ);
-
-    bool load_sparse = nc.dimExists("ks");
-    state.println(
-        "Loading populations from {}, appear to be {}.",
-        initial_pops_path,
-        load_sparse ? "sparse" : "dense"
-    );
-
-    i64 num_level = nc.getDimSize("level");
-    if (num_level != state.pops.extent(0)) {
-        throw std::runtime_error("Restart number of levels does not match size set in config. Have the models changed?");
-    }
-
-    if (load_sparse) {
-        i64 num_active = nc.getDimSize("ks");
-        if (num_active != state.pops.extent(1)) {
-            throw std::runtime_error("Initial pops spatial dimension (ks) does not match loaded size, have you changed a parameter (e.g. threshold_temperature)?");
-        }
-        nc.read(state.pops, "pops");
-    } else {
-        i64 nx = nc.getDimSize("x");
-        i64 nz = nc.getDimSize("z");
-
-        if (nx != state.atmos.num_x || nz != state.atmos.num_z) {
-            throw std::runtime_error(
-                fmt::format(
-                    "Initial pops file dimensions [x: {}, z: {}] do not match atmos: [{}, {}]",
-                    nx,
-                    nz,
-                    state.atmos.num_x,
-                    state.atmos.num_z
-                )
-            );
-        }
-        Fp3d temp_pops("temp_pops", num_level, nz, nx);
-        nc.read(temp_pops, "pops");
-
-        JasUnpack(state, mr_block_map, pops);
-        auto bounds = mr_block_map.block_map.loop_bounds();
-        dex_parallel_for(
-            "Sparsify new pops",
-            FlatLoop<3>(
-                num_level,
-                bounds.dim(0),
-                bounds.dim(1)
-            ),
-            YAKL_LAMBDA (i32 level, i64 tile_idx, i32 block_idx) {
-                IdxGen idx_gen(mr_block_map);
-
-                i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
-                Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
-                pops(level, ks) = temp_pops(level, coord.z, coord.x);
-            }
-        );
-        yakl::fence();
-    }
-}
-
-/// Called to copy J from GPU to plane of host array if config.store_J_on_cpu
-void copy_J_plane_to_host(const State& state, int la_start, int la_end) {
-    int wave_batch = la_end - la_start;
-    const Fp2dHost J_copy = state.J.createHostCopy();
-    // TODO(cmo): Replace with a memcpy?
-    for (int wave = 0; wave < wave_batch; ++wave) {
-        for (i64 ks = 0; ks < J_copy.extent(1); ++ks) {
-            state.J_cpu(la_start + wave, ks) = J_copy(wave, ks);
-        }
-    }
 }
 
 void setup_wavelength_batch(const State& state, int la_start, int la_end) {
-    if (state.config.store_J_on_cpu) {
-        state.J = FP(0.0);
-        yakl::fence();
+    state.J = FP(0.0);
+    if (state.rad_loss.initialized()) {
+        state.rad_loss = FP(0.0);
     }
+    yakl::fence();
 }
 
 void finalise_wavelength_batch(const State& state, int la_start, int la_end) {
-    if (state.config.store_J_on_cpu) {
-        copy_J_plane_to_host(state, la_start, la_end);
-    }
+    copy_J_plane_to_host(state, la_start, la_end);
+    finalise_rad_loss_batch(state, la_start, la_end);
 
     const i32 wave_batch_idx = la_start / state.c0_size.wave_batch;
     JasUnpack(state, max_block_mip, mr_block_map);
@@ -740,7 +401,7 @@ void add_netcdf_attributes(const State& state, const yakl::SimpleNetCDF& file, i
     );
 }
 
-void save_results(const State& state, const CascadeState& casc_state, i32 num_iter) {
+void save_results(State& state, const CascadeState& casc_state, i32 num_iter) {
     const auto& config = state.config;
     const auto& out_cfg = config.output;
     if (state.mpi_state.rank != 0) {
@@ -753,7 +414,7 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     add_netcdf_attributes(state, nc, num_iter);
     const auto& block_map = state.mr_block_map.block_map;
 
-    bool sparse_J = state.config.sparse_calculation && (state.J.extent(1) == state.atmos.temperature.extent(0));
+    bool sparse_J = state.config.sparse_calculation && (state.J_cpu.extent(1) == state.atmos.temperature.extent(0));
 
     auto maybe_rehydrate_and_write = [&](
         auto arr,
@@ -772,26 +433,29 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     };
 
     if (out_cfg.J) {
-        if (config.store_J_on_cpu) {
-            if (sparse_J) {
-                maybe_rehydrate_and_write(state.J_cpu, "J", {"wavelength"});
-            } else {
-                Fp3dHost J_full = state.J_cpu.reshape(state.J_cpu.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
-                nc.write(J_full, "J", {"wavelength", "z", "x"});
-            }
+        if (sparse_J && out_cfg.sparse) {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "ks"}, [](const Fp2dHost& planes) {
+                return planes;
+            });
+        } else if (sparse_J) {
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "x"}, [&](const Fp2dHost& planes) {
+                return rehydrate_sparse_quantity(block_map, planes);
+            });
         } else {
-            if (sparse_J) {
-                maybe_rehydrate_and_write(state.J, "J", {"wavelength"});
-            } else {
-                Fp3d J_full = state.J.reshape(state.J.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
-                nc.write(J_full, "J", {"wavelength", "z", "x"});
-            }
+            write_rad16_chunked(nc, state.J_cpu, "J", {"wavelength", "z", "x"}, [&](const Fp2dHost& planes) {
+                return planes.reshape(planes.extent(0), block_map.num_z_tiles() * BLOCK_SIZE, block_map.num_x_tiles() * BLOCK_SIZE);
+            });
         }
         nc.write(state.max_block_mip, "max_mip_block", {"wavelength_batch", "tile_z", "tile_x"});
+    }
+    if (out_cfg.rad_loss) {
+        std::string leading_dim = config.rad_loss == RadLossType::Integrated ? "wavelength_integrated" : "wavelength";
+        maybe_rehydrate_and_write(state.rad_loss_cpu, "rad_loss", {leading_dim});
     }
 
     if (out_cfg.wavelength && state.adata.wavelength.initialized()) {
         nc.write(state.adata.wavelength, "wavelength", {"wavelength"});
+        nc.write(state.adata_host.wavelength_bin, "wavelength_bin", {"wavelength"});
     }
     if (out_cfg.pops && state.pops.initialized()) {
         maybe_rehydrate_and_write(state.pops, "pops", {"level"});
@@ -802,14 +466,18 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
         yakl::fence();
         maybe_rehydrate_and_write(lte_pops, "lte_pops", {"level"});
     }
+    if (out_cfg.temperature&& state.atmos.temperature.initialized()) {
+        maybe_rehydrate_and_write(state.atmos.temperature, "temperature", {});
+    }
     if (out_cfg.ne && state.atmos.ne.initialized()) {
         maybe_rehydrate_and_write(state.atmos.ne, "ne", {});
     }
     if (out_cfg.nh_tot && state.atmos.nh_tot.initialized()) {
         maybe_rehydrate_and_write(state.atmos.nh_tot, "nh_tot", {});
     }
-    if (out_cfg.psi_star && casc_state.psi_star.initialized()) {
-        nc.write(casc_state.psi_star, "psi_star", {"casc_shape"});
+    if (out_cfg.psi_star && casc_state.I_ext.initialized()) {
+        nc.write(casc_state.I_ext, "I_ext", {"casc_shape"});
+        nc.write(casc_state.one_minus_alo, "one_minus_alo", {"casc_shape"});
     }
     if (out_cfg.active) {
         // NOTE(cmo): Currently active is always written dense
@@ -829,6 +497,22 @@ void save_results(const State& state, const CascadeState& casc_state, i32 num_it
     if (out_cfg.sparse) {
         nc.write(block_map.active_tiles, "morton_tiles", {"num_active_tiles"});
     }
+
+    CollisionalRatesOutput collisional_store;
+    const CollisionalRatesOutput* collisional = nullptr;
+    if (out_cfg.collisional_rates) {
+        collisional_store = compute_collisional_rates_output(state);
+        collisional = &collisional_store;
+    }
+    write_rate_diagnostics(
+        state,
+        nc,
+        RateDiagOutputOpts{
+            .sparse = out_cfg.sparse
+        },
+        collisional
+    );
+
     nc.close();
 }
 
@@ -846,13 +530,13 @@ int main(int argc, char** argv) {
         .metavar("FILE");
     program.add_epilog("DexRT Radiance Cascade based non-LTE solver (2d).");
 
-    program.parse_args(argc, argv);
+    program.parse_known_args(argc, argv);
 
     std::optional<std::string> restart_path = program.present("--restart-from");
 
     const DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
 
-    Kokkos::initialize();
+    Kokkos::initialize(argc, argv);
     yakl::init(
         yakl::InitConfig()
             .set_pool_size_mb(config.mem_pool_gb * 1024)
@@ -863,6 +547,11 @@ int main(int argc, char** argv) {
         // NOTE(cmo): Allocate the arrays in state, and fill emission/opacity if
         // not using an atmosphere
         init_state(&state, config);
+        state.println(
+            "Precision: {}, radiation storage: {}",
+            sizeof(fp_t) == 8 ? "f64" : "f32",
+            HALF_RADIATION_STORAGE ? "16-bit" : "fp_t"
+        );
         CascadeState casc_state;
         casc_state.init(state, config.max_cascade);
         yakl::timer_start("DexRT");
@@ -889,6 +578,7 @@ int main(int argc, char** argv) {
                 finalise_wavelength_batch(state, la_start, la_end);
             }
 
+            copy_rad_loss_to_host(state);
             yakl::timer_stop("DexRT");
             save_results(state, casc_state, 1);
         } else {
@@ -898,16 +588,25 @@ int main(int argc, char** argv) {
             }
             const bool non_lte = config.mode == DexrtMode::NonLte;
             const bool do_restart = bool(restart_path);
+            // NOTE(cmo): If the pops came from a file they're not LTE, so
+            // neither the LTE n_e/pressure loop (which drives them back to LTE
+            // through stat_eq) nor the special initial pops schemes should run.
+            const bool pops_provided = do_restart || (config.initial_pops_path.size() > 0);
             const bool conserve_charge = config.conserve_charge;
             const bool actually_conserve_charge = state.have_h && conserve_charge;
             if (!actually_conserve_charge && conserve_charge) {
                 throw std::runtime_error("Charge conservation enabled without a model H!");
             }
             const bool conserve_pressure = config.conserve_pressure;
-            if (conserve_pressure && !conserve_charge) {
-                throw std::runtime_error("Cannot enable pressure conservation without charge conservation.");
+            const bool conserve_energy = config.conserve_energy;
+            if (
+                (conserve_pressure && !conserve_charge)
+                || (conserve_energy && !conserve_charge)
+            ) {
+                throw std::runtime_error("Cannot enable pressure or energy conservation without charge conservation.");
             }
             const bool actually_conserve_pressure = actually_conserve_charge && conserve_pressure;
+            const bool actually_conserve_energy = actually_conserve_charge && conserve_energy;
             const int initial_lambda_iterations = config.initial_lambda_iterations;
             const int max_iters = config.max_iter;
 
@@ -921,15 +620,16 @@ int main(int argc, char** argv) {
 
             if (non_lte) {
                 int i = 0;
-                if (actually_conserve_charge && !do_restart) {
+                if (actually_conserve_charge && !pops_provided) {
                     // TODO(cmo): Make all of these parameters configurable
+                    // For now, let's also ignore energy conservation outside of
+                    // the main loop, and see how it does.
                     state.println("-- Iterating LTE n_e/pressure --");
                     fp_t lte_max_change = FP(1.0);
                     int lte_i = 0;
                     while ((lte_max_change > FP(1e-5) || lte_i < 6) && lte_i < max_iters) {
                         lte_i += 1;
                         compute_nh0(state);
-                        compute_collisions_to_gamma(&state);
                         lte_max_change = stat_eq(&state, StatEqOptions{
                             .ignore_change_below_ntot_frac=FP(1e-7)
                         });
@@ -954,7 +654,7 @@ int main(int argc, char** argv) {
                     state.println("Ran for {} iterations", lte_i);
                 }
 
-                if (!do_restart) {
+                if (!pops_provided) {
                     set_initial_pops_special(&state);
                 }
 
@@ -981,21 +681,14 @@ int main(int argc, char** argv) {
                     state.println("==== FS {} ====", i);
                     compute_nh0(state);
 
-                    if (state.mpi_state.rank == 0) {
-                        compute_collisions_to_gamma(&state);
-                    } else {
-                        for (int ia = 0; ia < state.Gamma.size(); ++ia) {
-                            state.Gamma[ia] = FP(0.0);
-                        }
-                        yakl::fence();
-                    }
+                    zero_precon_R(state.precon_R);
+                    state.rate_diag.zero();
 
                     bool print_worst_wphi = first_iter;
                     compute_profile_normalisation(state, casc_state, print_worst_wphi);
                     state.J = FP(0.0);
-                    if (config.store_J_on_cpu) {
-                        state.J_cpu = FP(0.0);
-                    }
+                    state.J_cpu.fill(FP(0.0));
+                    zero_rad_loss(state);
                     yakl::fence();
                     WavelengthBatch wave_batch;
                     wave_dist.wait_for_all(state.mpi_state);
@@ -1006,9 +699,12 @@ int main(int argc, char** argv) {
                         dynamic_formal_sol_rc(
                             state,
                             casc_state,
-                            lambda_iterate,
-                            wave_batch.la_start,
-                            wave_batch.la_end
+                            DynamicFormalSolRcOptions {
+                                .la_start = wave_batch.la_start,
+                                .la_end = wave_batch.la_end,
+                                .lambda_iterate = lambda_iterate,
+                                .compute_rad_loss = config.rad_loss != RadLossType::None
+                            }
                         );
                         finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                     }
@@ -1016,7 +712,7 @@ int main(int argc, char** argv) {
                     wave_dist.wait_for_all(state.mpi_state);
 
                     state.println("  == Statistical equilibrium ==");
-                    wave_dist.reduce_Gamma(&state);
+                    wave_dist.reduce_precon_R(&state);
                     max_change = stat_eq(
                         &state,
                         StatEqOptions{
@@ -1037,9 +733,15 @@ int main(int argc, char** argv) {
                             fp_t nh_tot_update = simple_conserve_pressure(&state);
                             max_change = std::max(nh_tot_update, max_change);
                         }
+                        if (actually_conserve_energy) {
+                            fp_t temp_update = simple_conserve_energy(&state);
+                            max_change = std::max(temp_update, max_change);
+                            wave_dist.update_temperature(&state);
+                        }
                         if (actually_conserve_pressure) {
                             wave_dist.update_nh_tot(&state);
                         }
+
                     }
                     if (config.ng.enable) {
                         accelerated = ng.accelerate(state, max_change);
@@ -1064,10 +766,12 @@ int main(int argc, char** argv) {
 
                     state.println("Final FS (dense)");
                     compute_nh0(state);
+                    // NOTE(claude): Unlike Gamma (which is not read again), the
+                    // diagnostics are written out, so must be zeroed.
+                    state.rate_diag.zero();
                     state.J = FP(0.0);
-                    if (config.store_J_on_cpu) {
-                        state.J_cpu = FP(0.0);
-                    }
+                    state.J_cpu.fill(FP(0.0));
+                    zero_rad_loss(state);
                     yakl::fence();
                     wave_dist.reset();
                     WavelengthBatch wave_batch;
@@ -1077,9 +781,12 @@ int main(int argc, char** argv) {
                         dynamic_formal_sol_rc(
                             state,
                             casc_state,
-                            lambda_iterate,
-                            wave_batch.la_start,
-                            wave_batch.la_end
+                            DynamicFormalSolRcOptions {
+                                .la_start = wave_batch.la_start,
+                                .la_end = wave_batch.la_end,
+                                .lambda_iterate = lambda_iterate,
+                                .compute_rad_loss = config.rad_loss != RadLossType::None
+                            }
                         );
                         finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                     }
@@ -1091,9 +798,8 @@ int main(int argc, char** argv) {
             } else {
                 state.J = FP(0.0);
                 compute_nh0(state);
-                if (config.store_J_on_cpu) {
-                    state.J_cpu = FP(0.0);
-                }
+                state.J_cpu.fill(FP(0.0));
+                zero_rad_loss(state);
                 yakl::fence();
                 wave_dist.reset();
                 WavelengthBatch wave_batch;
@@ -1107,16 +813,27 @@ int main(int argc, char** argv) {
                         waves(wave_batch.la_end-1)
                     );
                     bool lambda_iterate = true;
-                    dynamic_formal_sol_rc(state, casc_state, lambda_iterate, wave_batch.la_start, wave_batch.la_end);
+                    dynamic_formal_sol_rc(
+                        state,
+                        casc_state,
+                        DynamicFormalSolRcOptions {
+                            .la_start = wave_batch.la_start,
+                            .la_end = wave_batch.la_end,
+                            .lambda_iterate = lambda_iterate,
+                            .compute_rad_loss = config.rad_loss != RadLossType::None
+                        }
+                    );
                     finalise_wavelength_batch(state, wave_batch.la_start, wave_batch.la_end);
                 }
                 wave_dist.wait_for_all(state.mpi_state);
             }
             wave_dist.reduce_J(&state);
+            copy_rad_loss_to_host(state);
+            wave_dist.reduce_rad_loss(&state);
+            wave_dist.reduce_rate_diagnostics(&state);
             yakl::timer_stop("DexRT");
             save_results(state, casc_state, num_iter);
         }
-        finalize_state(&state);
     }
     yakl::finalize();
     finalise_mpi();

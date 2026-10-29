@@ -10,21 +10,13 @@ template <typename State>
 inline fp_t simple_conserve_pressure(State* state) {
     fp_t max_change;
 #ifdef HAVE_MPI
-    if (state->mpi_state.rank == 0) {
+    if (state->mpi_state.rank == 0 || state->mpi_state.distributed) {
 #endif
         yakl::timer_start("Pressure conservation");
         assert(state->have_h && "Requires H model to be present");
         using namespace ConstantsFP;
 
-        fp_t total_abund = FP(0.0);
-        if constexpr (false) {
-            for (int ia = 0; ia < state->adata_host.num_level.extent(0); ++ia) {
-                total_abund += state->adata_host.abundance(ia);
-            }
-        } else {
-            // NOTE(cmo): From Asplund 2009/Lw calc
-            total_abund = FP(1.0861550335264554);
-        }
+        const fp_t total_abund = state->config.total_abund;
         const auto h_pops = slice_pops(state->pops, state->adata_host, 0);
 
         auto flatmos = flatten<fp_t>(state->atmos);
@@ -98,7 +90,9 @@ inline fp_t simple_conserve_pressure(State* state) {
         yakl::timer_stop("Pressure conservation");
 #ifdef HAVE_MPI
     }
-    MPI_Bcast(&max_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    if (!state->mpi_state.distributed) {
+        MPI_Bcast(&max_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    }
 #endif
     return max_change;
 }

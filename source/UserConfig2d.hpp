@@ -8,7 +8,10 @@
 // So far everything works in single precision, other than where overridden (i.e.
 // StatEq), but you can adjust here, especially if you're lucky enough to have a
 // GPU with good f64 throughput.
+// Set DEX_FORCE_DOUBLE_PREC in CMake to force f64 build.
+#if !defined(DEXRT_FORCE_DOUBLE_PREC)
 #define DEXRT_SINGLE_PREC
+#endif
 #ifdef DEXRT_SINGLE_PREC
 typedef float fp_t;
 #define FP(X) (X##f)
@@ -41,9 +44,15 @@ typedef uint64_t u64;
 // good idea what you're doing!
 typedef f64 StatEqPrecision;
 
-// Set the precision used in the accumulation of the Gamma matrix. Single
-// precision is usually fine.
+// Set the precision used in the accumulation of the Gamma matrix (the
+// per-transition precon_R; Gamma itself is assembled in StatEqPrecision).
+// Single precision is usually fine.
 typedef fp_t GammaFp;
+// typedef f64 GammaFp;
+
+// Set the precision used in the accumulation of the radiative losses
+typedef fp_t RadLossFp;
+// typedef f64 RadLossFp;
 
 /*== 2D Config ===============================================================*/
 // To consider a flatland setup (no inclination rays), uncomment the #define
@@ -97,9 +106,9 @@ constexpr int ENTRY_SIZE = 3;
 /*== Ray-Marching & Cascades =================================================*/
 
 // The raymarch length on cascade 0
-constexpr fp_t PROBE0_LENGTH = FP(1.5);
+constexpr fp_t PROBE0_LENGTH = FP(3.0);
 // The number of rays to trace on cascade 0
-constexpr int PROBE0_NUM_RAYS = 4;
+constexpr int PROBE0_NUM_RAYS = 8;
 
 // The angular branching and interval length factor to use for each cascade
 // (i.e. num_rays_i = PROBE0_NUM_RAYS * 2^(CASCADE_BRANCHING_FACTOR * i))
@@ -210,6 +219,10 @@ constexpr fp_t INTERPOLATE_DIRECTIONAL_MAX_THERMAL_WIDTH = FP(2.0);
 // CoreAndVoigt. Code will throw an error if this is too small, but there are
 // performance benefits for keeping it smaller.
 constexpr int CORE_AND_VOIGT_MAX_LINES = 4;
+
+// The maximum number of active atoms the Gamma accumulation supports. Code will
+// throw an error if this is too small.
+constexpr int GAMMA_MAX_ATOMS = 8;
 
 // Whether to conserve pressure in the charge conservation Newton-Raphson, or in
 // the separate secondary iteration.

@@ -26,8 +26,9 @@ template <
     int RcMode=0,
     typename Bc,
     typename DynamicState,
-    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
-YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>,
+    typename Loss=std::conditional_t<bool(RcMode & RC_COMPUTE_LOSS), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo, Loss> march_and_merge_average_interval(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeRays& rays,
     const ProbeIndex& this_probe,
@@ -35,31 +36,36 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
     const RaymarchParams<DynamicState>& params
 ) {
     ray = invert_direction(ray);
-    RadianceInterval<Alo> ri;
-    ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
-        Raymarch2dArgs<Bc, DynamicState>{
-            .casc_state_bc = casc_state,
-            .ray = ray,
-            .distance_scale = params.distance_scale,
-            .mu = params.mu,
-            .incl = params.incl,
-            .incl_weight = params.incl_weight,
-            .wave = this_probe.wave,
-            .la = params.la,
-            .offset = params.offset,
-            .max_mip_to_sample = params.max_mip_to_sample,
-            .block_map = params.block_map,
-            .mr_block_map = params.mr_block_map,
-            .mip_chain = params.mip_chain,
-            .dyn_state = params.dyn_state
-        }
-    );
+    // NOTE(cmo): The upper cascade is interpolated first and used as the start
+    // of the march, replacing the merge (this also gives the losses the correct
+    // face intensity)
+    auto march = [&](fp_t I_start) {
+        return multi_level_dda_raymarch_2d<RcMode, Bc>(
+            Raymarch2dArgs<Bc, DynamicState>{
+                .casc_state_bc = casc_state,
+                .ray = ray,
+                .distance_scale = params.distance_scale,
+                .mu = params.mu,
+                .incl = params.incl,
+                .incl_weight = params.incl_weight,
+                .wave = this_probe.wave,
+                .la = params.la,
+                .offset = params.offset,
+                .max_mip_to_sample = params.max_mip_to_sample,
+                .block_map = params.block_map,
+                .mr_block_map = params.mr_block_map,
+                .mip_chain = params.mip_chain,
+                .dyn_state = params.dyn_state,
+                .I_start = I_start
+            }
+        );
+    };
 
     const int num_rays_per_ray = upper_texels_per_ray<RcMode>(casc_state.state.n);
     const int upper_ray_start_idx = upper_ray_idx(this_probe.dir, casc_state.state.n);
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
-    RadianceInterval<Alo> interp{};
+    RadianceInterval<Alo, Loss> interp{};
     if (casc_state.state.upper_I.initialized()) {
         BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
@@ -85,15 +91,22 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_average_interval(
             }
         }
     }
-    return merge_intervals(ri, interp);
+    RadianceInterval<Alo, Loss> ri = march(interp.I);
+    // NOTE(cmo): Nothing needs to be merged as the interpolated I was fed in,
+    // _unless_ we're storing tau, in which case add it.
+    if constexpr (STORE_TAU_CASCADES) {
+        ri.tau += interp.tau;
+    }
+    return ri;
 }
 
 template <
     int RcMode=0,
     typename Bc,
     typename DynamicState,
-    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
-YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>,
+    typename Loss=std::conditional_t<bool(RcMode & RC_COMPUTE_LOSS), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo, Loss> march_and_merge_bilinear_fix(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeRays& rays,
     const ProbeIndex& this_probe,
@@ -106,7 +119,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
     const int upper_ray_start_idx = upper_ray_idx(this_probe.dir, casc_state.state.n);
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
-    RadianceInterval<Alo> interp{};
+    RadianceInterval<Alo, Loss> interp{};
     if (casc_state.state.upper_I.initialized()) {
         BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
@@ -131,25 +144,7 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
             const fp_t dir_len = std::sqrt(square(ray.dir(0)) + square(ray.dir(1)));
             ray.dir(0) /= dir_len;
             ray.dir(1) /= dir_len;
-            RadianceInterval<Alo> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
-                Raymarch2dArgs<Bc, DynamicState>{
-                    .casc_state_bc = casc_state,
-                    .ray = ray,
-                    .distance_scale = params.distance_scale,
-                    .mu = params.mu,
-                    .incl = params.incl,
-                    .incl_weight = params.incl_weight,
-                    .wave = this_probe.wave,
-                    .la = params.la,
-                    .offset = params.offset,
-                    .max_mip_to_sample = params.max_mip_to_sample,
-                    .block_map = params.block_map,
-                    .mr_block_map = params.mr_block_map,
-                    .mip_chain = params.mip_chain,
-                    .dyn_state = params.dyn_state
-                }
-            );
-            RadianceInterval<Alo> upper_interp{};
+            RadianceInterval<Alo, Loss> upper_interp{};
             for (
                 int upper_ray_idx = upper_ray_start_idx;
                 upper_ray_idx < upper_ray_start_idx + num_rays_per_ray;
@@ -168,11 +163,29 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_bilinear_fix(
                     upper_interp.tau += ray_weight * upper_tau(lin_idx);
                 }
             }
-            RadianceInterval<Alo> merged = merge_intervals(ri, upper_interp);
-            interp.I += weights(bilin) * merged.I;
+            RadianceInterval<Alo, Loss> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
+                Raymarch2dArgs<Bc, DynamicState>{
+                    .casc_state_bc = casc_state,
+                    .ray = ray,
+                    .distance_scale = params.distance_scale,
+                    .mu = params.mu,
+                    .incl = params.incl,
+                    .incl_weight = params.incl_weight,
+                    .wave = this_probe.wave,
+                    .la = params.la,
+                    .offset = params.offset,
+                    .max_mip_to_sample = params.max_mip_to_sample,
+                    .block_map = params.block_map,
+                    .mr_block_map = params.mr_block_map,
+                    .mip_chain = params.mip_chain,
+                    .dyn_state = params.dyn_state,
+                    .I_start = upper_interp.I
+                }
+            );
             if constexpr (STORE_TAU_CASCADES) {
-                interp.tau += weights(bilin) * merged.tau;
+                ri.tau += upper_interp.tau;
             }
+            accumulate_weighted_interval(interp, ri, weights(bilin));
         }
     } else {
         interp = multi_level_dda_raymarch_2d<RcMode, Bc>(
@@ -238,7 +251,7 @@ YAKL_INLINE RadianceInterval<DexEmpty> interp_probe_dir(
     ri.tau = -std::log(ri.tau);
     ri.tau = std::min(ri.tau, FP(1e4));
 
-    // NOTE(cmo): Can ignore the psi_star, as it's never merged (comes from C0 only).
+    // NOTE(cmo): Can ignore the ALO terms, as they're never merged (come from C0 only).
     return ri;
 }
 
@@ -246,8 +259,9 @@ template <
     int RcMode=0,
     typename Bc,
     typename DynamicState,
-    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
-YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>,
+    typename Loss=std::conditional_t<bool(RcMode & RC_COMPUTE_LOSS), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo, Loss> march_and_merge_parallax_fix(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeRays& rays,
     const ProbeIndex& this_probe,
@@ -255,29 +269,11 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
     const RaymarchParams<DynamicState>& params
 ) {
     ray = invert_direction(ray);
-    RadianceInterval<Alo> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
-        Raymarch2dArgs<Bc, DynamicState>{
-            .casc_state_bc = casc_state,
-            .ray = ray,
-            .distance_scale = params.distance_scale,
-            .mu = params.mu,
-            .incl = params.incl,
-            .incl_weight = params.incl_weight,
-            .wave = this_probe.wave,
-            .la = params.la,
-            .offset = params.offset,
-            .max_mip_to_sample = params.max_mip_to_sample,
-            .block_map = params.block_map,
-            .mr_block_map = params.mr_block_map,
-            .mip_chain = params.mip_chain,
-            .dyn_state = params.dyn_state
-        }
-    );
 
     const int num_rays_per_ray = upper_texels_per_ray<RcMode>(casc_state.state.n);
     const fp_t ray_weight = FP(1.0) / fp_t(num_rays_per_ray);
 
-    RadianceInterval<Alo> interp{};
+    RadianceInterval<Alo, Loss> interp{};
     if (casc_state.state.upper_I.initialized()) {
         BilinearCorner base = bilinear_corner(this_probe.coord);
         vec4 weights = bilinear_weights(base);
@@ -341,15 +337,38 @@ YAKL_INLINE RadianceInterval<Alo> march_and_merge_parallax_fix(
             }
         }
     }
-    return merge_intervals(ri, interp);
+    RadianceInterval<Alo, Loss> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
+        Raymarch2dArgs<Bc, DynamicState>{
+            .casc_state_bc = casc_state,
+            .ray = ray,
+            .distance_scale = params.distance_scale,
+            .mu = params.mu,
+            .incl = params.incl,
+            .incl_weight = params.incl_weight,
+            .wave = this_probe.wave,
+            .la = params.la,
+            .offset = params.offset,
+            .max_mip_to_sample = params.max_mip_to_sample,
+            .block_map = params.block_map,
+            .mr_block_map = params.mr_block_map,
+            .mip_chain = params.mip_chain,
+            .dyn_state = params.dyn_state,
+            .I_start = interp.I
+        }
+    );
+    if constexpr (STORE_TAU_CASCADES) {
+        ri.tau += interp.tau;
+    }
+    return ri;
 }
 
 template <
     int RcMode=0,
     typename Bc,
     typename DynamicState,
-    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
-YAKL_INLINE RadianceInterval<Alo> march_parallax_fix_inner(
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>,
+    typename Loss=std::conditional_t<bool(RcMode & RC_COMPUTE_LOSS), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo, Loss> march_parallax_fix_inner(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeRays& rays,
     const ProbeIndex& this_probe,
@@ -357,7 +376,7 @@ YAKL_INLINE RadianceInterval<Alo> march_parallax_fix_inner(
     const RaymarchParams<DynamicState>& params
 ) {
     ray = invert_direction(ray);
-    RadianceInterval<Alo> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
+    RadianceInterval<Alo, Loss> ri = multi_level_dda_raymarch_2d<RcMode, Bc>(
         Raymarch2dArgs<Bc, DynamicState>{
             .casc_state_bc = casc_state,
             .ray = ray,
@@ -384,8 +403,9 @@ template <
     int RcMode=0,
     typename Bc,
     typename DynamicState,
-    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>>
-YAKL_INLINE RadianceInterval<Alo> march_and_merge_dispatch(
+    typename Alo=std::conditional_t<bool(RcMode & RC_COMPUTE_ALO), fp_t, DexEmpty>,
+    typename Loss=std::conditional_t<bool(RcMode & RC_COMPUTE_LOSS), fp_t, DexEmpty>>
+YAKL_INLINE RadianceInterval<Alo, Loss> march_and_merge_dispatch(
     const CascadeStateAndBc<Bc>& casc_state,
     const CascadeRays& rays,
     const ProbeIndex& this_probe,
@@ -470,6 +490,8 @@ inline void parallax_fix_inner_merge(
     CascadeStorage dims = cascade_size(state.c0_size, cascade_idx);
     i64 spatial_bounds = probe_coord_lookup.num_active_probes();
 
+    // NOTE(cmo): Doesn't update I_ext or one_minus_alo to match the re-merged I,
+    // so these aren't consistent for Gamma when applied to C0.
     // TODO(cmo): Pre-allocate these somewhere.
     Fp1d I_temp = dev_casc_state.cascade_I.createDeviceObject();
     Fp1d tau_temp = dev_casc_state.cascade_tau.createDeviceObject();
@@ -625,6 +647,9 @@ void cascade_i_25d(
     const auto& profile = state.phi;
     constexpr bool compute_alo = RcMode & RC_COMPUTE_ALO;
     using AloType = std::conditional_t<compute_alo, fp_t, DexEmpty>;
+    constexpr bool compute_loss = RcMode & RC_COMPUTE_LOSS;
+    using LossType = std::conditional_t<compute_loss, fp_t, DexEmpty>;
+    static_assert(!compute_loss || RC_CONFIG == RcConfiguration::Vanilla, "Losses in the march are only implemented for Vanilla RC");
     typedef typename RcDynamicState<RcMode>::type DynamicState;
 
     CascadeIdxs lookup = cascade_indices(casc_state, cascade_idx);
@@ -648,7 +673,8 @@ void cascade_i_25d(
         .upper_tau = tau_cascade_ip
     };
     if constexpr (compute_alo) {
-        dev_casc_state.psi_star = casc_state.psi_star;
+        dev_casc_state.I_ext = casc_state.I_ext;
+        dev_casc_state.one_minus_alo = casc_state.one_minus_alo;
     }
 
     CascadeRays ray_set = cascade_compute_size<RcMode>(state.c0_size, cascade_idx);
@@ -678,6 +704,13 @@ void cascade_i_25d(
         state.config.mip_config.mip_levels[cascade_idx],
         mip_chain.max_mip_factor
     );
+    const auto& rad_loss = state.rad_loss;
+    const auto& wavelength_bin = adata.wavelength_bin;
+    if constexpr (compute_loss) {
+        if (cascade_idx != 0 || !rad_loss.initialized()) {
+            throw std::runtime_error("Losses can only be computed on C0, with rad_loss allocated");
+        }
+    }
     std::string name = fmt::format("Cascade {}", cascade_idx);
     yakl::timer_start(name.c_str());
     if (RAYMARCH_TYPE == RaymarchType::Raymarch || cascade_idx < LINE_SWEEP_START_CASCADE) {
@@ -697,7 +730,7 @@ void cascade_i_25d(
                 int la = la_start + wave + ray_subset.start_wave_batch;
                 theta_idx += ray_subset.start_incl;
 
-                RadianceInterval<AloType> average_ri{};
+                RadianceInterval<AloType, LossType> average_ri{};
                 const fp_t sample_weight = FP(1.0) / fp_t(num_rays_per_texel);
                 for (int i = 0; i < num_rays_per_texel; ++i) {
                     ProbeIndex probe_idx{
@@ -731,7 +764,7 @@ void cascade_i_25d(
                     };
 
 
-                    RadianceInterval<AloType> ri;
+                    RadianceInterval<AloType, LossType> ri;
                     auto& casc_rays = ray_set;
                     const auto& boundaries = boundaries_h;
 
@@ -765,11 +798,7 @@ void cascade_i_25d(
                     } else {
                         dispatch_outer(ZeroBc{});
                     }
-                    average_ri.I += sample_weight * ri.I;
-                    average_ri.tau += sample_weight * ri.tau;
-                    if constexpr (dev_compute_alo) {
-                        average_ri.psi_star += sample_weight * ri.psi_star;
-                    }
+                    accumulate_weighted_interval(average_ri, ri, sample_weight);
                 }
 
                 ProbeIndex probe_idx{
@@ -786,7 +815,17 @@ void cascade_i_25d(
                     dev_casc_state.cascade_tau(lin_idx) = average_ri.tau;
                 }
                 if constexpr (dev_compute_alo) {
-                    dev_casc_state.psi_star(lin_idx) = average_ri.psi_star;
+                    dev_casc_state.I_ext(lin_idx) = average_ri.I_ext;
+                    dev_casc_state.one_minus_alo(lin_idx) = average_ri.one_minus_alo;
+                }
+                JasUse(rad_loss, wavelength_bin);
+                if constexpr (RcMode & RC_COMPUTE_LOSS) {
+                    using ConstantsFP::four_pi;
+                    const fp_t wl_ray_weight = four_pi * wavelength_bin(la) / fp_t(c0_dirs_to_average<RcMode>());
+                    const fp_t wlamu = wl_ray_weight * incl_quad.wmuy(theta_idx);
+                    IdxGen idx_gen(mr_block_map);
+                    const i64 cell_ks = idx_gen.idx(Coord2{.x = probe_coord(0), .z = probe_coord(1)});
+                    Kokkos::atomic_add(&rad_loss(wave + ray_subset.start_wave_batch, cell_ks), RadLossFp(wlamu * average_ri.loss));
                 }
             }
         );
@@ -797,9 +836,12 @@ void cascade_i_25d(
             }
         }
     } else if (RAYMARCH_TYPE == RaymarchType::LineSweep) {
-        for (int wave = 0; wave < wave_batch; ++wave) {
-            compute_line_sweep_samples<RcMode>(state, casc_state, cascade_idx, subset, wave, mip_chain);
-            interpolate_line_sweep_samples_to_cascade<RcMode>(state, casc_state, cascade_idx, subset, wave);
+        // NOTE(cmo): C0 is never line swept
+        if constexpr (!compute_loss) {
+            for (int wave = 0; wave < wave_batch; ++wave) {
+                compute_line_sweep_samples<RcMode>(state, casc_state, cascade_idx, subset, wave, mip_chain);
+                interpolate_line_sweep_samples_to_cascade<RcMode>(state, casc_state, cascade_idx, subset, wave);
+            }
         }
     }
 

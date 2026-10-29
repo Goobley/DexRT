@@ -2,52 +2,6 @@
 #include "State3d.hpp"
 #include "Atmosphere.hpp"
 
-namespace CoreAndVoigt {
-    struct CoreAndVoigtState {
-        i64 k;
-        const AtmosPointParams& atmos;
-        const AtomicData<>& adata;
-        Fp2d n;
-    };
-    struct CoreAndVoigtResult {
-        fp_t eta_star;
-        fp_t chi_star;
-        fp_t a_damp;
-        fp_t dop_width;
-    };
-
-    template <typename T=fp_t, int mem_space=yakl::memDevice>
-    YAKL_INLINE CoreAndVoigtResult compute_core_and_voigt(
-        const CoreAndVoigtState& args,
-        int line_idx
-    ) {
-        JasUnpack(args, k, atmos, adata, n);
-        const auto& l = adata.lines(line_idx);
-        const int offset = adata.level_start(l.atom);
-        const fp_t nj = n(offset + l.j, k);
-        const fp_t ni = n(offset + l.i, k);
-
-        LineParams params;
-        params.dop_width = doppler_width(l.lambda0, adata.mass(l.atom), atmos.temperature, atmos.vturb);
-        params.gamma = gamma_from_broadening(l, adata.broadening, atmos.temperature, atmos.ne, atmos.nh0);
-        params.vel = atmos.vel;
-
-        using namespace ConstantsFP;
-        // [kJ]
-        // at lambda0
-        const fp_t hnu_4pi = hc_kJ_nm / (four_pi * l.lambda0);
-        // a_damp at lambda0
-        const fp_t a = damping_from_gamma(params.gamma, l.lambda0, params.dop_width);
-        CoreAndVoigtResult result {
-            .eta_star = nj * hnu_4pi * l.Aji,
-            .chi_star = hnu_4pi * (ni * l.Bij - nj * l.Bji),
-            .a_damp = a,
-            .dop_width = params.dop_width
-        };
-        return result;
-    }
-}
-
 void CoreAndVoigtData::init(i64 buffer_len, i32 max_kr) {
     eta_star = Fp2d("eta_star", buffer_len, max_kr);
     chi_star = Fp2d("chi_star", buffer_len, max_kr);

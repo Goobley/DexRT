@@ -154,11 +154,16 @@ struct InclQuadrature {
 
 struct DexEmpty {};
 
-template <typename Alo=DexEmpty>
+template <typename Alo=DexEmpty, typename Loss=DexEmpty>
 struct RadianceInterval {
     fp_t I = FP(0.0);
     fp_t tau = FP(0.0);
-    Alo psi_star;
+    /// Contribution to probe's intensity from outside cell. Thus I = I_ext + psi* eta_probe
+    Alo I_ext{};
+    /// 1 - psi* chi_probe. This form helps avoid roundoff in thick cells
+    Alo one_minus_alo{};
+    /// Radiative loss along the full chord of the probe's cell (C0 only): chi (S - I_f) chord_avg_trans(tau)
+    Loss loss{};
 };
 
 /// deprecated but needs removing from API
@@ -453,6 +458,7 @@ struct AtmosphereNd {
     yakl::Array<fp_t, NumDim, mem_space> vx;
     yakl::Array<fp_t, NumDim, mem_space> vy;
     yakl::Array<fp_t, NumDim, mem_space> vz;
+    yakl::Array<fp_t, NumDim, mem_space> e_int;
 };
 typedef AtmosphereNd<2> Atmosphere;
 
@@ -474,6 +480,7 @@ struct SparseAtmosphere {
     Fp1d vx;
     Fp1d vy;
     Fp1d vz;
+    Fp1d e_int;
 };
 
 template <typename T=fp_t>
@@ -492,6 +499,7 @@ struct FlatAtmosphere {
     yakl::Array<T, 1, yakl::memDevice> vx;
     yakl::Array<T, 1, yakl::memDevice> vy;
     yakl::Array<T, 1, yakl::memDevice> vz;
+    yakl::Array<T, 1, yakl::memDevice> e_int;
 };
 
 /// Storage for emissivity/opacity when we load a model from file. Planes from

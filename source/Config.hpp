@@ -36,7 +36,9 @@ extern int get_dexrt_dimensionality();
 // NOTE(cmo): The spacing between probes on cascade 0 -- this isn't actually configurable
 constexpr fp_t PROBE0_SPACING = FP(1.0);
 
-typedef yakl::Array<GammaFp, 3, yakl::memDevice> GammaMat;
+/// NOTE(cmo): Per-transition preconditioned radiative rates of an atom,
+/// [t, slot, ks], replacing Gamma to store in a more memory efficient way
+typedef yakl::Array<GammaFp, 3, yakl::memDevice> PreconRMat;
 
 constexpr bool VARY_BRANCHING_FACTOR = (BRANCHING_FACTOR_SWITCH > 0);
 static_assert(!(PREAVERAGE && VARY_BRANCHING_FACTOR), "Can't use preaveraging and variable branching factor because I was too lazy to implement it");
@@ -111,6 +113,14 @@ constexpr int NUM_DIM = 2;
 constexpr bool PWBC_USE_VECTOR_FORM = true;
 constexpr bool PWBC_CONSIDER_HORIZONTAL_OFFSET = true;
 
+/// Store radiation arrays typed as (Rad16Array, Rad16BitStorage.hpp) as our
+/// Rad16 16 bits format rather than fp_t.
+#if defined(DEXRT_HALF_RADIATION_STORAGE)
+constexpr bool HALF_RADIATION_STORAGE = true;
+#else
+constexpr bool HALF_RADIATION_STORAGE = false;
+#endif
+
 template <int NumIncl=NUM_INCL>
 yakl::SArray<fp_t, 1, NumIncl> get_incl_rays() {
     yakl::SArray<fp_t, 1, NumIncl> incl_rays;
@@ -129,12 +139,6 @@ yakl::SArray<fp_t, 1, NumIncl> get_incl_weights() {
     return incl_weights;
 }
 
-// NOTE(cmo): The kokkos-kernels approach is faster than magma. If you _really_ want MAGMA, you should define it in your build script
-// #if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
-#ifdef DEXRT_USE_MAGMA
-    #include <magma_v2.h>
-    #include <magmablas.h>
-#endif
 
 #else
 #endif

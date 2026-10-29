@@ -18,6 +18,12 @@ inline auto get_GammaFpMpi() {
     }
     return MPI_DOUBLE;
 }
+inline auto get_RadLossFpMpi() {
+    if constexpr (std::is_same_v<RadLossFp, f32>) {
+        return MPI_FLOAT;
+    }
+    return MPI_DOUBLE;
+}
 #endif
 
 
@@ -41,6 +47,9 @@ inline void finalise_mpi() {
 struct MpiState {
     int rank = 0;
     int num_ranks = 1;
+    /// Each rank owns a distinct part of the domain (rather than a replicated
+    /// copy), so per-cell updates run on every rank.
+    bool distributed = false;
 #ifdef HAVE_MPI
     MPI_Comm comm;
 #endif

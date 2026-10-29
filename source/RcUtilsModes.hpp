@@ -528,6 +528,15 @@ YAKL_INLINE vec3 inverted_mu(const RayProps& ray, fp_t incl) {
     return mu;
 }
 
+/// Compute mu for traversing this ray from end to start in the plane of the 2d model
+YAKL_INLINE vec3 inverted_flatland_mu(const RayProps& ray) {
+    vec3 mu;
+    mu(0) = -ray.dir(0);
+    mu(1) = FP(0.0);
+    mu(2) = -ray.dir(1);
+    return mu;
+}
+
 /// Returns the fractional index associated with a direction. Note that this is
 /// in the range [-num_flat_dirs/2, num_flat_dirs/2] and needs to be remapped
 /// accordingly.

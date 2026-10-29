@@ -93,6 +93,7 @@ Features/ToDo
 - [x] Pull out user config variables in Config header into something less busy
 - [x] Tidy up iteration prints
 - [ ] Optimise accumulation into Gamma
+- [ ] Index Gamma by gamma atom rather than adata atom (see `plans.gamma_atom_indexing.md`)
 - [ ] Support for Golding method
 - [ ] PRD
     - ML ?

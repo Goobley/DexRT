@@ -10,12 +10,11 @@
 #include "BlockMap.hpp"
 #include "DexrtConfig.hpp"
 #include "MpiWrapper.hpp"
+#include "Rad16BitStorage.hpp"
+#include "RateDiagnostics.hpp"
 
 #include <fmt/core.h>
 
-#ifdef DEXRT_USE_MAGMA
-    #include <magma_v2.h>
-#endif
 
 struct State {
     DexrtConfig config;
@@ -34,17 +33,19 @@ struct State {
     AtomicData<fp_t, yakl::memHost> adata_host;
     VoigtProfile<fp_t, false> phi;
     HPartFn<> nh_lte;
-    Fp2d wphi; /// [kr, ks]
+    Rad16Array wphi; /// [kr, ks]
     Fp2d pops; /// [num_level, ks]
-    Fp2d J; /// [num_wave, ks] -- if we're paging J to cpu, the first axis is wave_batch
-    Fp2dHost J_cpu; /// [num_wave, ks] -- The full J in host memory, if we're paging after each batch.
-    std::vector<yakl::Array<GammaFp, 3, yakl::memDevice>> Gamma; /// [i, j, ks]
+    Fp2d J; /// [wave_batch, ks] -- the current wavelength batch, paged to J_cpu after each
+    Rad16ArrayHost J_cpu; /// [num_wave, ks] -- The full J in host memory.
+    Rad16Array J_stage; /// J encoded for the copy to J_cpu (HALF_RADIATION_STORAGE only).
+    yakl::Array<RadLossFp, 2, yakl::memDevice> rad_loss; /// [wave_batch, ks] -- the current wavelength batch, as J
+    yakl::Array<RadLossFp, 1, yakl::memDevice> rad_loss_integrated; /// [ks] -- integrated over the wavelengths computed so far (on this rank)
+    yakl::Array<RadLossFp, 2, yakl::memHost> rad_loss_cpu; /// [num_wave || 1, ks] -- per wavelength, or integrated, depending on config
+    PreconRMat precon_R; /// [t, 2, ks] the preconditioned radiative rates (GammaMatrix.hpp) -- Gamma is assembled in shared memory adding the collisions in stat_eq
+    RateDiagnostics rate_diag; /// Optional per-transition output diagnostics
     PwBc<> pw_bc;
     ZeroBc zero_bc;
     BoundaryType boundary;
-#ifdef DEXRT_USE_MAGMA
-    magma_queue_t magma_queue;
-#endif
 
     template <typename ...T>
     void println(fmt::format_string<T...> fmt, T&&... args) const {

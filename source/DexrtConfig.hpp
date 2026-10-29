@@ -1,6 +1,7 @@
 #if !defined(DEXRT_DEXRT_CONFIG_HPP)
 #define DEXRT_DEXRT_CONFIG_HPP
 #include <string>
+#include <utility>
 #include <vector>
 #include "Config.hpp"
 #include "Types.hpp"
@@ -8,17 +9,31 @@
 #include <fmt/core.h>
 #include <yaml-cpp/yaml.h>
 
+/// Total baryon abundance relative to H, i.e. sum_elem(n_elem) / n_H. Used to
+/// convert nh_tot into a total particle density in the conservation routines.
+/// Default from Asplund 2009 (as computed by Lightweaver); 1.1 is the
+/// traditional He-only value.
+constexpr fp_t DEFAULT_TOTAL_ABUND = FP(1.0861550335264554);
+
 struct DexrtOutputConfig {
     bool sparse = false;
     bool wavelength = true;
     bool J = true;
+    bool rad_loss = true;
     bool pops = true;
     bool lte_pops = true;
+    bool temperature = true;
     bool ne = true;
     bool nh_tot = true;
     bool max_mip_level = true;
     bool psi_star = false;
     bool active = true;
+    /// Per-transition radiative rates [s-1]
+    bool radiative_rates = false;
+    /// Per-transition collisional rates, computed at output time [s-1]
+    bool collisional_rates = false;
+    /// Energy absorbed/emitted by each continuum transition [kW m-3]
+    bool cont_energy_balance = false;
     std::vector<int> cascades;
 };
 
@@ -35,6 +50,12 @@ struct DexrtNgConfig {
     fp_t lower_threshold = FP(2e-4);
 };
 
+enum class RadLossType {
+    None,
+    PerWavelength,
+    Integrated
+};
+
 struct DexrtConfig {
     DexrtMode mode = DexrtMode::NonLte;
     fp_t mem_pool_gb = FP(4.0);
@@ -43,7 +64,6 @@ struct DexrtConfig {
     std::string output_path;
     std::string initial_pops_path;
     DexrtOutputConfig output;
-    bool store_J_on_cpu = true;
     std::vector<std::string> atom_paths;
     std::vector<ModelAtomConfig> atom_configs;
     BoundaryType boundary = BoundaryType::Zero;
@@ -54,9 +74,12 @@ struct DexrtConfig {
     fp_t pop_tol = FP(1e-3);
     bool conserve_charge = false;
     bool conserve_pressure = false;
+    bool conserve_energy = false;
+    fp_t total_abund = DEFAULT_TOTAL_ABUND;
     int snapshot_frequency = 0;
     int initial_lambda_iterations = 2;
     int max_cascade = 5;
+    RadLossType rad_loss = RadLossType::None;
     DexrtMipConfig mip_config;
     DexrtNgConfig ng;
 };
@@ -70,6 +93,7 @@ inline void parse_extra_givenfs(DexrtConfig* cfg, const YAML::Node& file) {
     config.pop_tol = FP(1.0);
     config.conserve_charge = false;
     config.conserve_pressure = false;
+    config.conserve_energy = false;
 }
 
 inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
@@ -133,6 +157,19 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
             throw std::runtime_error(fmt::format("Unexpected boundary condition type: {}", mode));
         }
     }
+
+    if (file["rad_loss"]) {
+        std::string mode = file["rad_loss"].as<std::string>();
+        if (mode == "None") {
+            config.rad_loss = RadLossType::None;
+        } else if (mode == "PerWavelength") {
+            config.rad_loss = RadLossType::PerWavelength;
+        } else if (mode == "Integrated") {
+            config.rad_loss = RadLossType::Integrated;
+        } else {
+            throw std::runtime_error(fmt::format("Unexpected radiative loss type: {}", mode));
+        }
+    }
 }
 
 inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
@@ -151,6 +188,20 @@ inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     }
     if (file["conserve_pressure"]) {
         config.conserve_pressure = file["conserve_pressure"].as<bool>();
+    }
+    if (file["conserve_energy"]) {
+        config.conserve_energy = file["conserve_energy"].as<bool>();
+    }
+    if (config.conserve_pressure && config.conserve_energy) {
+        throw std::runtime_error("conserve_pressure and conserve_energy work in mutually exclusive ways.");
+    }
+    if (file["total_abund"]) {
+        config.total_abund = file["total_abund"].as<fp_t>();
+        if (config.total_abund <= FP(0.0)) {
+            throw std::runtime_error(
+                fmt::format("total_abund must be positive (got {}).", config.total_abund)
+            );
+        }
     }
     if (file["snapshot_frequency"]) {
         config.snapshot_frequency = file["snapshot_frequency"].as<int>();
@@ -179,7 +230,9 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     DexrtConfig& config = *cfg;
     DexrtOutputConfig out;
 
-    auto output = file["output"];
+    // NOTE(cmo): Always run (for the mode-dependent fixups below), even
+    // without an output section.
+    const YAML::Node output = file["output"] ? file["output"] : YAML::Node(YAML::NodeType::Map);
     if (output["sparse"]) {
         out.sparse = output["sparse"].as<bool>();
     }
@@ -189,11 +242,17 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     if (output["J"]) {
         out.J = output["J"].as<bool>();
     }
+    if (output["rad_loss"]) {
+        out.rad_loss = output["rad_loss"].as<bool>();
+    }
     if (output["pops"]) {
         out.pops = output["pops"].as<bool>();
     }
     if (output["lte_pops"]) {
         out.lte_pops = output["lte_pops"].as<bool>();
+    }
+    if (output["temperature"]) {
+        out.temperature = output["temperature"].as<bool>();
     }
     if (output["ne"]) {
         out.ne = output["ne"].as<bool>();
@@ -203,6 +262,15 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     }
     if (output["psi_star"]) {
         out.psi_star = output["psi_star"].as<bool>();
+    }
+    if (output["radiative_rates"]) {
+        out.radiative_rates = output["radiative_rates"].as<bool>();
+    }
+    if (output["collisional_rates"]) {
+        out.collisional_rates = output["collisional_rates"].as<bool>();
+    }
+    if (output["cont_energy_balance"]) {
+        out.cont_energy_balance = output["cont_energy_balance"].as<bool>();
     }
     if (output["cascades"]) {
         for (const auto& c : output["cascades"]) {
@@ -214,6 +282,8 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     if (config.mode == DexrtMode::GivenFs) {
         out.ne = false;
         out.nh_tot = false;
+        out.temperature = false;
+        out.rad_loss = false;
         out.pops = false;
         out.lte_pops = false;
         out.active = false;
@@ -221,16 +291,39 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     } else if (config.mode == DexrtMode::Lte) {
         out.ne = false;
         out.nh_tot = false;
+        out.temperature = false;
+        out.rad_loss = out.rad_loss && (config.rad_loss != RadLossType::None);
         out.lte_pops = false;
         out.psi_star = false;
         out.active = true;
     } else if (config.mode == DexrtMode::NonLte) {
         out.active = true;
-        if (!(config.conserve_charge || config.conserve_pressure)) {
+        out.rad_loss = out.rad_loss && (config.rad_loss != RadLossType::None);
+        if (!(config.conserve_charge || config.conserve_pressure || config.conserve_energy)) {
             out.ne = false;
             out.nh_tot = false;
+            out.temperature = false;
         }
     }
+    // NOTE(claude): The rate diagnostics hang off the Gamma accumulation, which
+    // only exists in NonLte mode -- collisional_rates additionally borrows the
+    // Gamma buffer itself at output time.
+    if (config.mode != DexrtMode::NonLte) {
+        const std::pair<const char*, bool> rate_diags[] = {
+            {"radiative_rates", out.radiative_rates},
+            {"collisional_rates", out.collisional_rates},
+            {"cont_energy_balance", out.cont_energy_balance},
+        };
+        for (const auto& [name, requested] : rate_diags) {
+            if (requested) {
+                throw std::runtime_error(fmt::format(
+                    "output.{} requested, but this is only available in \"non_lte\" mode.",
+                    name
+                ));
+            }
+        }
+    }
+
     if (out.cascades.size() > 0) {
         if constexpr (DIR_BY_DIR) {
             fmt::println(stderr, "Cascade output requested, but DIR_BY_DIR is enabled, only the entries corresponding to the final direction of C0 will be output.");
@@ -292,6 +385,26 @@ inline void parse_mip_config(DexrtConfig* cfg, const YAML::Node& file) {
             config.mip_config.opacity_threshold = mip_config["opacity_threshold"].as<fp_t>();
         }
     }
+
+    // NOTE(cmo): Gamma uses C0's intensity and psi*, which must come from the
+    // probe's own cell, not a mip average over its neighbours.
+    if (config.mode == DexrtMode::NonLte && config.mip_config.mip_levels[0] != 0) {
+        throw std::runtime_error(fmt::format(
+            "mip_config.mip_levels[0] must be 0 for NonLte (got {}): Gamma needs C0 sampled at the probe's own cell.",
+            config.mip_config.mip_levels[0]
+        ));
+    }
+    // NOTE(cmo): The losses are averaged over the chord through the probe's
+    // cell, so the last step of the C0 march must be from its face to its centre.
+    if (config.rad_loss != RadLossType::None && config.mip_config.mip_levels[0] != 0) {
+        throw std::runtime_error(fmt::format(
+            "mip_config.mip_levels[0] must be 0 when computing rad_loss (got {}): the loss needs C0 sampled at the probe's own cell.",
+            config.mip_config.mip_levels[0]
+        ));
+    }
+    if (config.rad_loss != RadLossType::None && RC_CONFIG != RcConfiguration::Vanilla) {
+        throw std::runtime_error("rad_loss is only implemented for the Vanilla RC_CONFIG.");
+    }
 }
 
 inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file) {
@@ -330,9 +443,6 @@ inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file)
             throw std::runtime_error(fmt::format("Unexpected program mode: {}", mode));
         }
     }
-    if (file["store_J_on_cpu"]) {
-        config.store_J_on_cpu = file["store_J_on_cpu"].as<bool>();
-    }
 
     if (file["max_cascade"]) {
         config.max_cascade = file["max_cascade"].as<int>();
@@ -350,9 +460,7 @@ inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file)
         } break;
     }
 
-    if (file["output"]) {
-        parse_and_update_dexrt_output_config(&config, file);
-    }
+    parse_and_update_dexrt_output_config(&config, file);
 
     parse_mip_config(&config, file);
 

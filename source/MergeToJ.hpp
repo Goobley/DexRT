@@ -24,7 +24,7 @@ inline FpConst2d merge_c0_to_J(
     int wave_batch = la_end - la_start;
 
     const int full_la_start = la_start;
-    // NOTE(cmo): Handle case of J on the GPU only being a single plane (config.store_J_on_cpu)
+    // NOTE(cmo): Handle case of J on the GPU only being a single plane (paged to J_cpu)
     if (c0_dims.wave_batch == J.extent(0)) {
         la_start = 0;
     }

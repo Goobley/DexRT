@@ -49,6 +49,10 @@ inline Atmosphere load_atmos(const std::string& path) {
     if (nc.varExists("offset_z")) {
         nc.read(offset_z, "offset_z");
     }
+    Fp2dLoad e_int("e_int");
+    if (nc.varExists("e_int")) {
+        nc.read(e_int, "e_int");
+    }
     Atmosphere result{
         .voxel_scale = voxel_scale,
         .offset_x = offset_x,
@@ -64,6 +68,9 @@ inline Atmosphere load_atmos(const std::string& path) {
     result.vx = vx.createDeviceCopy();
     result.vy = vy.createDeviceCopy();
     result.vz = vz.createDeviceCopy();
+    if (e_int.initialized()) {
+        result.e_int = e_int.createDeviceCopy();
+    }
 #else
     result.temperature = Fp2d("temperature", z_dim, x_dim);
     result.pressure = Fp2d("pressure", z_dim, x_dim);
@@ -73,6 +80,9 @@ inline Atmosphere load_atmos(const std::string& path) {
     result.vx = Fp2d("vx", z_dim, x_dim);
     result.vy = Fp2d("vy", z_dim, x_dim);
     result.vz = Fp2d("vz", z_dim, x_dim);
+    if (e_int.initialized()) {
+        result.e_int = Fp2d("e_int", z_dim, x_dim);
+    }
 
     #define DEX_DEV_COPY(X) auto JasConcat(X, dev) = X.createDeviceCopy()
     #define DEX_FLOAT_CONVERT(X) dex_parallel_for( \
@@ -100,6 +110,11 @@ inline Atmosphere load_atmos(const std::string& path) {
     DEX_FLOAT_CONVERT(vx);
     DEX_FLOAT_CONVERT(vy);
     DEX_FLOAT_CONVERT(vz);
+    if (e_int.initialized()) {
+        DEX_DEV_COPY(e_int);
+        yakl::fence();
+        DEX_FLOAT_CONVERT(e_int);
+    }
     yakl::fence();
 
     #undef DEX_DEV_COPY
@@ -146,6 +161,7 @@ inline AtmosphereNd<3, yakl::memHost> load_atmos_3d_host(const std::string& path
     Fp3dLoad vx("vx", z_dim, y_dim, x_dim);
     Fp3dLoad vy("vy", z_dim, y_dim, x_dim);
     Fp3dLoad vz("vz", z_dim, y_dim, x_dim);
+    Fp3dLoad e_int("e_int");
 
     f32 voxel_scale;
     nc.read(voxel_scale, "voxel_scale");
@@ -157,6 +173,9 @@ inline AtmosphereNd<3, yakl::memHost> load_atmos_3d_host(const std::string& path
     nc.read(vx, "vx");
     nc.read(vy, "vy");
     nc.read(vz, "vz");
+    if (nc.varExists("e_int")) {
+        nc.read(e_int, "e_int");
+    }
 
     f32 offset_x = FP(0.0);
     f32 offset_y = FP(0.0);
@@ -186,6 +205,7 @@ inline AtmosphereNd<3, yakl::memHost> load_atmos_3d_host(const std::string& path
     result.vx = vx;
     result.vy = vy;
     result.vz = vz;
+    result.e_int = e_int;
 #else
     result.temperature = Fp3dHost("temperature", z_dim, y_dim, x_dim);
     result.pressure = Fp3dHost("pressure", z_dim, y_dim, x_dim);
@@ -195,6 +215,9 @@ inline AtmosphereNd<3, yakl::memHost> load_atmos_3d_host(const std::string& path
     result.vx = Fp3dHost("vx", z_dim, y_dim, x_dim);
     result.vy = Fp3dHost("vy", z_dim, y_dim, x_dim);
     result.vz = Fp3dHost("vz", z_dim, y_dim, x_dim);
+    if (e_int.initialized()) {
+        result.e_int = Fp3dHost("e_int", z_dim, y_dim, x_dim);
+    }
 
     FlatLoop<3> convert_loop(z_dim, y_dim, x_dim);
     #define DEX_FLOAT_CONVERT(X) Kokkos::parallel_for( \
@@ -214,6 +237,9 @@ inline AtmosphereNd<3, yakl::memHost> load_atmos_3d_host(const std::string& path
     DEX_FLOAT_CONVERT(vx);
     DEX_FLOAT_CONVERT(vy);
     DEX_FLOAT_CONVERT(vz);
+    if (e_int.initialized()) {
+        DEX_FLOAT_CONVERT(e_int);
+    }
     Kokkos::fence();
 
     #undef DEX_FLOAT_CONVERT
@@ -256,6 +282,9 @@ FlatAtmosphere<T> flatten(const Atmosphere& atmos) {
     result.vx = atmos.vx.collapse();
     result.vy = atmos.vy.collapse();
     result.vz = atmos.vz.collapse();
+    if (atmos.e_int.initialized()) {
+        result.e_int = atmos.e_int.collapse();
+    }
     return result;
 }
 
@@ -341,6 +370,7 @@ inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
     FpLoad vx("vx", num_active_cells);
     FpLoad vy("vy", num_active_cells);
     FpLoad vz("vz", num_active_cells);
+    FpLoad e_int("e_int");
 
     f32 voxel_scale;
     nc.read(voxel_scale, "voxel_scale");
@@ -352,6 +382,9 @@ inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
     nc.read(vx, "vx");
     nc.read(vy, "vy");
     nc.read(vz, "vz");
+    if (nc.varExists("e_int")) {
+        nc.read(e_int, "e_int");
+    }
 
     f32 offset_x = FP(0.0);
     f32 offset_y = FP(0.0);
@@ -385,6 +418,7 @@ inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
     result.vx = vx;
     result.vy = vy;
     result.vz = vz;
+    result.e_int = e_int;
 #else
     result.temperature = Fp1d("temperature", num_active_cells);
     result.pressure = Fp1d("pressure", num_active_cells);
@@ -394,6 +428,9 @@ inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
     result.vx = Fp1d("vx", num_active_cells);
     result.vy = Fp1d("vy", num_active_cells);
     result.vz = Fp1d("vz", num_active_cells);
+    if (e_int.initialized()) {
+        result.e_int = Fp1d("e_int", num_active_cells);
+    }
 
     #define DEX_FLOAT_CONVERT(X) dex_parallel_for( \
         "convert", \
@@ -411,6 +448,9 @@ inline SparseAtmosphere load_sparse_atmosphere(yakl::SimpleNetCDF& nc) {
     DEX_FLOAT_CONVERT(vx);
     DEX_FLOAT_CONVERT(vy);
     DEX_FLOAT_CONVERT(vz);
+    if (e_int.initialized()) {
+        DEX_FLOAT_CONVERT(e_int);
+    }
     yakl::fence();
 
     #undef DEX_FLOAT_CONVERT

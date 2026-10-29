@@ -22,5 +22,8 @@ cmake \
       -DKokkos_ROOT="$(pwd)/../kokkos/" \
       -DCMAKE_PREFIX_PATH="$(pwd)/../kokkos/lib64/cmake;$(pwd)/../kokkos-kernels/lib64/cmake/" \
       -DCMAKE_BUILD_TYPE="Release" \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DDEX_FORCE_DOUBLE_PREC=Off \
+      -DDEX_HALF_RADIATION_STORAGE=On \
       ..
 

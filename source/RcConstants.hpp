@@ -8,6 +8,7 @@ constexpr int RC_SAMPLE_BC = 0x4;
 constexpr int RC_COMPUTE_ALO = 0x8;
 constexpr int RC_DIR_BY_DIR = 0x10;
 constexpr int RC_LINE_SWEEP = 0x20; // NOTE(cmo) only added in one place to flag for BC handling
+constexpr int RC_COMPUTE_LOSS = 0x40;
 
 struct RcFlags {
     bool dynamic = false;
@@ -15,6 +16,7 @@ struct RcFlags {
     bool sample_bc = false;
     bool compute_alo = false;
     bool dir_by_dir = DIR_BY_DIR;
+    bool compute_loss = false;
 } ;
 
 
@@ -34,6 +36,9 @@ YAKL_INLINE constexpr int RC_flags_pack(const RcFlags& flags) {
     }
     if (flags.dir_by_dir) {
         flag |= RC_DIR_BY_DIR;
+    }
+    if (flags.compute_loss) {
+        flag |= RC_COMPUTE_LOSS;
     }
     return flag;
 }
