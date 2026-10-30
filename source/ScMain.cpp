@@ -827,7 +827,20 @@ int main(int argc, char** argv) {
                 }
                 bool first_iter = true;
                 bool accelerated = false;
-                while (((max_change > non_lte_tol || i < (initial_lambda_iterations+1)) && i < max_iters) || accelerated) {
+                const int restart_iteration = i;
+                const int recovery_iterations = do_restart && state.background.enabled && !state.background.have_J
+                    ? std::max(2, initial_lambda_iterations + 1)
+                    : 0;
+                if (recovery_iterations) {
+                    state.println(
+                        "Restart without J: requiring {} recovery iterations before convergence.",
+                        recovery_iterations
+                    );
+                }
+                while (
+                    ((max_change > non_lte_tol || i < (initial_lambda_iterations + 1) ||
+                      i - restart_iteration < recovery_iterations) && i < max_iters) || accelerated
+                ) {
                     state.println("==== FS {} ====", i);
                     compute_nh0(state);
                     zero_precon_R(state.precon_R);

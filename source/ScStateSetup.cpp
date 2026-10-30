@@ -340,10 +340,21 @@ int handle_restart(ScState* st, const std::string& restart_path) {
         if (in.shape("J") != l.shape) {
             throw std::runtime_error("SC: J must be dense [wavelength, z, (y,) x] matching the atmosphere");
         }
-        Fp2dHost J("sc_restart_J", waves, cells.num_owned_cells());
-        in.read_block("J", l.split, cells.z_start, cells.num_z, J.data());
-        for (i64 i = 0; i < J.totElems(); ++i) {
-            state.J_cpu.data.data()[i] = Rad16ArrayHost::encode(J.data()[i]);
+        int encoded = 0;
+        in.att_int("J_rad16", &encoded);
+        if (encoded && !HALF_RADIATION_STORAGE) {
+            throw std::runtime_error("SC: Rad16 snapshot J requires DEX_HALF_RADIATION_STORAGE=ON");
+        }
+        if (encoded || !HALF_RADIATION_STORAGE) {
+            // The file contains this build's native storage; receive directly into J.
+            in.read_block("J", l.split, cells.z_start, cells.num_z, state.J_cpu.data.data());
+        } else {
+            // Legacy snapshots contain decoded floating-point J.
+            Fp2dHost J("sc_restart_J", waves, cells.num_owned_cells());
+            in.read_block("J", l.split, cells.z_start, cells.num_z, J.data());
+            for (i64 i = 0; i < J.totElems(); ++i) {
+                state.J_cpu.data.data()[i] = Rad16ArrayHost::encode(J.data()[i]);
+            }
         }
         state.background.have_J = true;
     }
@@ -386,8 +397,14 @@ void save_snapshot(const ScState& state, int num_iter) {
         writer.write_scalar(state.atmos.temperature, "temperature");
         writer.write_scalar(state.atmos.pressure, "pressure");
     }
-    if (state.background.enabled && state.background.have_J) {
-        writer.write_owned(state.J_cpu, "J", "wavelength");
+    if (state.config.snapshot_J && state.background.enabled && state.background.have_J) {
+        // Preserve the encoded representation without a decoded full-volume copy.
+        file.put_att("J_rad16", i32(HALF_RADIATION_STORAGE));
+        writer.write_dense(
+            state.J_cpu.data.reshape(state.J_cpu.extent(0), state.cells.num_z, state.cells.plane_size()),
+            "J",
+            "wavelength"
+        );
     }
     if (state.prd.enabled()) {
         writer.write_cells(state.prd.rho.to_fp(), "prd_rho", "prd_row");

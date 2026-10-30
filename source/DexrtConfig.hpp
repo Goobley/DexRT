@@ -91,6 +91,8 @@ struct DexrtConfig {
     bool conserve_energy = false;
     fp_t total_abund = DEFAULT_TOTAL_ABUND;
     int snapshot_frequency = 0;
+    /// dexrt_sc: save background J in snapshots at its internal storage precision.
+    bool snapshot_J = true;
     int initial_lambda_iterations = 2;
     int max_cascade = 5;
     RadLossType rad_loss = RadLossType::None;
@@ -221,6 +223,9 @@ inline void parse_extra_nonlte(DexrtConfig* cfg, const YAML::Node& file) {
     }
     if (file["snapshot_frequency"]) {
         config.snapshot_frequency = file["snapshot_frequency"].as<int>();
+    }
+    if (file["snapshot_J"]) {
+        config.snapshot_J = file["snapshot_J"].as<bool>();
     }
     if (file["initial_lambda_iterations"]) {
         config.initial_lambda_iterations = file["initial_lambda_iterations"].as<int>();
