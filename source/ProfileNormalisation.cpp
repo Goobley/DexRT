@@ -2,6 +2,7 @@
 #include "CascadeState.hpp"
 #include "CascadeState3d.hpp"
 #include "RcUtilsModes3d.hpp"
+#include "ScState.hpp"
 
 template <int NumDim>
 KOKKOS_INLINE_FUNCTION ivec<NumDim> coord_to_ivec(Coord<NumDim> c);
@@ -26,6 +27,9 @@ KOKKOS_INLINE_FUNCTION ivec<3> coord_to_ivec<3>(Coord<3> c) {
 template <class State, class FlatAtmos>
 void print_worst_wphi_entries(const State& state, const FlatAtmos& flatmos) {
     JasUnpack(state, wphi);
+    if (wphi.extent(0) == 0 || wphi.extent(1) == 0) {
+        return;
+    }
     const auto loop = FlatLoop<2>(wphi.extent(0), wphi.extent(1));
     typedef Kokkos::MaxLoc<fp_t, Kokkos::pair<i32, i32>> Reducer;
     typedef Reducer::value_type ReducerType;
@@ -200,23 +204,22 @@ void compute_profile_normalisation(const State3d& state, const CascadeState3d& c
     compute_profile_normalisation<3>(state, casc_state, print_worst_wphi);
 }
 
-void compute_profile_normalisation(const State& state, const Fp2d& mu, const Fp1d& wmu, bool print_worst_wphi) {
+void compute_profile_normalisation(const ScState& state, const Fp2d& mu, const Fp1d& wmu, bool print_worst_wphi) {
     const auto flatmos = flatten(state.atmos);
-    JasUnpack(state, adata, wphi, mr_block_map);
+    JasUnpack(state, adata, wphi);
     const auto& profile = state.phi;
     const auto& wavelength = adata.wavelength;
-    auto bounds = mr_block_map.block_map.loop_bounds();
     const int num_dirs = wmu.extent(0);
+    const auto cells = cell_list(state);
 
     dex_parallel_for(
         "Compute wphi (dir set)",
-        FlatLoop<3>(wphi.extent(0), bounds.dim(0), bounds.dim(1)),
-        YAKL_LAMBDA (int kr, i64 tile_idx, i32 block_idx) {
+        FlatLoop<2>(wphi.extent(0), cells.num()),
+        YAKL_LAMBDA(int kr, i64 ci) {
             using namespace ConstantsFP;
+            const i64 ks = cells(ci);
             fp_t entry = FP(0.0);
 
-            IdxGen idx_gen(mr_block_map);
-            i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
             const auto& line = adata.lines(kr);
 
             const fp_t temperature = flatmos.temperature(ks);
@@ -244,8 +247,7 @@ void compute_profile_normalisation(const State& state, const Fp2d& mu, const Fp1
             } else {
                 wphi.set(kr, ks, FP(1.0));
             }
-        }
-    );
+        });
     yakl::fence();
 
     if (print_worst_wphi) {

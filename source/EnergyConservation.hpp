@@ -4,9 +4,14 @@
 #include "Config.hpp"
 #include "Types.hpp"
 #include "State.hpp"
+#include "CellList.hpp"
 
 template <typename State>
 inline fp_t simple_conserve_energy(State* state) {
+    const auto cells = cell_list(*state);
+    if (cells.num() == 0 && (state->mpi_state.distributed || state->mpi_state.num_ranks == 1)) {
+        return FP(0.0);
+    }
     fp_t max_change;
     if (!state->atmos.e_int.initialized()) {
         throw std::runtime_error("Calling conserve_energy without providing e_int at launch!");
@@ -30,12 +35,14 @@ inline fp_t simple_conserve_energy(State* state) {
         constexpr fp_t max_frac_change = FP(0.2);
 
         auto flatmos = flatten<fp_t>(state->atmos);
-        Fp1d rel_change("temperature_rel_change", flatmos.nh_tot.extent(0));
-        yakl::Array<i32, 1, yakl::memDevice> limited("temperature_limited", flatmos.nh_tot.extent(0));
+        // NOTE(cmo): Per visited cell i (ks = cells(i)).
+        Fp1d rel_change("temperature_rel_change", cells.num());
+        yakl::Array<i32, 1, yakl::memDevice> limited("temperature_limited", cells.num());
         dex_parallel_for(
             "Compute correction",
-            FlatLoop<1>(flatmos.nh_tot.extent(0)),
-            YAKL_LAMBDA (i64 k) {
+            FlatLoop<1>(cells.num()),
+            YAKL_LAMBDA (i64 i) {
+                const i64 k = cells(i);
                 const fp_t temperature = flatmos.temperature(k);
                 const fp_t e_intk = flatmos.e_int(k);
                 fp_t e_ion = FP(0.0);
@@ -73,8 +80,8 @@ inline fp_t simple_conserve_energy(State* state) {
                     new_temperature = min_temperature;
                     was_limited = 1;
                 }
-                limited(k) = was_limited;
-                rel_change(k) = std::abs(FP(1.0) - new_temperature / temperature);
+                limited(i) = was_limited;
+                rel_change(i) = std::abs(FP(1.0) - new_temperature / temperature);
                 flatmos.temperature(k) = new_temperature;
 
                 // NOTE(cmo): Make pressure consistent (in case someone else uses it)

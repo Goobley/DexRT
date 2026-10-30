@@ -104,6 +104,9 @@ inline ModelAtom<T> parse_crtaf_model(
                 new_b.temperature_exponent = b["temperature_exponent"].as<T>();
                 new_b.hydrogen_exponent = b["hydrogen_exponent"].as<T>();
                 new_b.electron_exponent = b["electron_exponent"].as<T>();
+                if (b["elastic"]) {
+                    new_b.elastic = b["elastic"].as<bool>();
+                }
                 new_line.broadening.emplace_back(new_b);
             } else {
                 throw std::runtime_error(fmt::format("Got unexpected broadening type {}\n", type));

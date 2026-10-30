@@ -535,6 +535,12 @@ int main(int argc, char** argv) {
     std::optional<std::string> restart_path = program.present("--restart-from");
 
     const DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
+    if (!config.atmos_path.empty()) {
+        require_uniform_z(config.atmos_path);
+    }
+    if (config.boundary == BoundaryType::Thermalised) {
+        throw std::runtime_error("The Thermalised boundary is only supported by dexrt_sc.");
+    }
 
     Kokkos::initialize(argc, argv);
     yakl::init(

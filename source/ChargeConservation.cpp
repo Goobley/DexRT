@@ -1,4 +1,5 @@
 #include "ChargeConservation.hpp"
+#include "ScState.hpp"
 #include "State3d.hpp"
 #include "GammaMatrix.hpp"
 #include "Collisions.hpp"
@@ -9,6 +10,10 @@
 
 template <typename T=fp_t, typename State>
 fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostUpdateOptions()) {
+    const auto cells = cell_list(*state);
+    if (cells.num() == 0) {
+        return FP(0.0);
+    }
     yakl::timer_start("Charge conservation");
     JasUnpack(args, ignore_change_below_ntot_frac, conserve_pressure);
     JasUnpack((*state), atmos, nh_lte);
@@ -48,9 +53,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
 
     Kokkos::parallel_for(
         "Charge Conservation",
-        TeamPolicy(num_space, dex_team_size(std::min(square(num_eqn), 128))).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+        TeamPolicy(cells.num(), dex_team_size(std::min(square(num_eqn), 128))).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
         KOKKOS_LAMBDA (const KTeam& team) {
-            const i64 ks = team.league_rank();
+            const i64 ks = cells(team.league_rank());
 
             ScratchView<fp_t**> Ck(team.team_scratch(0), num_level, num_level);
             ScratchView<fp_t**> dCk(team.team_scratch(0), num_level, num_level);
@@ -312,8 +317,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
     ReductionVal max_change_loc;
     dex_parallel_reduce(
         "Update pops and compute max change",
-        FlatLoop<2>(num_space, num_eqn),
-        KOKKOS_LAMBDA (int ks, int i, ReductionVal& rval) {
+        FlatLoop<2>(cells.num(), num_eqn),
+        KOKKOS_LAMBDA (i64 ci, int i, ReductionVal& rval) {
+            const i64 ks = cells(ci);
             fp_t change = FP(0.0);
             fp_t step_size = FP(1.0);
 
@@ -350,7 +356,7 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
             // reduce update
             if (change > rval.val) {
                 rval.val = change;
-                rval.loc = Kokkos::make_pair(ks, i);
+                rval.loc = Kokkos::make_pair(int(ks), i);
             }
         },
         Reducer(max_change_loc)
@@ -361,8 +367,9 @@ fp_t nr_post_update_impl(State* state, const NrPostUpdateOptions& args = NrPostU
         const auto& full_pops = state->pops;
         dex_parallel_for(
             "Update and rescale pops (pressure)",
-            FlatLoop<1>(num_space),
-            KOKKOS_LAMBDA (i64 k) {
+            FlatLoop<1>(cells.num()),
+            KOKKOS_LAMBDA (i64 ci) {
+                const i64 k = cells(ci);
                 fp_t pops_sum = FP(0.0);
                 for (int i = 0; i < num_level; ++i) {
                     pops_sum += pops(i, k);
@@ -413,4 +420,5 @@ fp_t nr_post_update(State* state, const NrPostUpdateOptions& args) {
 }
 
 template fp_t nr_post_update<State>(State* state, const NrPostUpdateOptions& args);
+template fp_t nr_post_update<ScState>(ScState* state, const NrPostUpdateOptions& args);
 template fp_t nr_post_update<State3d>(State3d* state, const NrPostUpdateOptions& args);

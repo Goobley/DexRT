@@ -35,6 +35,15 @@ set(YAKL_DEFS "")
 if ("${DEXRT_USE_MPI}")
     set(YAKL_DEFS "${YAKL_DEFS} -DHAVE_MPI")
 endif()
+# NOTE(cmo): dexrt_sc's parallel output (output.io: Parallel) needs netCDF-4
+# built with parallel HDF5, against the same MPI.
+if ("${DEXRT_USE_MPI}")
+    execute_process(COMMAND nc-config --has-parallel4 OUTPUT_VARIABLE DEX_NC_PAR OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if ("${DEX_NC_PAR}" STREQUAL "yes")
+        set(YAKL_DEFS "${YAKL_DEFS} -DDEXRT_HAVE_NC_PAR")
+        message(STATUS "dexrt_sc: parallel netCDF output available")
+    endif()
+endif()
 if (${YAKL_AUTO_PROFILE})
     set(YAKL_DEFS "${YAKL_DEFS} -DYAKL_AUTO_PROFILE")
 endif()
@@ -54,6 +63,8 @@ if (${DEX_HALF_RADIATION_STORAGE})
 endif()
 
 list(APPEND DEX_2D_SOURCE_FILES
+    "source/ScCells.cpp"
+    "source/ScIo.cpp"
     "source/StaticFormalSolution.cpp"
     "source/DynamicFormalSolution.cpp"
     "source/CascadeState.cpp"
@@ -71,6 +82,7 @@ list(APPEND DEX_2D_SOURCE_FILES
     "source/BlockMap.cpp"
     "source/ProbesToCompute.cpp"
     "source/InitialPops.cpp"
+    "source/BackgroundOpacity.cpp"
 )
 list(APPEND DEX_SOURCE_FILES
     "source/main.cpp"
@@ -80,6 +92,33 @@ list(APPEND DEX_SOURCE_FILES
 list(APPEND DEX_RE_SOURCE_FILES
     "source/main_rad_eq.cpp"
     ${DEX_2D_SOURCE_FILES}
+)
+# NOTE(cmo): dexrt_sc and dexrt_sc_3d share every SC object but the main.
+list(APPEND DEX_SC_COMMON_SOURCE_FILES
+    "source/StateSetup.cpp"
+    "source/ScStateSetup.cpp"
+    "source/ScAngularQuadrature.cpp"
+    "source/ScRadiation.cpp"
+    "source/ScDecomposition.cpp"
+    "source/ScHalo.cpp"
+    "source/ScMediumCoefficients.cpp"
+    "source/ScDynamicScheduler.cpp"
+    "source/ScFormalSolution.cpp"
+    "source/ScFormal.cpp"
+    "source/ScMedium.cpp"
+    "source/ScPreparedGeometry.cpp"
+    "source/ScLongerFormal.cpp"
+    "source/ScBoundary.cpp"
+    "source/ScShortFormal.cpp"
+    "source/ScPrd.cpp"
+    ${DEX_2D_SOURCE_FILES}
+)
+list(APPEND DEX_SC_SOURCE_FILES
+    "source/ScMain.cpp"
+    ${DEX_SC_COMMON_SOURCE_FILES}
+)
+list(APPEND DEX_SC_3D_SOURCE_FILES
+    "source/ScMain3d.cpp"
 )
 list(APPEND DEX_3D_SOURCE_FILES
     "source/main_3d.cpp"
@@ -118,6 +157,17 @@ add_executable(dexrt
 add_executable(dexrt_rad_eq
     "${DEX_RE_SOURCE_FILES}"
 )
+add_library(dexrt_sc_common OBJECT
+    "${DEX_SC_COMMON_SOURCE_FILES}"
+)
+add_executable(dexrt_sc
+    "source/ScMain.cpp"
+    $<TARGET_OBJECTS:dexrt_sc_common>
+)
+add_executable(dexrt_sc_3d
+    "${DEX_SC_3D_SOURCE_FILES}"
+    $<TARGET_OBJECTS:dexrt_sc_common>
+)
 add_executable(dexrt_3d
     "${DEX_3D_SOURCE_FILES}"
 )
@@ -137,11 +187,15 @@ endif()
 # NOTE(cmo): Override language type for cuda, may need to do this for HIP too.
 set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_RE_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
+set_source_files_properties(${DEX_SC_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
+set_source_files_properties(${DEX_SC_3D_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_RAY_3D_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
 set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 set_source_files_properties(${DEX_RE_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
+set_source_files_properties(${DEX_SC_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
+set_source_files_properties(${DEX_SC_3D_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
 set_source_files_properties(${DEX_RAY_3D_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
@@ -154,12 +208,17 @@ if ("${DEX_ARCH}" STREQUAL "CUDA")
     endif()
     set_target_properties(dexrt PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
     set_target_properties(dexrt_rad_eq PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
+    foreach(target dexrt_sc_common dexrt_sc dexrt_sc_3d)
+        set_target_properties(${target} PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
+    endforeach()
     set_target_properties(dexrt_3d PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
     set_target_properties(dexrt_ray PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
     set_target_properties(dexrt_ray_3d PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
 
     set_source_files_properties(${DEX_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set_source_files_properties(${DEX_RE_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
+    set_source_files_properties(${DEX_SC_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
+    set_source_files_properties(${DEX_SC_3D_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set_source_files_properties(${DEX_3D_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set_source_files_properties(${DEX_RAY_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
     set_source_files_properties(${DEX_RAY_3D_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
@@ -222,6 +281,54 @@ set_target_properties(dexrt_rad_eq PROPERTIES
     COMPILE_FLAGS "${YAKL_DEFS} ${DEX_CXX_FLAGS}"
     LINK_FLAGS "${LDFLAGS}"
 )
+############## dexrt_sc, dexrt_sc_3d ##############
+foreach(target dexrt_sc_common dexrt_sc dexrt_sc_3d)
+    target_include_directories(${target} SYSTEM PUBLIC
+        "${GCC_INCLUDE_PATH}"
+        "${MPI_INCLUDE_PATH}"
+        "${NETCDF_INCLUDE_PATH}"
+        "${MAGMA_INCLUDE_PATH}"
+        "${CUDA_MATH_INCLUDE_PATH}"
+    )
+    target_link_libraries(${target} "${LDLIBS}")
+    target_link_libraries(${target} fmt::fmt)
+    target_link_libraries(${target} yaml-cpp::yaml-cpp)
+    target_link_libraries(${target} argparse)
+    target_link_libraries(${target} git_version)
+    target_link_libraries(${target} Kokkos::kokkos)
+    target_link_libraries(${target} yakl)
+    if (KokkosKernels_FOUND)
+        target_link_libraries(${target} Kokkos::kokkoskernels)
+    endif()
+    if (${DEXRT_USE_MPI})
+        target_include_directories(${target} SYSTEM PUBLIC ${MPI_CXX_INCLUDE_DIRS})
+        target_link_libraries(${target} MPI::MPI_CXX)
+        target_compile_definitions(${target} PUBLIC HAVE_MPI)
+    endif()
+
+    set_target_properties(${target} PROPERTIES
+        COMPILE_FLAGS "${YAKL_DEFS} ${DEX_CXX_FLAGS}"
+        LINK_FLAGS "${LDFLAGS}"
+    )
+    if (NOT "${DEX_ARCH}" STREQUAL "CUDA" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        # NOTE(cmo): Lets the per-cell group loops vectorise (FP exceptions and
+        # errno are never inspected).
+        target_compile_options(${target} PRIVATE -fno-trapping-math -fno-math-errno)
+    endif()
+endforeach()
+############## dexrt_sc_io_test (MPI builds) ##############
+if (${DEXRT_USE_MPI})
+    set_source_files_properties("tests/sc/sc_io_test.cpp" PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
+    add_executable(dexrt_sc_io_test "tests/sc/sc_io_test.cpp" "source/ScIo.cpp")
+    target_include_directories(dexrt_sc_io_test PUBLIC "source")
+    target_include_directories(dexrt_sc_io_test SYSTEM PUBLIC "${NETCDF_INCLUDE_PATH}" ${MPI_CXX_INCLUDE_DIRS})
+    target_link_libraries(dexrt_sc_io_test "${LDLIBS}" fmt::fmt yaml-cpp::yaml-cpp Kokkos::kokkos yakl MPI::MPI_CXX)
+    target_compile_definitions(dexrt_sc_io_test PUBLIC HAVE_MPI)
+    set_target_properties(dexrt_sc_io_test PROPERTIES COMPILE_FLAGS "${YAKL_DEFS} ${DEX_CXX_FLAGS}" LINK_FLAGS "${LDFLAGS}")
+    if ("${DEX_ARCH}" STREQUAL "CUDA")
+        set_target_properties(dexrt_sc_io_test PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
+    endif()
+endif()
 ############## dexrt_3d ##############
 target_include_directories(dexrt_3d SYSTEM PUBLIC
     "${GCC_INCLUDE_PATH}"

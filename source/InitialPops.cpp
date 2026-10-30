@@ -1,4 +1,5 @@
 #include "InitialPops.hpp"
+#include "ScState.hpp"
 #include "Types.hpp"
 #include "EmisOpac.hpp"
 #include "Populations.hpp"
@@ -19,7 +20,7 @@ void set_zero_radiation_pops(State* st, int atom) {
     const int cont_start = state.adata_host.cont_start(atom);
     const int num_cont = state.adata_host.num_cont(atom);
     const int num_wave = state.adata_host.wavelength.extent(0);
-    const i64 num_space = precon_R.extent(2);
+    const auto cells = cell_list(state);
     const auto& wavelength = adata.wavelength;
     const auto& temperature = state.atmos.temperature;
     const auto& ne = state.atmos.ne;
@@ -27,8 +28,9 @@ void set_zero_radiation_pops(State* st, int atom) {
 
     dex_parallel_for(
         "Zero radiation initialisation: Lines",
-        FlatLoop<1>(num_space),
-        KOKKOS_LAMBDA (i64 ks) {
+        FlatLoop<1>(cells.num()),
+        KOKKOS_LAMBDA (i64 ci) {
+            const i64 ks = cells(ci);
             for (int kr = line_start; kr < line_start + num_line; ++kr) {
                 const auto& line = adata.lines(kr);
                 precon_R(kr - line_start, PRECON_R_DOWN, ks) += line.Aji;
@@ -37,8 +39,9 @@ void set_zero_radiation_pops(State* st, int atom) {
     );
     dex_parallel_for(
         "Zero radiation initialisation: Continua",
-        FlatLoop<2>(num_wave, num_space),
-        KOKKOS_LAMBDA (i32 la, i64 ks) {
+        FlatLoop<2>(num_wave, cells.num()),
+        KOKKOS_LAMBDA (i32 la, i64 ci) {
+            const i64 ks = cells(ci);
             using namespace ConstantsFP;
             constexpr fp_t debroglie_const = fp_t(h / (FP(2.0) * pi * k_B) * (h / m_e));
             const fp_t temperature_k = temperature(ks);
@@ -100,4 +103,5 @@ void set_initial_pops_special(State* state) {
 }
 
 template void set_initial_pops_special<State>(State* state);
+template void set_initial_pops_special<ScState>(ScState* state);
 template void set_initial_pops_special<State3d>(State3d* state);

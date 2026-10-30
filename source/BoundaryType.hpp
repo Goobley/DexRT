@@ -4,6 +4,7 @@
 enum class BoundaryType {
     Zero,
     Promweaver,
+    Thermalised, /// dexrt_sc only: B(T) of the bottom row into the bottom face
 };
 
 #else

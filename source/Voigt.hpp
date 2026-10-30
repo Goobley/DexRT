@@ -5,6 +5,8 @@
 #include "MortonCodes.hpp"
 #include "Utils.hpp"
 #include <fmt/core.h>
+#include <bit>
+#include <limits>
 
 #define FPT(X) T(FP(X))
 // NOTE(cmo): The complex in Kokkos is much slower because of the branch in operator/.
@@ -259,13 +261,6 @@ YAKL_INLINE DexComplex<T> humlicek_wei24_voigt(T a, T v) {
 #undef FPT
 
 namespace DexVoigtDetail {
-    template <typename T>
-    struct Linspace {
-        T min;
-        T max;
-        i32 n;
-    };
-
     template <typename T=fp_t, bool Complex=true>
     struct ComplexOrReal {
         static YAKL_INLINE
@@ -283,127 +278,183 @@ namespace DexVoigtDetail {
     };
 }
 
-template <typename T=fp_t, bool Complex=false, int mem_space=yakl::memDevice, bool USE_LUT=false>
+// NOTE(cmo): The lookup table is a win on CPU, where the Voigt evaluation is a
+// large share of the runtime; on GPU the direct evaluation is cheap enough.
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP) || defined(KOKKOS_ENABLE_SYCL)
+constexpr bool DEX_VOIGT_LUT = false;
+#define DEX_HOST_SIMD
+#else
+constexpr bool DEX_VOIGT_LUT = true;
+/// Vectorise a loop on host backends.
+#define DEX_HOST_SIMD _Pragma("omp simd")
+#endif
+
+/// Real Voigt lookup table bounds. a is sampled at 0, then from 2^a_min_log2
+/// up to a_max at the floats with only the top a_mantissa_bits of mantissa set
+/// (2^e (1 + m / 2^bits), so the index comes straight from a's bits); |v|
+/// uniformly up to v_max. Max relative error ~4e-4 vs wei24. For a + |v| >=
+/// v_max wei24's Region I (a single rational term) is used. a_max >= v_max, so
+/// the lookup is branch-free (vectorises).
+struct VoigtLutParams {
+    i32 a_min_log2 = -14;
+    f64 a_max = 16.0;
+    i32 a_mantissa_bits = 4;
+    f64 v_max = 15.0;
+    f64 v_step = 0.005;
+};
+
+template <typename T=fp_t, bool Complex=false, int mem_space=yakl::memDevice, bool USE_LUT=DEX_VOIGT_LUT && !Complex>
 struct VoigtProfile {
-    /// Voigt function interpolator (if USE_LUT = true), otherwise using humlicek_wei24_voigt direct evaluation.
-    /// Assumes a and v are linearly interpolated on linspaces, so
-    /// these are implicit, rather than stored.
-    /// For non-complex voigt, expects min v to be 0, as it is symmetric around this.
-    /// Return value clamped to domain if sampled outside.
-    using Linspace = DexVoigtDetail::Linspace<T>;
+    /// Voigt function: a bilinear lookup table (if USE_LUT = true, real only),
+    /// otherwise humlicek_wei24_voigt direct evaluation.
     typedef std::conditional_t<Complex, DexComplex<T>, T> Voigt_t;
-    Linspace a_range;
-    T a_step;
-    Linspace v_range;
-    T v_step;
-    yakl::Array<Voigt_t const, 2, mem_space> samples;
+    typedef std::conditional_t<sizeof(T) == 4, u32, u64> Bits_t;
+    static constexpr i32 MANTISSA_DIGITS = std::numeric_limits<T>::digits - 1;
+    static_assert(!(USE_LUT && Complex), "The Voigt LUT is only for the real profile");
+    T a_min;
+    i32 a_shift;
+    Bits_t a_key_min;
+    Bits_t a_key_last; /// key of the last lower node
+    T v_max;
+    T inv_v_step;
+    T v_frac_last; /// v / v_step of the last lower node
+    yakl::Array<T const, 2, mem_space> samples; /// [a, v]
 
     VoigtProfile() {};
-    VoigtProfile(Linspace _a_range, Linspace _v_range) :
-        a_range(_a_range),
-        v_range(_v_range)
-    {
-        if constexpr (!USE_LUT) {
-            return;
+
+    /// Construct (and for the LUT, fill the table).
+    static VoigtProfile make(const VoigtLutParams& p = VoigtLutParams{}) {
+        VoigtProfile result;
+        if constexpr (USE_LUT) {
+            result.fill(p);
         }
-        a_step = (a_range.max - a_range.min) / T(a_range.n - 1);
-        v_step = (v_range.max - v_range.min) / T(v_range.n - 1);
-        // NOTE(cmo): Fill table
-        compute_samples();
-    }
-
-
-    void compute_samples() {
-        if constexpr (!USE_LUT) {
-            throw std::runtime_error("No samples to compute: not using LUT for Voigt");
-        }
-        // NOTE(cmo): Allocate storage
-        yakl::Array<Voigt_t, 2, mem_space> mut_samples("Voigt Samples", a_range.n, v_range.n);
-
-        auto voigt_sample = YAKL_CLASS_LAMBDA (int ia, int iv) {
-            T a = a_range.min + ia * a_step;
-            T v = v_range.min + iv * v_step;
-            auto sample = humlicek_voigt(a, v);
-            return sample;
-        };
-
-        // NOTE(cmo): Compute storage
-        // Man, C++ makes this a pain sometimes... unless I'm just being an idiot.
-        using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
-        if constexpr (mem_space == yakl::memDevice) {
-            dex_parallel_for(
-                "compute voigt",
-                FlatLoop<2>(a_range.n, v_range.n),
-                YAKL_LAMBDA (int ia, int iv) {
-                    const auto sample = voigt_sample(ia, iv);
-                    mut_samples(ia, iv) = result_t::value(sample);
-                }
-            );
-        } else {
-            for (int ia = 0; ia < a_range.n; ++ia) {
-                for (int iv = 0; iv < v_range.n; ++iv) {
-                    mut_samples(ia, iv) = result_t::value(voigt_sample(ia, iv));
-                }
-            }
-        }
-        samples = mut_samples;
-    }
-
-    /// Simple clamped bilinear lookup
-    template <bool InnerUseLut = USE_LUT, std::enable_if_t<InnerUseLut, bool> = true>
-    YAKL_INLINE Voigt_t operator()(T a, T v) const {
-        if constexpr (!Complex) {
-            v = std::abs(v);
-        }
-        T frac_a = (a - a_range.min) / a_step;
-        // NOTE(cmo): p suffix for term at idx + 1
-        int ia = int(std::floor(frac_a));
-        int iap;
-        T ta, tap;
-
-        const i32 max_a = a_range.n - 1;
-        const i32 max_v = v_range.n - 1;
-        if (frac_a < FP(0.0) || frac_a >= (a_range.n - 1)) {
-            ia = std::min(std::max(ia, 0), a_range.n - 1);
-            iap = ia;
-            ta = FP(1.0);
-            tap = FP(0.0);
-        } else {
-            iap = ia + 1;
-            tap = frac_a - ia;
-            ta = FP(1.0) - tap;
-        }
-
-        T frac_v = (v - v_range.min) / v_step;
-        int iv = int(std::floor(frac_v));
-        int ivp;
-        T tv, tvp;
-
-        if (frac_v < FP(0.0) || frac_v >= (v_range.n - 1)) {
-            iv = std::min(std::max(iv, 0), v_range.n - 1);
-            ivp = iv;
-            tv = FP(1.0);
-            tvp = FP(0.0);
-        } else {
-            ivp = iv + 1;
-            tvp = frac_v - iv;
-            tv = FP(1.0) - tvp;
-        }
-
-        Voigt_t result = (
-            ta * (tv * samples(ia, iv) + tvp * samples(ia, ivp)) +
-            tap * (tv * samples(iap, iv) + tvp * samples(iap, ivp))
-        );
-
         return result;
     }
 
-    template <bool InnerUseLut = USE_LUT, std::enable_if_t<!InnerUseLut, bool> = true>
+    /// a at node ia (> 0).
+    YAKL_INLINE T a_node(Bits_t key) const {
+        return std::bit_cast<T>(Bits_t(key << a_shift));
+    }
+
+    void fill(const VoigtLutParams& p) {
+        if (p.a_max < p.v_max) {
+            throw std::runtime_error("Voigt LUT: a_max must be >= v_max");
+        }
+        a_min = std::ldexp(T(1.0), p.a_min_log2);
+        a_shift = MANTISSA_DIGITS - p.a_mantissa_bits;
+        a_key_min = std::bit_cast<Bits_t>(a_min) >> a_shift;
+        const Bits_t a_key_max = std::bit_cast<Bits_t>(T(p.a_max)) >> a_shift;
+        a_key_last = a_key_max;
+        const i32 num_a = i32(a_key_max - a_key_min) + 3;
+        const i32 num_v = i32(std::ceil(p.v_max / p.v_step)) + 2;
+        v_frac_last = T(num_v - 2);
+        yakl::Array<T, 2, yakl::memHost> s_host("Voigt LUT", num_a, num_v);
+        for (int ia = 0; ia < num_a; ++ia) {
+            const f64 a = (ia == 0) ? 0.0 : f64(a_node(a_key_min + ia - 1));
+            for (int iv = 0; iv < num_v; ++iv) {
+                s_host(ia, iv) = T(humlicek_wei24_voigt<f64>(a, iv * p.v_step).real());
+            }
+        }
+        v_max = T(p.v_max);
+        inv_v_step = T(1.0 / p.v_step);
+        if constexpr (mem_space == yakl::memDevice) {
+            samples = s_host.createDeviceCopy();
+        } else {
+            samples = s_host;
+        }
+    }
+
+    /// The table lookup (USE_LUT) of H(a, v) for N pairs (v >= 0) into out.
+    /// Vector passes for the indices/weights and the interpolation, around a
+    /// scalar fetch (gathers are slow, and disabled, on recent Intel); the
+    /// members are copied to locals so nothing is loaded conditionally.
+    template <int N>
+    YAKL_INLINE void lookup(const T* a_in, const T* v_in, T* out, int n = N) const {
+        const T* __restrict table = samples.data();
+        const i32 stride = samples.extent(1);
+        const T a_min_ = a_min;
+        const i32 a_shift_ = a_shift;
+        const Bits_t a_key_min_ = a_key_min;
+        const Bits_t a_key_last_ = a_key_last;
+        const T v_max_ = v_max;
+        const T inv_v_step_ = inv_v_step;
+        const T v_frac_last_ = v_frac_last;
+        i32 offset[N];
+        T ta[N];
+        T tv[N];
+        T region_1[N];
+        i32 in_table[N];
+        DEX_HOST_SIMD
+        for (int i = 0; i < n; ++i) {
+            const T a = a_in[i];
+            const T v = v_in[i];
+            // NOTE(cmo): Both the table and Region I are evaluated, then
+            // selected; indices are clamped for the Region I lanes.
+            const T a2 = a * a;
+            const T v2 = v * v;
+            const T dr = T(0.5) + a2 - v2;
+            region_1[i] = T(0.5641896) * a * (T(0.5) + a2 + v2) / (dr * dr + T(4.0) * a2 * v2);
+            in_table[i] = (a + v < v_max_) ? 1 : 0;
+
+            // NOTE(cmo): Node 0 is a = 0, then node 1 + k is key a_key_min + k.
+            const bool small = a < a_min_;
+            const Bits_t raw = std::bit_cast<Bits_t>(a) >> a_shift_;
+            const Bits_t key = small ? Bits_t(a_key_min_ - 1) : (raw < a_key_last_ ? raw : a_key_last_);
+            const T a0 = small ? T(0.0) : std::bit_cast<T>(Bits_t(key << a_shift_));
+            const T a1 = std::bit_cast<T>(Bits_t((key + 1) << a_shift_));
+            ta[i] = (a - a0) / (a1 - a0);
+            const T fv_raw = v * inv_v_step_;
+            const T fv = (fv_raw < v_frac_last_) ? fv_raw : v_frac_last_;
+            const i32 iv = i32(fv);
+            tv[i] = fv - T(iv);
+            offset[i] = (1 + i32(key - a_key_min_)) * stride + iv;
+        }
+        T t00[N];
+        T t01[N];
+        T t10[N];
+        T t11[N];
+        for (int i = 0; i < n; ++i) {
+            const T* row = table + offset[i];
+            t00[i] = row[0];
+            t01[i] = row[1];
+            t10[i] = row[stride];
+            t11[i] = row[stride + 1];
+        }
+        DEX_HOST_SIMD
+        for (int i = 0; i < n; ++i) {
+            const T lo = t00[i] + tv[i] * (t01[i] - t00[i]);
+            const T hi = t10[i] + tv[i] * (t11[i] - t10[i]);
+            const T result = lo + ta[i] * (hi - lo);
+            out[i] = (in_table[i] != 0) ? result : region_1[i];
+        }
+    }
+
+    /// operator() for N (a, v) pairs into out (vectorises on CPU).
+    template <int N>
+    YAKL_INLINE void eval(const T* a, const T* v, Voigt_t* out, int n = N) const {
+        if constexpr (USE_LUT) {
+            T v_abs[N];
+            for (int i = 0; i < n; ++i) {
+                v_abs[i] = std::abs(v[i]);
+            }
+            lookup<N>(a, v_abs, out, n);
+        } else {
+            for (int i = 0; i < n; ++i) {
+                out[i] = (*this)(a[i], v[i]);
+            }
+        }
+    }
+
     YAKL_INLINE Voigt_t operator()(T a, T v) const {
         if constexpr (!Complex) {
             v = std::abs(v);
         }
         using result_t = DexVoigtDetail::ComplexOrReal<T, Complex>;
+        if constexpr (USE_LUT) {
+            T result;
+            lookup<1>(&a, &v, &result);
+            return result;
+        }
         return result_t::value(humlicek_wei24_voigt(a, v));
     }
 };

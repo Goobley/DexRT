@@ -15,6 +15,14 @@
 /// traditional He-only value.
 constexpr fp_t DEFAULT_TOTAL_ABUND = FP(1.0861550335264554);
 
+/// dexrt_sc file I/O (ScIo.hpp).
+enum class ScIoBackend {
+    Auto, /// Parallel if available
+    Gather, /// rank 0 alone has the file open, chunks are streamed to/from it
+    Parallel /// collective netCDF-4/HDF5 (MPI-IO) writes
+};
+constexpr const char* ScIoBackendNames[] = {"Auto", "Gather", "Parallel"};
+
 struct DexrtOutputConfig {
     bool sparse = false;
     bool wavelength = true;
@@ -34,6 +42,10 @@ struct DexrtOutputConfig {
     bool collisional_rates = false;
     /// Energy absorbed/emitted by each continuum transition [kW m-3]
     bool cont_energy_balance = false;
+    /// dexrt_sc_3d: the emergent intensity [la, dir, y, x] (always written in 2D)
+    bool sc_emergent = false;
+    /// dexrt_sc: how output is written
+    ScIoBackend io = ScIoBackend::Auto;
     std::vector<int> cascades;
 };
 
@@ -63,6 +75,8 @@ struct DexrtConfig {
     std::string atmos_path;
     std::string output_path;
     std::string initial_pops_path;
+    /// Background opacity tables (dexrt.background_tables), empty for none.
+    std::string background_path;
     DexrtOutputConfig output;
     std::vector<std::string> atom_paths;
     std::vector<ModelAtomConfig> atom_configs;
@@ -153,6 +167,8 @@ inline void parse_extra_lte(DexrtConfig* cfg, const YAML::Node& file) {
             config.boundary = BoundaryType::Zero;
         } else if (mode == "Promweaver") {
             config.boundary = BoundaryType::Promweaver;
+        } else if (mode == "Thermalised") {
+            config.boundary = BoundaryType::Thermalised;
         } else {
             throw std::runtime_error(fmt::format("Unexpected boundary condition type: {}", mode));
         }
@@ -271,6 +287,22 @@ inline void parse_and_update_dexrt_output_config(DexrtConfig* cfg, const YAML::N
     }
     if (output["cont_energy_balance"]) {
         out.cont_energy_balance = output["cont_energy_balance"].as<bool>();
+    }
+    if (output["sc_emergent"]) {
+        out.sc_emergent = output["sc_emergent"].as<bool>();
+    }
+    if (output["io"]) {
+        const std::string io = output["io"].as<std::string>();
+        bool found = false;
+        for (int i = 0; i < 3; ++i) {
+            if (io == ScIoBackendNames[i]) {
+                out.io = ScIoBackend(i);
+                found = true;
+            }
+        }
+        if (!found) {
+            throw std::runtime_error(fmt::format("Unknown output.io {} (Auto, Gather or Parallel)", io));
+        }
     }
     if (output["cascades"]) {
         for (const auto& c : output["cascades"]) {
@@ -430,6 +462,9 @@ inline DexrtConfig parse_dexrt_config(const std::string& path, YAML::Node& file)
     }
     if (file["initial_pops_path"]) {
         config.initial_pops_path = file["initial_pops_path"].as<std::string>();
+    }
+    if (file["background_path"]) {
+        config.background_path = file["background_path"].as<std::string>();
     }
     if (file["mode"]) {
         std::string mode = file["mode"].as<std::string>();

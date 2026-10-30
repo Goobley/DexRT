@@ -71,10 +71,7 @@ TEST_CASE( "Test Emis Opac LTE CaII", "[emis_opac]" ) {
         }
         yakl::Array<int, 1, yakl::memDevice> las = wave_idxs.createDeviceCopy();
 
-        VoigtProfile<fp_t> profile(
-            VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.1), 1024},
-            VoigtProfile<fp_t>::Linspace{FP(0.0), FP(1.5e3), 64 * 1024}
-        ); // 256 MB
+        auto profile = VoigtProfile<fp_t>::make();
 
         Fp1d eta("eta", las.extent(0));
         Fp1d chi("chi", las.extent(0));

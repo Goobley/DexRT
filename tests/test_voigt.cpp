@@ -36,43 +36,35 @@ TEST_CASE("Test Voigt Impl", "[test_voigt]") {
 
 TEST_CASE("Voigt Interp", "[voigt_interp]") {
     {
-        VoigtProfile<fp_t, false, yakl::memDevice, true> prof(
-            VoigtProfile<fp_t>::Linspace{FP(0.0), FP(10.0), 11},
-            VoigtProfile<fp_t>::Linspace{FP(-20.0), FP(20.0), 11}
-        );
-
-        Fp2d samples("samples", 10, 10);
+        // NOTE(cmo): LUT against direct evaluation, inside and outside the table.
+        auto prof = VoigtProfile<fp_t, false, yakl::memDevice, true>::make();
+        constexpr int n_samples = 4096;
+        Fp1d samples("samples", n_samples);
+        Fp1d a_s("a", n_samples);
+        Fp1d v_s("v", n_samples);
         dex_parallel_for(
-            FlatLoop<1>(1),
-            YAKL_LAMBDA (int _) {
-                constexpr f32 as[] = {FP(0.0), FP(1.0), FP(1.5), FP(2.0), FP(3.8)};
-                constexpr f32 vs[] = {FP(0.0), FP(2.0), FP(3.0), FP(4.0), FP(-11.4)};
-
-                for (int ia = 0; ia < sizeof(as) / sizeof(as[0]); ++ia) {
-                    for (int iv = 0; iv < sizeof(vs) / sizeof(vs[0]);  ++iv) {
-                        fp_t a = as[ia];
-                        fp_t v = vs[iv];
-                        samples(ia, iv) = prof(a, v);
-                    }
-                }
+            FlatLoop<1>(n_samples),
+            YAKL_LAMBDA (int i) {
+                // NOTE(cmo): a log-uniform in [1e-6, 4], v in [-25, 25]
+                const fp_t fa = fp_t((i * 37) % 4096) / FP(4096.0);
+                const fp_t fv = fp_t((i * 1031) % 4096) / FP(4096.0);
+                const fp_t a = FP(1e-6) * std::pow(FP(4e6), fa);
+                const fp_t v = FP(50.0) * fv - FP(25.0);
+                a_s(i) = a;
+                v_s(i) = v;
+                samples(i) = prof(a, v);
             }
         );
-        Fp2dHost test = samples.createHostCopy();
+        auto test = samples.createHostCopy();
+        auto a_h = a_s.createHostCopy();
+        auto v_h = v_s.createHostCopy();
+        for (int i = 0; i < n_samples; ++i) {
+            const f64 expected = humlicek_wei24_voigt<f64>(f64(a_h(i)), f64(v_h(i))).real();
+            CAPTURE(a_h(i), v_h(i));
+            REQUIRE_THAT(test(i), WithinRel(fp_t(expected), FP(1e-3)));
+        }
 
-        // NOTE(cmo): Test grid directly, with complex (Voigt-Faraday)
-        REQUIRE_THAT(test(0, 0), WithinRel(humlicek_voigt(FP(0.0), FP(0.0)).real(), FP(1e-6)));
-        REQUIRE_THAT(test(1, 3), WithinRel(humlicek_voigt(FP(1.0), FP(4.0)).real(), FP(1e-6)));
-        fp_t sample_a = humlicek_voigt(FP(1.0), FP(4.0)).real();
-        fp_t sample_b = humlicek_voigt(FP(2.0), FP(4.0)).real();
-        REQUIRE_THAT(test(2, 3), WithinRel(FP(0.5) * (sample_a + sample_b), FP(1e-6)));
-        // NOTE(cmo): The grid is a bit coarse for accuracy, but it gets better if the grid is ramped up.
-        REQUIRE_THAT(test(4, 4), WithinRel(humlicek_voigt(FP(3.8), FP(-11.4)).real(), FP(1e-1)));
-
-        VoigtProfile<f64, true, yakl::memDevice, true> complex_prof(
-            VoigtProfile<f64>::Linspace{0.0, 15.0, 11},
-            VoigtProfile<f64>::Linspace{-600.0, 600.0, 11}
-        );
-
+        VoigtProfile<f64, true, yakl::memDevice, false> complex_prof = VoigtProfile<f64, true, yakl::memDevice, false>::make();
         yakl::Array<decltype(complex_prof)::Voigt_t, 2, yakl::memDevice> complex_dev("complex samples", n_a, n_v);
         yakl::Array<f64, 1, yakl::memHost> as("as", n_a);
         yakl::Array<f64, 1, yakl::memHost> vs("vs", n_v);
@@ -98,10 +90,19 @@ TEST_CASE("Voigt Interp", "[voigt_interp]") {
             }
         }
 
-        VoigtProfile<fp_t, false, yakl::memHost, false> prof_cpu(
-            VoigtProfile<fp_t>::Linspace{FP(0.0), FP(10.0), 101},
-            VoigtProfile<fp_t>::Linspace{FP(-20.0), FP(20.0), 101}
-        );
+        auto prof_cpu = VoigtProfile<fp_t, false, yakl::memHost, false>::make();
         REQUIRE_THAT(prof_cpu(FP(1.0), FP(2.0)), WithinRel(humlicek_wei24_voigt(FP(1.0), FP(2.0)).real(), FP(1e-2)));
     }
+}
+
+TEST_CASE("Voigt grouped evaluation reads only the valid prefix", "[voigt][sc]") {
+    auto profile = VoigtProfile<fp_t, false>::make();
+    fp_t a[4] = {FP(0.01), FP(0.2), FP(0.0), FP(0.0)};
+    fp_t v[4] = {FP(1.0), FP(2.0), FP(0.0), FP(0.0)};
+    fp_t result[4] = {FP(-1.0), FP(-1.0), FP(-1.0), FP(-1.0)};
+    profile.template eval<4>(a, v, result, 2);
+    REQUIRE(result[0] == profile(a[0], v[0]));
+    REQUIRE(result[1] == profile(a[1], v[1]));
+    REQUIRE(result[2] == FP(-1.0));
+    REQUIRE(result[3] == FP(-1.0));
 }

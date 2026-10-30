@@ -174,7 +174,15 @@ namespace DexImpl {
     constexpr int CudaVecLen = 128;
     template <int N, class Lambda>
     __global__ __launch_bounds__(CudaVecLen)
-    void flat_loop_kernel(const FlatLoop<N> loop, const Lambda closure) {
+    void flat_loop_kernel(const FlatLoop<N> loop,
+#if defined(KOKKOS_ENABLE_CUDA) && defined(__CUDACC_VER_MAJOR__) && __CUDACC_VER_MAJOR__ >= 12
+        // Keep borrowed references to captures in grid-lifetime parameter
+        // storage; otherwise CUDA may copy the whole closure to each stack.
+        const __grid_constant__ Lambda closure
+#else
+        const Lambda closure
+#endif
+    ) {
         i64 idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx < loop.num_iter) {
             auto idxs = loop.unpack(idx);
@@ -208,6 +216,18 @@ inline int dex_team_size(int requested) {
         return 1;
     }
     return requested;
+}
+
+/// Add v into a location several threads may update: atomic on device, a
+/// plain add on host, where the location must belong to one team (host teams
+/// have one thread, dex_team_size).
+template <class T, class ExecutionSpace=Kokkos::DefaultExecutionSpace>
+YAKL_INLINE void dex_team_add(T* loc, T v) {
+    if constexpr (dex_is_host_space<ExecutionSpace>) {
+        *loc += v;
+    } else {
+        Kokkos::atomic_add(loc, v);
+    }
 }
 
 template <class ExecutionSpace=Kokkos::DefaultExecutionSpace, bool DexFlatLoop=true, int N, class Lambda>

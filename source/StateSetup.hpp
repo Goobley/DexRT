@@ -4,22 +4,24 @@
 #include "Types.hpp"
 #include "State.hpp"
 #include "DexrtConfig.hpp"
+#include "Populations.hpp"
 #include <string>
 
-/// Solver-independent State setup and I/O shared between the 2D executables.
+/// RC State setup and I/O, and the setup shared with ScState.
+
+/// Loads the atoms: adata, and the atoms with a Gamma and their mapping.
+template <typename StateT>
+void init_atomic_data(StateT* st, const DexrtConfig& config);
+/// Allocates pops (and precon_R, rate diagnostics, wphi if non-LTE) over the
+/// loaded atmosphere, and loads the boundary and background.
+template <typename StateT>
+void init_atom_storage(StateT* st, const DexrtConfig& config);
 
 void allocate_J(State* state);
 void allocate_rad_loss(State* state);
-/// Rows [z_start, z_end) of the atmosphere (e.g. one rank's slab).
-struct AtmosZWindow {
-    i32 z_start;
-    i32 z_end;
-};
-
 /// Loads atoms and atmosphere (sparsified with max_mip_level from config), and
-/// allocates pops/Gamma/wphi/bcs. Returns the C0 ray configuration for RC. With
-/// a window, only those rows of the (dense) atmosphere are loaded.
-CascadeRays init_atmos_atoms(State* st, const DexrtConfig& config, const AtmosZWindow* window = nullptr);
+/// allocates pops/precon_R/wphi/bcs. Returns the C0 ray configuration.
+CascadeRays init_atmos_atoms(State* st, const DexrtConfig& config);
 /// Loads eta/chi for DexrtMode::GivenFs.
 CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config);
 

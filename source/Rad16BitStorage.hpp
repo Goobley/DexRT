@@ -94,6 +94,21 @@ struct Rad16ArrayT {
         });
         Kokkos::fence();
     }
+    /// An fp_t copy.
+    Fp2d to_fp() const requires (Mem == yakl::memDevice) {
+        Fp2d out("rad16_fp", extent(0), extent(1));
+        const Rad16ArrayT self = *this;
+        dex_parallel_for("Radiation to fp", FlatLoop<2>(extent(0), extent(1)), YAKL_LAMBDA(i64 r, i64 k) {
+            out(r, k) = self(r, k);
+        });
+        Kokkos::fence();
+        return out;
+    }
+    static Rad16ArrayT from_fp(const Fp2d& a) requires (Mem == yakl::memDevice) {
+        Rad16ArrayT out("rad16", a.extent(0), a.extent(1));
+        out.store_rows(0, a, a.extent(0));
+        return out;
+    }
     /// Rows [row_start, row_start + num_rows) as fp_t.
     Fp2dHost decode_rows(i64 row_start, i64 num_rows) const requires (Mem == yakl::memHost) {
         Fp2dHost out("rad16_decoded", num_rows, extent(1));

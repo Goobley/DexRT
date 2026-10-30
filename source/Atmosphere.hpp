@@ -6,6 +6,59 @@
 #include <string>
 #include "YAKL_netcdf.h"
 #include "JasPP.hpp"
+#include <vector>
+#include <cmath>
+#include <stdexcept>
+#include <fmt/core.h>
+
+/// The optional "z" variable of an atmosphere (or GivenFs) file: cell-centre
+/// heights [m], increasing upwards. Empty if absent.
+inline std::vector<f64> read_z_coord(const std::string& path) {
+    int ncid;
+    if (nc_open(path.c_str(), NC_NOWRITE, &ncid) != NC_NOERR) {
+        throw std::runtime_error(fmt::format("Unable to open {}", path));
+    }
+    std::vector<f64> z;
+    int varid;
+    if (nc_inq_varid(ncid, "z", &varid) == NC_NOERR) {
+        int ndims;
+        int dimid;
+        nc_inq_varndims(ncid, varid, &ndims);
+        if (ndims != 1) {
+            nc_close(ncid);
+            throw std::runtime_error(fmt::format("\"z\" in {} must be 1D (cell-centre heights)", path));
+        }
+        nc_inq_vardimid(ncid, varid, &dimid);
+        size_t len;
+        nc_inq_dimlen(ncid, dimid, &len);
+        z.resize(len);
+        nc_get_var_double(ncid, varid, z.data());
+    }
+    nc_close(ncid);
+    return z;
+}
+
+/// Whether heights z are uniformly spaced (to a relative tolerance).
+inline bool z_coord_is_uniform(const std::vector<f64>& z, f64 rtol = 1e-5) {
+    if (z.size() < 3) {
+        return true;
+    }
+    const f64 dz = (z.back() - z.front()) / f64(z.size() - 1);
+    for (size_t k = 1; k < z.size(); ++k) {
+        if (std::abs((z[k] - z[k - 1]) - dz) > rtol * std::abs(dz)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The RC solvers assume cubic voxels (voxel_scale): refuse a non-uniform z
+/// grid (only supported by dexrt_sc).
+inline void require_uniform_z(const std::string& path) {
+    if (!z_coord_is_uniform(read_z_coord(path))) {
+        throw std::runtime_error(fmt::format("{} has a non-uniform z grid, which is only supported by dexrt_sc", path));
+    }
+}
 
 inline Atmosphere load_atmos(const std::string& path) {
     typedef yakl::Array<f32, 1, yakl::memHost> Fp1dLoad;

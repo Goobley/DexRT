@@ -12,11 +12,11 @@
 
 struct CascadeState;
 struct CascadeState3d;
+struct ScState;
 
 void compute_profile_normalisation(const State& state, const CascadeState& casc_state, bool print_worst_wphi=true);
 void compute_profile_normalisation(const State3d& state, const CascadeState3d& casc_state, bool print_worst_wphi=true);
-/// Compute wphi for a provided quadrature
-void compute_profile_normalisation(const State& state, const Fp2d& mu, const Fp1d& wmu, bool print_worst_wphi=true);
+void compute_profile_normalisation(const ScState& state, const Fp2d& mu, const Fp1d& wmu, bool print_worst_wphi=true);
 
 #else
 #endif

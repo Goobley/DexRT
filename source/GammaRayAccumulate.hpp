@@ -59,6 +59,12 @@ struct GammaStaticSums {
     CompensatedSum eta;
     CompensatedSum chi;
     fp_t chi_neg = FP(0.0); /// sum of |chi| of the negative components -- used to keep psi* stable by dividing by sum |chi| = chi.value() + 2 * chi_neg
+    YAKL_INLINE void add(const EmisOpac& coefficients) {
+        eta.add(coefficients.eta);
+        chi.add(coefficients.chi);
+        chi_neg += std::max(-coefficients.chi, FP(0.0));
+    }
+
 };
 
 /// Data common to the different rays of a cell to build Gamma
@@ -92,6 +98,19 @@ struct GammaRayDerived {
     fp_t I;
     EmisOpac lines;
 };
+
+/// Common RC/SC guarded response recovery. The split complement is evaluated
+/// by the formal solver; subtraction here is only for the preconditioner.
+/// chi_neg is the sum of magnitudes of negative components, not |net chi|.
+YAKL_INLINE GammaRayDerived gamma_recover_response(const GammaRay& ray,
+    const CompensatedSum& eta_total, const CompensatedSum& chi_total, fp_t chi_neg) {
+    const fp_t alo = std::min(std::max(FP(1.0) - ray.one_minus_alo, FP(0.0)), FP(1.0));
+    const fp_t chi_abs_sum = chi_total.value() + FP(2.0) * chi_neg;
+    GammaRayDerived result{};
+    result.psi_star = chi_abs_sum > FP(0.0) ? alo / chi_abs_sum : FP(0.0);
+    result.I = ray.I_ext + result.psi_star * eta_total.value();
+    return result;
+}
 
 /// Angular integration for a set (or subset) of rays at a wavelength.
 /// Pre-integrating these quantities for continua lets us have considerably
@@ -135,7 +154,7 @@ YAKL_INLINE EmisOpac gamma_eta_chi(const UV& uv, fp_t ni, fp_t nj) {
 }
 
 /// Fill cell.statics (direction independent, so once per cell and wavelength).
-YAKL_INLINE GammaStaticSums gamma_static_sums(const GammaCell& cell, const AtmosPointParams& atmos) {
+YAKL_INLINE GammaStaticSums gamma_static_sums(const GammaCell& cell, const AtmosPointParams& atmos, fp_t transport_floor = FP(1e-15)) {
     JasUnpack(cell, adata, pops, active_cont_set, ks);
     const EmisOpacState<> emis_opac{
         .adata = adata,
@@ -148,7 +167,7 @@ YAKL_INLINE GammaStaticSums gamma_static_sums(const GammaCell& cell, const Atmos
     };
     GammaStaticSums result;
     // NOTE(cmo): The raymarch's opacity floor.
-    result.chi.add(FP(1e-15));
+    result.chi.add(transport_floor);
     for (int kra = 0; kra < active_cont_set.extent(0); ++kra) {
         const int kr = active_cont_set(kra);
         const auto& cont = adata.continua(kr);
@@ -159,9 +178,7 @@ YAKL_INLINE GammaStaticSums gamma_static_sums(const GammaCell& cell, const Atmos
             UvOptions{.divide_by_hc_4pi = !GAMMA_INCLUDE_4PI_HC}
         );
         const EmisOpac eta_chi = gamma_eta_chi(uv, pops(offset + cont.i, ks), pops(offset + cont.j, ks));
-        result.eta.add(eta_chi.eta);
-        result.chi.add(eta_chi.chi);
-        result.chi_neg += std::max(-eta_chi.chi, FP(0.0));
+        result.add(eta_chi);
     }
     return result;
 }
@@ -289,9 +306,9 @@ YAKL_INLINE GammaRayDerived accumulate_gamma_ray_lines(const GammaCell& cell, co
     // NOTE(cmo): psi* = ALO / sum |chi_k| (= ALO / chi_tot when no component is
     // negative): a laser line can cancel the rest of chi_tot, and this keeps
     // every psi* |chi_k| <= ALO (which is clamped to [0, 1]).
-    const fp_t alo = std::min(std::max(FP(1.0) - ray.one_minus_alo, FP(0.0)), FP(1.0));
-    d.psi_star = alo / (chi_total.value() + FP(2.0) * chi_neg);
-    d.I = ray.I_ext + d.psi_star * eta_total.value();
+    const auto recovered = gamma_recover_response(ray, eta_total, chi_total, chi_neg);
+    d.psi_star = recovered.psi_star;
+    d.I = recovered.I;
 
     auto accumulate = [&](int kr, fp_t p) {
         const GammaLineTerms t = line_terms_from_profile(kr, p);

@@ -201,10 +201,7 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config) {
 
     state.atmos = sparsify_atmosphere(atmos, block_map);
 
-    state.phi = VoigtProfile<fp_t>(
-        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
-        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
-    );
+    state.phi = VoigtProfile<fp_t>::make();
     state.nh_lte = HPartFn();
     state.println("Scale: {} m", state.atmos.voxel_scale);
 
@@ -1332,6 +1329,12 @@ int main(int argc, char** argv) {
     std::optional<std::string> restart_path = program.present("--restart-from");
 
     DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
+    if (!config.atmos_path.empty()) {
+        require_uniform_z(config.atmos_path);
+    }
+    if (config.boundary == BoundaryType::Thermalised) {
+        throw std::runtime_error("The Thermalised boundary is only supported by dexrt_sc.");
+    }
     if (config.mode != DexrtMode::NonLte) {
         throw std::runtime_error("dexrt_rad_eq only supports non-lte problems.");
     }

@@ -12,6 +12,7 @@
 #include "MpiWrapper.hpp"
 #include "Rad16BitStorage.hpp"
 #include "RateDiagnostics.hpp"
+#include "BackgroundOpacity.hpp"
 
 #include <fmt/core.h>
 
@@ -41,6 +42,7 @@ struct State {
     yakl::Array<RadLossFp, 2, yakl::memDevice> rad_loss; /// [wave_batch, ks] -- the current wavelength batch, as J
     yakl::Array<RadLossFp, 1, yakl::memDevice> rad_loss_integrated; /// [ks] -- integrated over the wavelengths computed so far (on this rank)
     yakl::Array<RadLossFp, 2, yakl::memHost> rad_loss_cpu; /// [num_wave || 1, ks] -- per wavelength, or integrated, depending on config
+    BackgroundOpacity background;
     PreconRMat precon_R; /// [t, 2, ks] the preconditioned radiative rates (GammaMatrix.hpp) -- Gamma is assembled in shared memory adding the collisions in stat_eq
     RateDiagnostics rate_diag; /// Optional per-transition output diagnostics
     PwBc<> pw_bc;

@@ -3,6 +3,7 @@
 #undef KOKKOS_ENABLE_DEBUG
 #endif
 #include "NgAcceleration.hpp"
+#include "ScState.hpp"
 #include "Utils.hpp"
 #include "State.hpp"
 #include "State3d.hpp"
@@ -33,7 +34,8 @@ bool NgAccelerator::accelerate(const State& state, fp_t change) {
     }
 
     // Ng matrices (1 per level)
-    i64 num_space = pops.extent(2);
+    const auto cells = cell_list(state);
+    const auto cells_host = cells.host();
     i64 num_level = pops.extent(0);
     static_assert(num_steps == 5, "Need to update Ng algorithm");
     KView<f64***, HostSpace> aa("Ng A", num_level, 3, 3);
@@ -50,7 +52,8 @@ bool NgAccelerator::accelerate(const State& state, fp_t change) {
                 }
             }
 
-            for (i64 ks = 0; ks < pops.extent(2); ++ks) {
+            for (i64 ci = 0; ci < cells_host.num(); ++ci) {
+                const i64 ks = cells_host(ci);
                 const fp_t weight = FP(1.0) / square(pops(l, 4, ks));
                 const fp_t d0 = pops(l, 4, ks) - pops(l, 3, ks);
                 const fp_t d1 = d0 - (pops(l, 3, ks) - pops(l, 2, ks));
@@ -97,8 +100,9 @@ bool NgAccelerator::accelerate(const State& state, fp_t change) {
     auto bb_d = create_device_copy(bb);
     dex_parallel_for(
         "Update pops",
-        FlatLoop<2>(num_level, num_space),
-        KOKKOS_LAMBDA (i32 l, i64 ks) {
+        FlatLoop<2>(num_level, cells.num()),
+        KOKKOS_LAMBDA (i32 l, i64 ci) {
+            const i64 ks = cells(ci);
             f64 new_val = (FP(1.0) - bb_d(l, 0) - bb_d(l, 1) - bb_d(l, 2)) * pops_hist(l, 4, ks);
             new_val += bb_d(l, 0) * pops_hist(l, 3, ks);
             new_val += bb_d(l, 1) * pops_hist(l, 2, ks);
@@ -113,4 +117,5 @@ bool NgAccelerator::accelerate(const State& state, fp_t change) {
 }
 
 template bool NgAccelerator::accelerate<State>(const State& state, fp_t change);
+template bool NgAccelerator::accelerate<ScState>(const ScState& state, fp_t change);
 template bool NgAccelerator::accelerate<State3d>(const State3d& state, fp_t change);

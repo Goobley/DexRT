@@ -44,6 +44,14 @@ list(APPEND DEX_SOURCE_FILES
     "../source/Mipmaps.cpp"
     "../source/CoreAndVoigtEmisOpac.cpp"
     "../source/DirectionalEmisOpacInterp.cpp"
+    "../source/ScAngularQuadrature.cpp"
+    "../source/ScPreparedGeometry.cpp"
+    "../source/ScShortFormal.cpp"
+    "../source/ScLongerFormal.cpp"
+    "../source/ScFormal.cpp"
+    "../source/ScBoundary.cpp"
+    "../source/ScDecomposition.cpp"
+    "../source/ScCells.cpp"
 )
 
 list(APPEND UNIT_TEST_SOURCE_FILES
@@ -55,6 +63,7 @@ list(APPEND UNIT_TEST_SOURCE_FILES
     test_utils.cpp
     test_emis_opac.cpp
     test_gesv.cpp
+    test_sc.cpp
     test_wavelength_bins.cpp
     test_chord_loss.cpp
 )
@@ -103,6 +112,37 @@ target_link_libraries(dexrt_test yaml-cpp::yaml-cpp)
 target_link_libraries(dexrt_test yakl)
 target_link_libraries(dexrt_test Kokkos::kokkos)
 target_link_libraries(dexrt_test Kokkos::kokkoskernels)
+
+############## dexrt_sc_test (short characteristics, standalone) ##############
+list(APPEND SC_TEST_SOURCE_FILES
+    catch_amalgamated.cpp
+    test_sc_main.cpp
+    test_voigt.cpp
+    test_sc.cpp
+    "../source/ScAngularQuadrature.cpp"
+    "../source/ScPreparedGeometry.cpp"
+    "../source/ScShortFormal.cpp"
+    "../source/ScLongerFormal.cpp"
+    "../source/ScFormal.cpp"
+    "../source/ScBoundary.cpp"
+    "../source/ScDecomposition.cpp"
+    "../source/ScCells.cpp"
+)
+add_executable(dexrt_sc_test ${SC_TEST_SOURCE_FILES})
+set_source_files_properties(${SC_TEST_SOURCE_FILES} PROPERTIES CXX_STANDARD 20)
+set_source_files_properties(${SC_TEST_SOURCE_FILES} PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
+if ("${DEX_ARCH}" STREQUAL "CUDA")
+    set_target_properties(dexrt_sc_test PROPERTIES CUDA_ARCHITECTURES ${Kokkos_CUDA_ARCHITECTURES})
+    set_source_files_properties(${SC_TEST_SOURCE_FILES} PROPERTIES CUDA_STANDARD 20)
+endif()
+set_target_properties(dexrt_sc_test PROPERTIES COMPILE_FLAGS ${DEX_CXX_FLAGS})
+if (NOT "${DEX_ARCH}" STREQUAL "CUDA" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(dexrt_sc_test PRIVATE -fno-trapping-math -fno-math-errno)
+endif()
+target_include_directories(dexrt_sc_test SYSTEM PUBLIC "${GCC_INCLUDE_PATH}")
+target_include_directories(dexrt_sc_test PUBLIC "../source/" "../YAKL/src" "../yaml-cpp/include" ../fmt/include)
+target_link_libraries(dexrt_sc_test "${LDFLAGS}" fmt::fmt yaml-cpp::yaml-cpp yakl Kokkos::kokkos Kokkos::kokkoskernels)
+add_test(NAME dexrt_sc_unit_test COMMAND dexrt_sc_test)
 
 #############################
 

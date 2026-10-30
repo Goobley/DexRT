@@ -506,8 +506,9 @@ struct FlatAtmosphere {
 /// this get copied into the normal buffer before solution via RC.
 struct GivenEmisOpac {
     fp_t voxel_scale;
-    Fp3d emis;
+    Fp3d emis; /// [z, x, wavelength] (SC 3D: [z, y * x, wavelength])
     Fp3d opac;
+    i32 num_y = 1;
 };
 
 template <typename T=fp_t>
@@ -541,6 +542,8 @@ struct ScaledExponentsBroadening {
     T temperature_exponent;
     T hydrogen_exponent;
     T electron_exponent;
+    /// elastic collisions (Q_E for PRD)
+    bool elastic = true;
 };
 
 template <typename T=fp_t>

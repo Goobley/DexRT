@@ -138,10 +138,7 @@ CascadeRays3d init_atmos_atoms (State3d* st, const DexrtConfig& config) {
     }
     state.atmos = state.mr_block_map.init_and_sparsify_atmos(config.atmos_path, config.threshold_temperature, max_mip_level);
 
-    state.phi = VoigtProfile<fp_t>(
-        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
-        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
-    );
+    state.phi = VoigtProfile<fp_t>::make();
     state.nh_lte = HPartFn();
     state.println("Scale: {} m", state.atmos.voxel_scale);
 
@@ -702,6 +699,12 @@ int main(int argc, char** argv) {
 
     program.parse_args(argc, argv);
     const DexrtConfig config = load_and_parse_dexrt_config(program.get<std::string>("--config"));
+    if (!config.atmos_path.empty()) {
+        require_uniform_z(config.atmos_path);
+    }
+    if (config.boundary == BoundaryType::Thermalised) {
+        throw std::runtime_error("The Thermalised boundary is only supported by dexrt_sc.");
+    }
 
     std::optional<std::string> restart_path = program.present("--restart-from");
     const bool show_iteration_progress = program.get<bool>("--intra-iteration-progress");

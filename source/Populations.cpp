@@ -1,4 +1,5 @@
 #include "Populations.hpp"
+#include "ScState.hpp"
 #include "State3d.hpp"
 #include "GammaMatrix.hpp"
 #include "Collisions.hpp"
@@ -7,18 +8,21 @@
 #include "KokkosBatched_SolveLU_Decl.hpp"
 #include "KokkosBlas.hpp"
 
+template <typename Cells>
 void compute_lte_pops_flat(
     const CompAtom<fp_t>& atom,
     const SparseAtmosphere& atmos,
-    const Fp2d& pops
+    const Fp2d& pops,
+    const Cells& cells
 ) {
     const auto& temperature = atmos.temperature;
     const auto& ne = atmos.ne;
     const auto& nhtot = atmos.nh_tot;
     dex_parallel_for(
         "LTE Pops",
-        FlatLoop<1>(pops.extent(1)),
-        YAKL_LAMBDA (int64_t ks) {
+        FlatLoop<1>(cells.num()),
+        YAKL_LAMBDA (int64_t i) {
+            const i64 ks = cells(i);
             lte_pops(
                 atom.energy,
                 atom.g,
@@ -45,10 +49,11 @@ void compute_lte_pops(State* state) {
             state->adata_host,
             ia
         );
-        compute_lte_pops_flat(atom, state->atmos, pops);
+        compute_lte_pops_flat(atom, state->atmos, pops, cell_list(*state));
     }
 }
 template void compute_lte_pops<State>(State* state);
+template void compute_lte_pops<ScState>(ScState* state);
 template void compute_lte_pops<State3d>(State3d* state);
 
 template <typename State>
@@ -60,24 +65,27 @@ void compute_lte_pops(const State* state, const Fp2d& shared_pops) {
             state->adata_host,
             ia
         );
-        compute_lte_pops_flat(atom, state->atmos, flat_pops);
+        compute_lte_pops_flat(atom, state->atmos, flat_pops, cell_list(*state));
     }
 }
 template void compute_lte_pops<State>(const State* state, const Fp2d& shared_pops);
+template void compute_lte_pops<ScState>(const ScState* state, const Fp2d& shared_pops);
 template void compute_lte_pops<State3d>(const State3d* state, const Fp2d& shared_pops);
 
 template <typename State>
 void compute_nh0(const State& state) {
     const auto& nh0 = state.atmos.nh0;
     const auto& nh_lte = state.nh_lte;
+    const auto cells = cell_list(state);
 
     if (state.have_h) {
         // NOTE(cmo): This could just be a pointer shuffle...
         const auto& pops = state.pops;
         dex_parallel_for(
             "Copy nh0",
-            FlatLoop<1>(nh0.extent(0)),
-            YAKL_LAMBDA (i64 ks) {
+            FlatLoop<1>(cells.num()),
+            YAKL_LAMBDA (i64 i) {
+                const i64 ks = cells(i);
                 nh0(ks) = pops(0, ks);
             }
         );
@@ -85,8 +93,9 @@ void compute_nh0(const State& state) {
         const auto& atmos = state.atmos;
         dex_parallel_for(
             "Compute nh0 in LTE",
-            FlatLoop<1>(nh0.extent(0)),
-            YAKL_LAMBDA (i64 ks) {
+            FlatLoop<1>(cells.num()),
+            YAKL_LAMBDA (i64 i) {
+                const i64 ks = cells(i);
                 const fp_t temperature = atmos.temperature(ks);
                 const fp_t ne = atmos.ne(ks);
                 const fp_t nh_tot = atmos.nh_tot(ks);
@@ -99,10 +108,15 @@ void compute_nh0(const State& state) {
 }
 
 template void compute_nh0<State>(const State& state);
+template void compute_nh0<ScState>(const ScState& state);
 template void compute_nh0<State3d>(const State3d& state);
 
 template <typename T=fp_t, typename State>
 fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
+    const auto cells = cell_list(*state);
+    if (cells.num() == 0) {
+        return FP(0.0);
+    }
     // NOTE(cmo): This implementation works, and uses less memory, however it's
     // not very computationally efficient, as we're processing a small matrix
     // per entire thread team. That said, it profiles faster
@@ -144,9 +158,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
 
         Kokkos::parallel_for(
             "Stat Eq",
-            TeamPolicy(Nspace, dex_team_size(std::min(square(num_level), 128))).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+            TeamPolicy(cells.num(), dex_team_size(std::min(square(num_level), 128))).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
             KOKKOS_LAMBDA (const KTeam& team) {
-                const i64 ks = team.league_rank();
+                const i64 ks = cells(team.league_rank());
 
                 const fp_t n_total_k = nh_tot(ks) * abundance;
 
@@ -312,8 +326,9 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         ReductionVal max_change_loc;
         dex_parallel_reduce(
             "Update pops and compute max change",
-            FlatLoop<2>(Nspace, num_level),
-            KOKKOS_LAMBDA (int ks, int i, ReductionVal& rval) {
+            FlatLoop<2>(cells.num(), num_level),
+            KOKKOS_LAMBDA (i64 ci, int i, ReductionVal& rval) {
+                const i64 ks = cells(ci);
                 fp_t change = FP(0.0);
                 const fp_t n_total_k = nh_tot(ks) * abundance;
                 fp_t new_pop_scaled = new_pops(ks, i);
@@ -338,7 +353,7 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
                 // reduce update
                 if (change > rval.val) {
                     rval.val = change;
-                    rval.loc = Kokkos::make_pair(ks, i);
+                    rval.loc = Kokkos::make_pair(int(ks), i);
                 }
             },
             Reducer(max_change_loc)
@@ -381,4 +396,5 @@ fp_t stat_eq(State* state, const StatEqOptions& args) {
 }
 
 template fp_t stat_eq<State>(State* state, const StatEqOptions& args);
+template fp_t stat_eq<ScState>(ScState* state, const StatEqOptions& args);
 template fp_t stat_eq<State3d>(State3d* state, const StatEqOptions& args);

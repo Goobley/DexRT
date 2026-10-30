@@ -92,6 +92,9 @@ RayConfig parse_ray_config(const std::string& path) {
     }
 
     config.dexrt = load_and_parse_dexrt_config(config.dexrt_config_path);
+    if (!config.dexrt.atmos_path.empty()) {
+        require_uniform_z(config.dexrt.atmos_path);
+    }
 
     auto require_key = [&] (const std::string& key) {
         if (!file[key]) {
@@ -517,7 +520,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error(fmt::format("Only promweaver boundaries are supported by {}", argv[0]));
         }
         DexRayState state;
-        state.phi = VoigtProfile<fp_t>();
+        state.phi = VoigtProfile<fp_t>::make();
         state.nh_lte = HPartFn();
 
         std::vector<ModelAtom<f64>> crtaf_models;

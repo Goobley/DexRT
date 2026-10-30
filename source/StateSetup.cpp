@@ -1,4 +1,5 @@
 #include "StateSetup.hpp"
+#include "ScState.hpp"
 #include "GammaMatrix.hpp"
 #include "CascadeState.hpp"
 #include "Populations.hpp"
@@ -9,57 +10,14 @@
 #include "YAKL_netcdf.h"
 #include "Atmosphere.hpp"
 #include <fmt/core.h>
-
-// NOTE(cmo): Defined in BlockMap.cpp. Calling it rather than the inline
-// load_atmos keeps its CUDA lambdas instantiated in a single translation unit.
-template <int NumDim>
-std::conditional_t<NumDim < 3, AtmosphereNd<NumDim>, AtmosphereNd<NumDim, yakl::memHost>>
-load_dense_atmos(const std::string& path);
-template <>
-AtmosphereNd<2> load_dense_atmos<2>(const std::string& path);
-
-namespace {
-
-/// Rows [z_start, z_end) of a dense atmosphere.
-Atmosphere crop_atmos_z(const Atmosphere& atmos, i32 z_start, i32 z_end) {
-    Atmosphere result = atmos;
-    const i32 nz = z_end - z_start;
-    const i32 nx = atmos.temperature.extent(1);
-    auto crop = [&](const Fp2d& a) -> Fp2d {
-        if (!a.initialized()) {
-            return a;
-        }
-        Fp2d out(a.label(), nz, nx);
-        dex_parallel_for(
-            "Crop atmosphere z",
-            FlatLoop<2>(nz, nx),
-            YAKL_LAMBDA (i32 z, i32 x) {
-                out(z, x) = a(z + z_start, x);
-            }
-        );
-        return out;
-    };
-    result.temperature = crop(atmos.temperature);
-    result.pressure = crop(atmos.pressure);
-    result.ne = crop(atmos.ne);
-    result.nh_tot = crop(atmos.nh_tot);
-    result.nh0 = crop(atmos.nh0);
-    result.vturb = crop(atmos.vturb);
-    result.vx = crop(atmos.vx);
-    result.vy = crop(atmos.vy);
-    result.vz = crop(atmos.vz);
-    result.e_int = crop(atmos.e_int);
-    yakl::fence();
-    return result;
-}
-
-} // namespace
+#include <array>
+#include <type_traits>
 
 void allocate_J(State* state) {
     JasUnpack((*state), config, mr_block_map, c0_size, adata);
     const auto& block_map = mr_block_map.block_map;
     const bool sparse = config.sparse_calculation;
-    i64 num_cells = mr_block_map.block_map.get_num_active_cells();
+    i64 num_cells = mr_block_map.get_num_active_cells();
     i32 wave_dim = adata.wavelength.extent(0);
     if (config.mode == DexrtMode::GivenFs) {
         wave_dim = state->given_state.emis.extent(2);
@@ -85,7 +43,7 @@ void allocate_rad_loss(State* state) {
     if (config.rad_loss == RadLossType::None) {
         return;
     }
-    i64 num_cells = mr_block_map.block_map.get_num_active_cells();
+    i64 num_cells = mr_block_map.get_num_active_cells();
     i32 wave_dim = adata.wavelength.extent(0);
     if (config.mode == DexrtMode::GivenFs) {
         wave_dim = state->given_state.emis.extent(2);
@@ -113,13 +71,52 @@ void zero_rad_loss(const State& state) {
     yakl::fence();
 }
 
-CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config, const AtmosZWindow* window) {
-    if (!(config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte)) {
-        return CascadeRays{};
+/// The Promweaver boundary. dexrt_sc: read by rank 0 and broadcast.
+template <typename StateT>
+PwBc<> load_bc_replicated(const StateT& state, const DexrtConfig& config) {
+    if (!std::is_same_v<StateT, ScState> || state.mpi_state.num_ranks == 1) {
+        return load_bc(config.atmos_path, state.adata.wavelength, config.boundary, PromweaverResampleType::FluxConserving);
     }
+    PwBc<> bc{};
+#ifdef HAVE_MPI
+    const MPI_Comm comm = state.mpi_state.comm;
+    fp_t mu[3] = {FP(0.0), FP(0.0), FP(0.0)};
+    i64 dims[2] = {0, 0};
+    Fp2dHost I;
+    if (state.mpi_state.rank == 0) {
+        bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary, PromweaverResampleType::FluxConserving);
+        mu[0] = bc.mu_min;
+        mu[1] = bc.mu_max;
+        mu[2] = bc.mu_step;
+        if (bc.I.initialized()) {
+            I = bc.I.createHostCopy();
+            dims[0] = I.extent(0);
+            dims[1] = I.extent(1);
+        }
+    }
+    MPI_Bcast(mu, 3, get_FpMpi(), 0, comm);
+    MPI_Bcast(dims, 2, MPI_INT64_T, 0, comm);
+    if (state.mpi_state.rank != 0) {
+        bc.mu_min = mu[0];
+        bc.mu_max = mu[1];
+        bc.mu_step = mu[2];
+        if (dims[0] > 0) {
+            I = Fp2dHost("pw_bc_I", dims[0], dims[1]);
+        }
+    }
+    if (dims[0] > 0) {
+        MPI_Bcast(I.data(), int(dims[0] * dims[1]), get_FpMpi(), 0, comm);
+        if (state.mpi_state.rank != 0) {
+            bc.I = I.createDeviceCopy();
+        }
+    }
+#endif
+    return bc;
+}
 
-    State& state = *st;
-
+template <typename StateT>
+void init_atomic_data(StateT* st, const DexrtConfig& config) {
+    StateT& state = *st;
     std::vector<ModelAtom<f64>> crtaf_models;
     crtaf_models.reserve(config.atom_paths.size());
     for (int i = 0; i < config.atom_paths.size(); ++i) {
@@ -136,36 +133,16 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config, const AtmosZ
     state.atoms_with_gamma = gamma_atoms.atoms;
     state.atoms_with_gamma_mapping = gamma_atoms.mapping;
     state.rate_diag.init_stage_index(state.adata_host);
+}
 
-    i32 max_mip_level = 0;
-    for (int i = 0; i <= config.max_cascade; ++i) {
-        max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
-    }
-    if (state.config.mode != DexrtMode::GivenFs && LINE_SCHEME == LineCoeffCalc::Classic) {
-        max_mip_level = 0;
-        state.println("Mips not supported with LineCoeffCalc::Classic");
-    }
-    if (window) {
-        if (atmosphere_file_is_sparse(config.atmos_path)) {
-            throw std::runtime_error("Loading a z window of an atmosphere requires a dense atmosphere file.");
-        }
-        const Atmosphere atmos = crop_atmos_z(load_dense_atmos<2>(config.atmos_path), window->z_start, window->z_end);
-        BlockMap<BLOCK_SIZE> block_map;
-        block_map.init(atmos, config.threshold_temperature);
-        state.mr_block_map.init(block_map, max_mip_level);
-        state.atmos = sparsify_atmosphere(atmos, block_map);
-    } else {
-        state.atmos = state.mr_block_map.init_and_sparsify_atmos(config.atmos_path, config.threshold_temperature, max_mip_level);
-    }
-
-    state.phi = VoigtProfile<fp_t>(
-        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(0.4), 1024},
-        VoigtProfile<fp_t>::Linspace{FP(0.0), FP(3e3), 64 * 1024}
-    );
+template <typename StateT>
+void init_atom_storage(StateT* st, const DexrtConfig& config) {
+    StateT& state = *st;
+    state.phi = VoigtProfile<fp_t>::make();
     state.nh_lte = HPartFn();
     state.println("Scale: {} m", state.atmos.voxel_scale);
 
-    i64 num_active_cells = state.mr_block_map.get_num_active_cells();
+    i64 num_active_cells = state.atmos.temperature.extent(0);
 
     const int n_level_total = state.adata.energy.extent(0);
     state.pops = Fp2d("pops", n_level_total, num_active_cells);
@@ -178,8 +155,38 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config, const AtmosZ
     }
 
     // NOTE(cmo): We just have one of these chained for each boundary type -- they don't do anything if this configuration doesn't need them to.
-    state.pw_bc = load_bc(config.atmos_path, state.adata.wavelength, config.boundary, PromweaverResampleType::FluxConserving);
+    state.pw_bc = load_bc_replicated(state, config);
     state.boundary = config.boundary;
+
+    if (!config.background_path.empty()) {
+        load_background(&state, config.background_path);
+    }
+}
+
+template void init_atomic_data<State>(State* st, const DexrtConfig& config);
+template void init_atomic_data<ScState>(ScState* st, const DexrtConfig& config);
+template void init_atom_storage<State>(State* st, const DexrtConfig& config);
+template void init_atom_storage<ScState>(ScState* st, const DexrtConfig& config);
+
+CascadeRays init_atmos_atoms(State* st, const DexrtConfig& config) {
+    if (!(config.mode == DexrtMode::Lte || config.mode == DexrtMode::NonLte)) {
+        return CascadeRays{};
+    }
+
+    State& state = *st;
+    init_atomic_data(st, config);
+
+    i32 max_mip_level = 0;
+    for (int i = 0; i <= config.max_cascade; ++i) {
+        max_mip_level = std::max(max_mip_level, config.mip_config.mip_levels[i]);
+    }
+    if (state.config.mode != DexrtMode::GivenFs && LINE_SCHEME == LineCoeffCalc::Classic) {
+        max_mip_level = 0;
+        state.println("Mips not supported with LineCoeffCalc::Classic");
+    }
+    state.atmos = state.mr_block_map.init_and_sparsify_atmos(config.atmos_path, config.threshold_temperature, max_mip_level);
+
+    init_atom_storage(st, config);
 
     // NOTE(cmo): This doesn't actually know that things will be allocated sparse
     CascadeRays c0_rays;
@@ -190,12 +197,10 @@ CascadeRays init_atmos_atoms (State* st, const DexrtConfig& config, const AtmosZ
     c0_rays.wave_batch = WAVE_BATCH;
 
     const auto& block_map = state.mr_block_map.block_map;
-    state.max_block_mip = decltype(state.max_block_mip)(
-        "max_block_mip",
+    state.max_block_mip = decltype(state.max_block_mip)("max_block_mip",
         (state.adata.wavelength.extent(0) + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
         block_map.num_z_tiles(),
-        block_map.num_x_tiles()
-    );
+        block_map.num_x_tiles());
     return c0_rays;
 }
 
@@ -208,11 +213,11 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     int x_dim = nc.getDimSize("x");
     int z_dim = nc.getDimSize("z");
     int wave_dim = nc.getDimSize("wavelength");
-
     typedef yakl::Array<f32, 3, yakl::memHost> Fp3dLoad;
 
     Fp3dLoad eta("eta", z_dim, x_dim, wave_dim);
     Fp3dLoad chi("chi", z_dim, x_dim, wave_dim);
+    st->given_state.num_y = 1;
     nc.read(eta, "eta");
     nc.read(chi, "chi");
 
@@ -269,12 +274,10 @@ CascadeRays init_given_emis_opac(State* st, const DexrtConfig& config) {
     c0_rays.num_incl = NUM_INCL;
     c0_rays.wave_batch = WAVE_BATCH;
 
-    st->max_block_mip = decltype(st->max_block_mip)(
-        "max_block_mip",
+    st->max_block_mip = decltype(st->max_block_mip)("max_block_mip",
         (wave_dim + c0_rays.wave_batch - 1) / c0_rays.wave_batch,
         block_map.num_z_tiles(),
-        block_map.num_x_tiles()
-    );
+        block_map.num_x_tiles());
     yakl::fence();
     return c0_rays;
 }
@@ -381,7 +384,6 @@ void load_initial_pops(State* st, const std::string& initial_pops_path) {
     } else {
         i64 nx = nc.getDimSize("x");
         i64 nz = nc.getDimSize("z");
-
         if (nx != state.atmos.num_x || nz != state.atmos.num_z) {
             throw std::runtime_error(
                 fmt::format(
@@ -400,19 +402,14 @@ void load_initial_pops(State* st, const std::string& initial_pops_path) {
         auto bounds = mr_block_map.block_map.loop_bounds();
         dex_parallel_for(
             "Sparsify new pops",
-            FlatLoop<3>(
-                num_level,
-                bounds.dim(0),
-                bounds.dim(1)
-            ),
-            YAKL_LAMBDA (i32 level, i64 tile_idx, i32 block_idx) {
+            FlatLoop<3>(num_level, bounds.dim(0), bounds.dim(1)),
+            YAKL_LAMBDA(i32 level, i64 tile_idx, i32 block_idx) {
                 IdxGen idx_gen(mr_block_map);
 
                 i64 ks = idx_gen.loop_idx(tile_idx, block_idx);
                 Coord2 coord = idx_gen.loop_coord(tile_idx, block_idx);
                 pops(level, ks) = temp_pops(level, coord.z, coord.x);
-            }
-        );
+            });
         yakl::fence();
     }
 }

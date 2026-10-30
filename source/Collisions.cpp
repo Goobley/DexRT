@@ -1,4 +1,5 @@
 #include "Collisions.hpp"
+#include "ScState.hpp"
 #include "State3d.hpp"
 #include <algorithm>
 
@@ -9,6 +10,7 @@ CollisionalRatesOutput compute_collisional_rates_output(const State& state) {
     const auto& nh_lte = state.nh_lte;
     const auto& adata_host = state.adata_host;
     const i64 num_space = state.pops.extent(1);
+    const auto cells = cell_list(state);
 
     for (int ia = 0; ia < adata_host.num_level.extent(0); ++ia) {
         std::vector<std::pair<int, int>> pair_list;
@@ -36,9 +38,9 @@ CollisionalRatesOutput compute_collisional_rates_output(const State& state) {
         FlatLoop<2> nxn_loop(num_level, num_level);
         Kokkos::parallel_for(
             "Collisional rates output",
-            TeamPolicy(num_space, dex_team_size(std::min(square(num_level), 128))).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
+            TeamPolicy(cells.num(), dex_team_size(std::min(square(num_level), 128))).set_scratch_size(0, Kokkos::PerTeam(scratch_size)),
             KOKKOS_LAMBDA (const KTeam& team) {
-                const i64 ks = team.league_rank();
+                const i64 ks = cells(team.league_rank());
                 ScratchView<fp_t**> Ck(team.team_scratch(0), num_level, num_level);
                 ScratchView<fp_t*> n_star(team.team_scratch(0), num_level);
                 Kokkos::parallel_for(
@@ -69,4 +71,5 @@ CollisionalRatesOutput compute_collisional_rates_output(const State& state) {
 }
 
 template CollisionalRatesOutput compute_collisional_rates_output<State>(const State& state);
+template CollisionalRatesOutput compute_collisional_rates_output<ScState>(const ScState& state);
 template CollisionalRatesOutput compute_collisional_rates_output<State3d>(const State3d& state);

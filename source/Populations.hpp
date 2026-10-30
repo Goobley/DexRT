@@ -971,12 +971,6 @@ void lte_pops(
     }
 }
 
-void compute_lte_pops_flat(
-    const CompAtom<fp_t>& atom,
-    const SparseAtmosphere& atmos,
-    const Fp2d& pops
-);
-
 /**
  * Computes the LTE populations in state. Assumes state->pops is already allocated.
 */
