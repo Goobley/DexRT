@@ -319,9 +319,19 @@ endforeach()
 ############## dexrt_sc_io_test (MPI builds) ##############
 if (${DEXRT_USE_MPI})
     set_source_files_properties("tests/sc/sc_io_test.cpp" PROPERTIES LANGUAGE ${Kokkos_COMPILE_LANGUAGE})
-    add_executable(dexrt_sc_io_test "tests/sc/sc_io_test.cpp" "source/ScIo.cpp")
+    # Build this standalone regression explicitly, not as part of the solver binaries.
+    add_executable(dexrt_sc_io_test EXCLUDE_FROM_ALL
+        "tests/sc/sc_io_test.cpp"
+        "source/ScIo.cpp"
+    )
     target_include_directories(dexrt_sc_io_test PUBLIC "source")
-    target_include_directories(dexrt_sc_io_test SYSTEM PUBLIC "${NETCDF_INCLUDE_PATH}" ${MPI_CXX_INCLUDE_DIRS})
+    # FindMPI can leave include dirs empty with an MPI C++ wrapper; CUDA still
+    # needs the explicit MPI path, just as the production targets do.
+    target_include_directories(dexrt_sc_io_test SYSTEM PUBLIC
+        "${MPI_INCLUDE_PATH}"
+        "${NETCDF_INCLUDE_PATH}"
+        ${MPI_CXX_INCLUDE_DIRS}
+    )
     target_link_libraries(dexrt_sc_io_test "${LDLIBS}" fmt::fmt yaml-cpp::yaml-cpp Kokkos::kokkos yakl MPI::MPI_CXX)
     target_compile_definitions(dexrt_sc_io_test PUBLIC HAVE_MPI)
     set_target_properties(dexrt_sc_io_test PROPERTIES COMPILE_FLAGS "${YAKL_DEFS} ${DEX_CXX_FLAGS}" LINK_FLAGS "${LDFLAGS}")
