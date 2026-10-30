@@ -1,5 +1,6 @@
 #include "ScFormalSolution.hpp"
 #include "ScRadiation.hpp"
+#include <chrono>
 
 namespace {
 /// Keep each timing scope around one complete numerical step.
@@ -8,6 +9,19 @@ void sc_timed(const char* label, const Run& run) {
     yakl::timer_start(label);
     run();
     yakl::timer_stop(label);
+}
+/// Time completed device work only when requested; the normal path adds no fences.
+template <class Run>
+void sc_measure(bool enabled, f64& total, const Run& run) {
+    if (!enabled) {
+        run();
+        return;
+    }
+    Kokkos::fence();
+    const auto start = std::chrono::steady_clock::now();
+    run();
+    Kokkos::fence();
+    total += std::chrono::duration<f64>(std::chrono::steady_clock::now() - start).count();
 }
 } // namespace
 
@@ -71,6 +85,7 @@ ScTaskPlan sc_begin_solve(
         .given = given,
         .J_path = J_path,
         .boundary = sc_resolve_boundary(state.boundary, state.pw_bc, thermalised),
+        .timings = {},
     });
     if (wavelengths.store_loss) {
         state.rad_loss_integrated = RadLossFp(0.0);
@@ -100,6 +115,8 @@ void sc_sweep(
     const auto& batch = geometry.batches[t.batch];
     const i32 width = t.end - t.la;
     const bool local = batch.mode == ScRayMode::AlongY;
+    const bool detailed = opts.scheduler_stats;
+    auto& timings = solve.timings;
     ScLossSink loss;
     if (wavelengths.store_loss) {
         loss = ScLossSink{
@@ -120,51 +137,66 @@ void sc_sweep(
     };
 
     if (input) {
-        sc_unpack_intensity(
-            *input,
-            staging,
-            work.incoming,
-            batch.num_dirs,
-            width
-        );
+        sc_measure(detailed, timings.unpack, [&] {
+            sc_unpack_intensity(
+                *input,
+                staging,
+                work.incoming,
+                batch.num_dirs,
+                width
+            );
+        });
     }
     if (!local) {
-        sc_prepare_boundaries(geometry, work, task, solve.boundary);
+        sc_measure(detailed, timings.boundary, [&] {
+            sc_prepare_boundaries(geometry, work, task, solve.boundary);
+        });
     }
     sc_timed("SC medium", [&] {
         const auto previous_J = wavelengths.previous_J(slot);
-        const auto* coefficients = solve.given ? nullptr : &sc_get_medium_coefficients(
-            medium_coefficient_cache,
-            state,
-            previous_J,
-            t.la,
-            t.end
-        );
-        sc_prepare_medium(
-            state,
-            geometry.dirs,
-            batch,
-            coefficients,
-            work.medium,
-            t.la,
-            width
-        );
+        const ScMediumCoefficients* coefficients = nullptr;
+        if (!solve.given) {
+            sc_measure(detailed, timings.coefficients, [&] {
+                coefficients = &sc_get_medium_coefficients(
+                    medium_coefficient_cache,
+                    state,
+                    previous_J,
+                    t.la,
+                    t.end
+                );
+            });
+        }
+        sc_measure(detailed, timings.medium, [&] {
+            sc_prepare_medium(
+                state,
+                geometry.dirs,
+                batch,
+                coefficients,
+                work.medium,
+                t.la,
+                width
+            );
+        });
     });
     sc_timed("SC sweep", [&] {
-        if (local) {
-            sc_along_y_2d(geometry, work, task);
-        } else {
-            sc_solve(geometry, work, task, opts);
-        }
+        sc_measure(detailed, timings.sweep, [&] {
+            if (local) {
+                sc_along_y_2d(geometry, work, task);
+            } else {
+                sc_solve(geometry, work, task, opts);
+            }
+        });
     });
     if (output) {
-        sc_pack_intensity(
-            work.outgoing,
-            staging,
-            *output,
-            batch.num_dirs,
-            width
-        );
+        sc_measure(detailed, timings.pack, [&] {
+            sc_pack_intensity(
+                work.outgoing,
+                staging,
+                *output,
+                batch.num_dirs,
+                width
+            );
+        });
     }
 }
 

@@ -86,6 +86,8 @@ constexpr const char* ScPrdModeNames[] = {
 };
 
 struct ScOptions {
+    /// Per-rank scheduler diagnostics; GPU phase timing synchronizes between phases.
+    bool scheduler_stats = false;
     /// Independent medium-coefficient cache entries: these large payloads have
     /// a separate memory bound from the admitted wavelength sums.
     i32 base_slots = 2;
@@ -206,6 +208,9 @@ inline ScOptions parse_sc_options(const YAML::Node& file) {
         return opts;
     }
     const auto& sc = file["sc"];
+    if (sc["scheduler_stats"]) {
+        opts.scheduler_stats = sc["scheduler_stats"].as<bool>();
+    }
     if (sc["base_slots"]) {
         opts.base_slots = sc["base_slots"].as<i32>();
     }

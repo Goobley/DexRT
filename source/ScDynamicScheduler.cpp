@@ -97,6 +97,173 @@ struct Stream {
     void complete() { ++head; }
 };
 
+/// Per-solve diagnostics, independent of task and communication-buffer ownership.
+struct ScSchedulerStats {
+    std::array<i64, 3> tasks{};
+    std::array<f64, 3> busy{};
+    std::array<f64, 3> max_task{};
+    std::array<i64, 8> waits{};
+    std::array<f64, 8> wait_seconds{};
+    i64 sent_bytes = 0;
+    i64 received_bytes = 0;
+    i32 peak_wavelength_slots = 0;
+    f64 setup = 0;
+    f64 open = 0;
+    f64 accumulate = 0;
+    f64 close = 0;
+    f64 drain = 0;
+    f64 finish = 0;
+};
+
+/// Numerical calls may enqueue GPU work; detailed timings measure completion.
+template <class Run>
+void sc_scheduler_measure(bool enabled, f64& total, const Run& run) {
+    if (!enabled) {
+        run();
+        return;
+    }
+    Kokkos::fence();
+    const auto start = Clock::now();
+    run();
+    Kokkos::fence();
+    total += seconds(start, Clock::now());
+}
+
+/// Collect small text reports so ranks print contiguously and in rank order.
+void sc_print_rank_reports(const MpiState& mpi, const std::string& report) {
+    std::string reports = report;
+#ifdef HAVE_MPI
+    if (mpi.num_ranks > 1) {
+        const int size = report.size();
+        std::vector<int> sizes(mpi.num_ranks), offsets(mpi.num_ranks);
+        MPI_Gather(
+            &size,
+            1,
+            MPI_INT,
+            sizes.data(),
+            1,
+            MPI_INT,
+            0,
+            mpi.comm
+        );
+        if (mpi.rank == 0) {
+            int total = 0;
+            for (int rank = 0; rank < mpi.num_ranks; ++rank) {
+                offsets[rank] = total;
+                total += sizes[rank];
+            }
+            reports.resize(total);
+        }
+        MPI_Gatherv(
+            report.data(),
+            size,
+            MPI_CHAR,
+            reports.data(),
+            sizes.data(),
+            offsets.data(),
+            MPI_CHAR,
+            0,
+            mpi.comm
+        );
+    }
+#endif
+    if (mpi.rank == 0) {
+        fmt::print(
+            "SC scheduler detailed stats (synchronous phase wall times, seconds):\n"
+            "  Wait labels combine blockers across FIFO heads; phase times are subsets of busy.\n{}",
+            reports
+        );
+    }
+}
+
+/// Wait masks describe simultaneous FIFO-head constraints, not MPI transfer latency.
+std::string sc_scheduler_report(
+    const MpiState& mpi,
+    const ScTaskPlan& plan,
+    const ScFormalSolution& executor,
+    const ScTaskTimings& phases,
+    const ScSchedulerStats& stats,
+    i64 active_cells,
+    f64 elapsed,
+    f64 busy,
+    f64 idle
+) {
+    const auto& slab = executor.geometry.slab;
+    const auto& cache = executor.medium_coefficient_cache;
+    const f64 wait = idle - stats.drain;
+    const f64 overhead = std::max(0.0, elapsed - stats.setup - busy - idle - stats.finish);
+    std::string report = fmt::format(
+        "  SC scheduler rank {}: elapsed={:.6f} busy={:.6f} wait={:.6f} drain={:.6f} "
+        "setup={:.6f} finish={:.6f} overhead={:.6f}\n"
+        "    slab=[{}, {}) active_cells={} tasks={} wavelength_slots_peak={}/{}\n",
+        mpi.rank,
+        elapsed,
+        busy,
+        wait,
+        stats.drain,
+        stats.setup,
+        stats.finish,
+        overhead,
+        slab.z_start,
+        slab.z_end,
+        active_cells,
+        plan.tasks.size(),
+        stats.peak_wavelength_slots,
+        plan.slot_count
+    );
+    constexpr const char* names[] = {"Up", "Down", "Local"};
+    for (i32 stream = 0; stream < 3; ++stream) {
+        report += fmt::format(
+            "    stream {}: tasks={} busy={:.6f} mean_task={:.6f} max_task={:.6f}\n",
+            names[stream],
+            stats.tasks[stream],
+            stats.busy[stream],
+            stats.tasks[stream] ? stats.busy[stream] / stats.tasks[stream] : 0.0,
+            stats.max_task[stream]
+        );
+    }
+    report += fmt::format(
+        "    phases: open={:.6f} unpack={:.6f} boundary={:.6f} coefficients={:.6f} "
+        "medium={:.6f} sweep={:.6f} pack={:.6f} accumulate={:.6f} close={:.6f}\n"
+        "    cache: entries={} builds={} hits={} ; MPI payload: sent_MiB={:.3f} received_MiB={:.3f}\n",
+        stats.open,
+        phases.unpack,
+        phases.boundary,
+        phases.coefficients,
+        phases.medium,
+        phases.sweep,
+        phases.pack,
+        stats.accumulate,
+        stats.close,
+        cache.entries.size(),
+        cache.builds,
+        cache.hits,
+        stats.sent_bytes / 1048576.0,
+        stats.received_bytes / 1048576.0
+    );
+    constexpr const char* masks[] = {
+        "none",
+        "input",
+        "send",
+        "input+send",
+        "slot",
+        "input+slot",
+        "send+slot",
+        "input+send+slot",
+    };
+    for (i32 mask = 0; mask < 8; ++mask) {
+        if (stats.waits[mask]) {
+            report += fmt::format(
+                "    wait {}: calls={} seconds={:.6f}\n",
+                masks[mask],
+                stats.waits[mask],
+                stats.wait_seconds[mask]
+            );
+        }
+    }
+    return report;
+}
+
 /// A wavelength batch owns its slot from its first direction through its
 /// last. Coefficient-cache eviction is independent of this lifetime.
 struct WavelengthSlots {
@@ -338,11 +505,12 @@ struct ScDynamicScheduler::Impl {
     /// Message counts, stream order and tag reuse must agree before any rank
     /// posts receives. Compare the complete small description with rank 0,
     /// then report disagreement collectively so every rank takes the same exit.
-    void validate_task_layout(std::vector<i64> layout) const {
+    void validate_task_layout(std::vector<i64> layout, bool detailed) const {
         if (mpi.num_ranks == 1) {
             return;
         }
         layout.push_back(window);
+        layout.push_back(detailed);
         // Broadcast the size first: disagreeing quadratures can produce
         // different numbers of batches and directions on different ranks.
         i64 reference_size = layout.size();
@@ -377,7 +545,7 @@ struct ScDynamicScheduler::Impl {
             mpi.comm
         );
         if (mismatch) {
-            throw std::runtime_error("SC ranks disagree on task boundaries or stream membership");
+            throw std::runtime_error("SC ranks disagree on task boundaries or stream membership, or sc.scheduler_stats");
         }
     }
 #endif
@@ -399,9 +567,13 @@ struct ScDynamicScheduler::Impl {
     }
 
     /// Agree on the task contract, then allocate independent send/receive rings.
-    void prepare_transport(const ScTaskPlan& plan, const std::array<Stream, 3>& streams) {
+    void prepare_transport(
+        const ScTaskPlan& plan,
+        const std::array<Stream, 3>& streams,
+        bool detailed
+    ) {
 #ifdef HAVE_MPI
-        validate_task_layout(plan.layout);
+        validate_task_layout(plan.layout, detailed);
 #endif
         if (plan.max_message_count > std::numeric_limits<int>::max()) {
             throw std::runtime_error("SC intensity row exceeds MPI count limit");
@@ -446,6 +618,25 @@ struct ScDynamicScheduler::Impl {
     }
 
     /// Consider at most three heads. FIFO order fixes MPI matching; availability
+    /// Bits identify unmet prerequisites; several may block the same FIFO head.
+    i32 blocked_by(
+        const ScTaskPlan& plan,
+        const ScScheduledTask& task,
+        const WavelengthSlots& wavelengths
+    ) const {
+        i32 mask = 0;
+        if (!transport.input_ready(task, window)) {
+            mask |= 1;
+        }
+        if (!transport.send_available(task, window)) {
+            mask |= 2;
+        }
+        if (plan.slot_count && !wavelengths.available(task.wavelength_batch_idx)) {
+            mask |= 4;
+        }
+        return mask;
+    }
+
     /// chooses between streams. Prefer feeding the longest downstream pipeline.
     i32 choose_ready(
         const ScTaskPlan& plan,
@@ -459,10 +650,7 @@ struct ScDynamicScheduler::Impl {
             }
             const i32 id = streams[stream].front();
             const auto& task = plan.tasks[id];
-            if (plan.slot_count && !wavelengths.available(task.wavelength_batch_idx)) {
-                continue;
-            }
-            if (!transport.input_ready(task, window) || !transport.send_available(task, window)) {
+            if (blocked_by(plan, task, wavelengths)) {
                 continue;
             }
             if (chosen < 0 || downstream_distance(static_cast<ScStream>(stream)) >
@@ -475,17 +663,23 @@ struct ScDynamicScheduler::Impl {
 
     /// Execute ready FIFO heads and retire each wavelength after its final direction.
     void run(const ScTaskPlan& plan, ScFormalSolution& executor) {
+        const bool detailed = executor.opts.scheduler_stats;
+        const auto solve_start = Clock::now();
+        ScSchedulerStats stats;
         std::array<Stream, 3> streams;
         for (i32 id = 0; id < plan.tasks.size(); ++id) {
             streams[sc_stream_index(plan.tasks[id].stream)].tasks.push_back(id);
         }
-        prepare_transport(plan, streams);
+        prepare_transport(plan, streams, detailed);
         WavelengthSlots wavelengths(plan.num_wavelength_batches, plan.num_direction_batches, plan.slot_count);
         for (i32 stream = 0; stream < 2; ++stream) {
             for (i32 sequence = 0; sequence < std::min<i32>(window, streams[stream].tasks.size());
                  ++sequence) {
                 post_receive(static_cast<ScStream>(stream), sequence, plan, streams);
             }
+        }
+        if (detailed) {
+            stats.setup = seconds(solve_start, Clock::now());
         }
         i64 completed = 0;
         f64 busy = 0, idle = 0;
@@ -504,9 +698,22 @@ struct ScDynamicScheduler::Impl {
                         plan.tasks.size()
                     ));
                 }
+                i32 mask = 0;
+                if (detailed) {
+                    for (const auto& stream : streams) {
+                        if (!stream.empty()) {
+                            mask |= blocked_by(plan, plan.tasks[stream.front()], wavelengths);
+                        }
+                    }
+                }
                 const auto start = Clock::now();
                 transport.progress(true);
-                idle += seconds(start, Clock::now());
+                const f64 waited = seconds(start, Clock::now());
+                idle += waited;
+                if (detailed) {
+                    ++stats.waits[mask];
+                    stats.wait_seconds[mask] += waited;
+                }
                 continue;
             }
             const auto start = Clock::now();
@@ -515,7 +722,15 @@ struct ScDynamicScheduler::Impl {
             if (plan.slot_count) {
                 if (!wavelengths.is_open(task.wavelength_batch_idx)) {
                     slot = wavelengths.open(task.wavelength_batch_idx);
-                    sc_open_wavelength_batch(executor, task, slot);
+                    sc_scheduler_measure(detailed, stats.open, [&] {
+                        sc_open_wavelength_batch(executor, task, slot);
+                    });
+                    if (detailed) {
+                        stats.peak_wavelength_slots = std::max(
+                            stats.peak_wavelength_slots,
+                            plan.slot_count - i32(wavelengths.free.size())
+                        );
+                    }
                 } else {
                     slot = wavelengths.slot(task.wavelength_batch_idx);
                 }
@@ -544,25 +759,60 @@ struct ScDynamicScheduler::Impl {
                 );
             }
             // Start downstream communication before local reductions.
-            sc_accumulate(executor, task, slot);
+            sc_scheduler_measure(detailed, stats.accumulate, [&] {
+                sc_accumulate(executor, task, slot);
+            });
             if (plan.slot_count && wavelengths.last_direction(task.wavelength_batch_idx)) {
-                sc_close_wavelength_batch(executor, task, slot);
+                sc_scheduler_measure(detailed, stats.close, [&] {
+                    sc_close_wavelength_batch(executor, task, slot);
+                });
                 wavelengths.release(task.wavelength_batch_idx);
             }
             streams[sc_stream_index(task.stream)].complete();
             ++completed;
-            busy += seconds(start, Clock::now());
+            const f64 duration = seconds(start, Clock::now());
+            busy += duration;
+            if (detailed) {
+                const i32 stream = sc_stream_index(task.stream);
+                ++stats.tasks[stream];
+                stats.busy[stream] += duration;
+                stats.max_task[stream] = std::max(stats.max_task[stream], duration);
+                stats.sent_bytes += output ? task.message_count * sizeof(fp_t) : 0;
+                stats.received_bytes += input ? task.message_count * sizeof(fp_t) : 0;
+            }
         }
         const auto start = Clock::now();
         transport.finish();
-        idle += seconds(start, Clock::now());
-        sc_finish_solve(executor);
+        stats.drain = seconds(start, Clock::now());
+        idle += stats.drain;
+        const auto phases = executor.epoch.value().timings;
+        const i64 active_cells = executor.epoch.value().state.cells.num_active;
+        sc_scheduler_measure(detailed, stats.finish, [&] {
+            sc_finish_solve(executor);
+        });
+        const f64 elapsed = seconds(solve_start, Clock::now());
         if (mpi.rank == 0) {
             fmt::print(
                 "SC dynamic: {} tasks/rank, rank-0 busy {:.4f}s idle {:.4f}s\n",
                 plan.tasks.size(),
                 busy,
                 idle
+            );
+        }
+        if (detailed) {
+            sc_print_rank_reports(
+                mpi,
+                sc_scheduler_report(
+                    mpi,
+                    plan,
+                    executor,
+                    phases,
+                    stats,
+                    active_cells,
+                    elapsed,
+                    busy,
+                    idle
+                )
             );
         }
     }

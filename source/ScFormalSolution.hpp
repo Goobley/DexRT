@@ -10,6 +10,16 @@
 
 enum class ScJPath { None, InGamma, Active, Dense };
 
+/// Optional synchronous wall times for disjoint numerical phases of one solve.
+struct ScTaskTimings {
+    f64 unpack = 0;
+    f64 boundary = 0;
+    f64 coefficients = 0;
+    f64 medium = 0;
+    f64 sweep = 0;
+    f64 pack = 0;
+};
+
 /// Bindings valid only between begin_solve and finish_solve. Task coefficient
 /// selection belongs to the cache, not the solve epoch.
 struct ScSolveEpoch {
@@ -20,6 +30,7 @@ struct ScSolveEpoch {
     bool given;
     ScJPath J_path;
     ScBoundary boundary;
+    ScTaskTimings timings;
 };
 
 /// Numerical ownership at three lifetimes. The scheduler chooses wavelength
