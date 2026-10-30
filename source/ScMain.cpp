@@ -784,8 +784,10 @@ int main(int argc, char** argv) {
                         lte_i += 1;
                         compute_nh0(state);
                         lte_max_change = sc_allreduce_max(mpi, stat_eq(&state, StatEqOptions{
-                            .ignore_change_below_ntot_frac=FP(1e-7)
+                            .ignore_change_below_ntot_frac = FP(1e-7),
+                            .print_max_change = false,
                         }));
+                        state.println("     Max Change (global): {}", lte_max_change);
                         if (lte_i < 2) {
                             continue;
                         }
@@ -837,11 +839,13 @@ int main(int argc, char** argv) {
 
                     const bool lambda_iterate = i < initial_lambda_iterations;
                     const StatEqOptions stat_eq_opts{
-                        .ignore_change_below_ntot_frac=std::min(FP(1e-6), non_lte_tol)
+                        .ignore_change_below_ntot_frac = std::min(FP(1e-6), non_lte_tol),
+                        .print_max_change = false,
                     };
                     sc_formal_solution(state, ctx, true, lambda_iterate);
                     state.println("  == Statistical equilibrium ==");
                     max_change = sc_allreduce_max(mpi, stat_eq(&state, stat_eq_opts));
+                    state.println("     Max Change (global): {}", max_change);
                     if (i > 0 && actually_conserve_charge) {
                         fp_t nr_update = sc_allreduce_max(mpi, nr_post_update(
                             &state,

@@ -360,17 +360,19 @@ fp_t stat_eq_impl(State* state, const StatEqOptions& args = StatEqOptions()) {
         );
 
         const fp_t max_change = max_change_loc.val;
-        auto temp_h = Fp1d("temp_readback", &state->atmos.temperature(max_change_loc.loc.first), 1).createHostCopy();
+        if (args.print_max_change) {
+            auto temp_h = Fp1d("temp_readback", &state->atmos.temperature(max_change_loc.loc.first), 1).createHostCopy();
 
-        state->println(
-            "     Max Change (ele: {}, Z={}): {} (@ l={}, ks={}) [T={}]",
-            ia,
-            state->adata_host.Z(ia),
-            max_change,
-            max_change_loc.loc.second,
-            max_change_loc.loc.first,
-            temp_h(0)
-        );
+            state->println(
+                "     Max Change (ele: {}, Z={}): {} (@ l={}, ks={}) [T={}]",
+                ia,
+                state->adata_host.Z(ia),
+                max_change,
+                max_change_loc.loc.second,
+                max_change_loc.loc.first,
+                temp_h(0)
+            );
+        }
         global_max_change = std::max(max_change, global_max_change);
 
     }

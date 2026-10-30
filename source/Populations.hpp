@@ -989,6 +989,8 @@ struct StatEqOptions {
     fp_t ignore_change_below_ntot_frac = FP(0.0);
     /// If only solving one atom, its index in adata. A negative number implies all atoms.
     int only_atom = -1;
+    /// Print the local per-atom diagnostic; distributed callers can report a reduced value instead.
+    bool print_max_change = true;
 };
 
 template <typename State>
