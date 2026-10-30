@@ -275,14 +275,15 @@ void sc_store_emergent(
 ) {
     JasUnpack(medium, S);
     JasUnpack(batch, frames, dir_idx);
-    JasUnpack(dirs, mu);
+    JasUnpack(dirs, emergent_index);
     const i32 top = grid.num_z - 1;
     dex_parallel_for(
         "SC store emergent",
         FlatLoop<3>(batch.num_dirs, wave_batch, grid.plane_size()),
         YAKL_LAMBDA(i32 d, i32 wave, i64 xy) {
             const i32 dir = dir_idx(d);
-            if (mu(dir, 2) <= FP(0.0)) {
+            const i32 e = emergent_index(dir);
+            if (e < 0) {
                 return;
             }
             const ScFrame f = frames(d);
@@ -291,11 +292,11 @@ void sc_store_emergent(
             if (f.mode == ScRayMode::Sweep) {
                 const i32 s = f.flip_x ? f.num_s - 1 - x : x;
                 const i32 sy = f.flip_y ? f.num_sy - 1 - y : y;
-                emergent(la_start + wave, dir, xy) = outgoing(d, wave, i64(sy) * f.num_s + s);
+                emergent(la_start + wave, e, xy) = outgoing(d, wave, i64(sy) * f.num_s + s);
                 return;
             }
             const i64 idx = sc_canonical_idx(f, x, y, top);
-            emergent(la_start + wave, dir, xy) =
+            emergent(la_start + wave, e, xy) =
                 solution.intensity(d, wave, idx, S(d, wave, idx + i64(SC_MEDIUM_HALO) * sc_plane_size(f)));
         });
     Kokkos::fence();

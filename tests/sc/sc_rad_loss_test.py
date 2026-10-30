@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import netCDF4 as ncdf
 import yaml
+from sc_givenfs_tests_lib import emergent_dir_indices
 
 dexrt_sc = Path(sys.argv[1]).resolve()
 dexrt_sc_3d = Path(sys.argv[2]).resolve()
@@ -85,8 +86,9 @@ def energy(ds, three_d, z=None):
     H = cell_heights(z) if z is not None else np.full(L.shape[1], DX)
     V = H.reshape(-1, *([1] * (L.ndim - 2))) * DX ** (2 if three_d else 1)
     loss = (L * V).reshape(L.shape[0], -1).sum(axis=1)
-    mu = np.asarray(ds["sc_mu"][...])
-    wmu = np.asarray(ds["sc_wmu"][...])
+    indices = emergent_dir_indices(ds)
+    mu = np.asarray(ds["sc_mu"][...])[indices]
+    wmu = np.asarray(ds["sc_wmu"][...])[indices]
     I = np.asarray(ds["I_emergent"][...], dtype=np.float64)
     I = I.reshape(I.shape[0], I.shape[1], -1)
     up = mu[:, 2] > 0

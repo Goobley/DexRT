@@ -26,6 +26,9 @@ struct ScDirectionSet {
     Fp1d wmu; /// [dir], sums to 1
     Fp2dHost mu_host;
     Fp1dHost wmu_host;
+    /// Compact top-emergent indices; downward directions map to -1.
+    yakl::Array<i32, 1, yakl::memDevice> emergent_index;
+    yakl::Array<i32, 1, yakl::memHost> emergent_dir_host; /// compact index -> quadrature index
     /// Boundary cones (sc.boundary_cone_*): cos of each direction's cone
     /// half-angle (solid angle 4 pi w of one unfolded direction), and the
     /// Gauss-Legendre nodes/weights (sum 1) in u = (1 - cos a) / (1 - cos_cone).

@@ -15,6 +15,7 @@ import lightweaver as lw
 from lightweaver.fal import Falc82
 
 sys.path.insert(0, str(Path(__file__).parent))
+from sc_givenfs_tests_lib import emergent_dir_indices
 from lw_models import crtaf_h6  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dexrt_py"))
 from dexrt.background_tables import _disable_debye  # noqa: E402
@@ -94,7 +95,7 @@ def run_dexrt(name, interp):
     out = ncdf.Dataset(work / f"{name}.nc")
     J = np.asarray(out["J"][...])[:, :nz, :nx].mean(axis=2)
     I = np.asarray(out["I_emergent"][...]).mean(axis=2)
-    mu = np.asarray(out["sc_mu"][...])
+    mu = np.asarray(out["sc_mu"][...])[emergent_dir_indices(out)]
     return np.asarray(out["pops"][...])[:, :nz, :nx].mean(axis=2), n_fs, np.asarray(out["wavelength"][...]), J, I, mu
 
 

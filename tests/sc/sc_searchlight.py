@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
-from sc_givenfs_tests_lib import run_givenfs
+from sc_givenfs_tests_lib import run_givenfs, emergent_dir_indices
 
 dexrt_sc = Path(sys.argv[1]).resolve()
 work = Path(sys.argv[2]).resolve()
@@ -37,11 +37,11 @@ for (dx, dz, z) in grids:
             sc = {"characteristics": "Short", "formal_solver": "PiecewiseLinear", "interpolation": interp, "quadrature": "Stepan", "quadrature_order": 7}
         out = run_givenfs(dexrt_sc, work, f"searchlight_{dx}_{tag}_{interp}", eta, chi, sc, voxel_scale=1.0, dx=dx, dz=dz, z=z)
         I = np.asarray(out["I_emergent"][0])
-        mu = np.asarray(out["sc_mu"][...])
+        mu = np.asarray(out["sc_mu"][...])[emergent_dir_indices(out)]
         xc = (np.arange(nx) + 0.5) * dx
         if interp == "LongerCharacteristics":
             # NOTE: Emergent values sit at the characteristics' exit points.
-            phase = np.asarray(out.getncattr("sc_longer_phase_top"))
+            phase = np.asarray(out.getncattr("sc_longer_phase_top"))[emergent_dir_indices(out)]
         src_c = (x0 + 0.5 * w) * dx
         widths = []
         for d in range(mu.shape[0]):

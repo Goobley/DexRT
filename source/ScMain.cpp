@@ -63,7 +63,7 @@ struct ScContext {
     std::unique_ptr<ScFormalSolution> formal_solution;
     std::unique_ptr<ScDynamicScheduler> scheduler;
     i32 wave_batch; /// wavelengths solved together
-    Fp3d emergent; /// [la, dir, plane], filled for upward directions on the top slab (3D: if output.sc_emergent)
+    Fp3d emergent; /// [la, upward direction, plane], allocated only on the top slab
 };
 
 /// Optional anisotropic voxel sizes, falling back to voxel_scale.
@@ -223,7 +223,7 @@ i32 sc_num_wave(const ScState& state) {
 /// SC_PIPELINE_TASKS_PER_RANK tasks per remote stream per rank, but with
 /// enough (direction x wavelength x cell) work per launch.
 i32 sc_choose_wave_batch(const ScState& state, const ScPreparedGeometry& geometry,
-                         const ScOptions& opts, i32 num_dirs, i32 num_wave) {
+                         const ScOptions& opts, i32 num_wave) {
     const auto& grid = geometry.grid;
     const auto& batches = geometry.batches;
     const bool given = state.config.mode == DexrtMode::GivenFs;
@@ -239,7 +239,9 @@ i32 sc_choose_wave_batch(const ScState& state, const ScPreparedGeometry& geometr
 
     // Fixed: everything allocated so far, the emergent intensity and the
     // bases' per-cell line coefficients.
-    f64 fixed = f64(num_wave) * num_dirs * plane * sizeof(fp_t);
+    const bool store_emergent = (!SC_3D || state.config.output.sc_emergent) && !geometry.slab.has_upper();
+    const i64 emergent_dirs = geometry.dirs.emergent_dir_host.extent(0);
+    f64 fixed = store_emergent ? f64(num_wave) * emergent_dirs * plane * sizeof(fp_t) : 0.0;
     fixed += given ? 0 : M * (base_cells * (4 * lines + levels) * sizeof(fp_t) + 3 * lines * (sizeof(fp_t) + sizeof(i32)));
     if (yakl::use_pool()) {
         const auto& pool = yakl::get_pool();
@@ -398,7 +400,7 @@ void init_state_sc(ScState* state, ScContext* ctx, const DexrtConfig& config_in,
     ScPreparedGeometry geometry(grid, slab, ctx->dirs, opts, ctx->z_centres,
                                 ctx->row_steps, sc_max_global_step(*ctx));
     const i32 num_wave = sc_num_wave(*state);
-    ctx->wave_batch = sc_choose_wave_batch(*state, geometry, opts, ctx->dirs.num_dirs, num_wave);
+    ctx->wave_batch = sc_choose_wave_batch(*state, geometry, opts, num_wave);
     state->println(
         "SC: {} quadrature (order {}), {} directions{}, {} batches; {} + {}, x boundary {}{}",
         ScQuadratureTypeNames[int(opts.quadrature)],
@@ -412,8 +414,8 @@ void init_state_sc(ScState* state, ScContext* ctx, const DexrtConfig& config_in,
         SC_3D ? fmt::format(", y boundary {}", ScXBoundaryNames[int(opts.y_boundary)]) : ""
     );
 
-    if (!SC_3D || config.output.sc_emergent) {
-        ctx->emergent = Fp3d("sc_emergent", num_wave, ctx->dirs.num_dirs, grid.plane_size());
+    if ((!SC_3D || config.output.sc_emergent) && !slab.has_upper()) {
+        ctx->emergent = Fp3d("sc_emergent", num_wave, ctx->dirs.emergent_dir_host.extent(0), grid.plane_size());
         ctx->emergent = FP(0.0);
     }
     ctx->formal_solution = std::make_unique<ScFormalSolution>(sc_make_formal_solution(
@@ -608,23 +610,35 @@ void save_results_sc(ScState& state, const ScContext& ctx, i32 num_iter) {
             config.rad_loss == RadLossType::Integrated ? "wavelength_integrated" : "wavelength");
     }
 
-    // NOTE(cmo): The emergent intensity lives on the top slab.
-    if (ctx.emergent.initialized()) {
-        const Fp3dHost emergent = ctx.emergent.createHostCopy();
+    // Only the top slab owns intensity data; all ranks participate in output.
+    if (!SC_3D || out_cfg.sc_emergent) {
+        Fp3dHost emergent;
+        if (ctx.emergent.initialized()) {
+            emergent = ctx.emergent.createHostCopy();
+        }
+        const fp_t unused = FP(0.0);
+        const fp_t* data = ctx.emergent.initialized() ? emergent.data() : &unused;
+        const i64 directions = ctx.dirs.emergent_dir_host.extent(0);
+        const i64 waves = sc_num_wave(state);
         const i32 top = mpi.num_ranks - 1;
         if (SC_3D) {
-            file.write_whole("I_emergent",
-                {"wavelength", "sc_dir", "y_emergent", "x_emergent"},
-                {i64(emergent.extent(0)), i64(emergent.extent(1)), ctx.grid.num_y, ctx.grid.num_x},
-                emergent.data(),
-                top);
+            file.write_whole(
+                "I_emergent",
+                {"wavelength", "sc_emergent_dir", "y_emergent", "x_emergent"},
+                {waves, directions, ctx.grid.num_y, ctx.grid.num_x},
+                data,
+                top
+            );
         } else {
-            file.write_whole("I_emergent",
-                {"wavelength", "sc_dir", "x_emergent"},
-                {i64(emergent.extent(0)), i64(emergent.extent(1)), i64(emergent.extent(2))},
-                emergent.data(),
-                top);
+            file.write_whole(
+                "I_emergent",
+                {"wavelength", "sc_emergent_dir", "x_emergent"},
+                {waves, directions, ctx.grid.num_x},
+                data,
+                top
+            );
         }
+        file.write(ctx.dirs.emergent_dir_host, "sc_emergent_dir", {"sc_emergent_dir"});
     }
     file.write(ctx.dirs.mu_host, "sc_mu", {"sc_dir", "three"});
     file.write(ctx.dirs.wmu_host, "sc_wmu", {"sc_dir"});

@@ -218,6 +218,21 @@ ScDirectionSet build_sc_direction_set(const ScOptions& opts, bool fold_y, i32 di
     result.mu = result.mu_host.createDeviceCopy();
     result.wmu = result.wmu_host.createDeviceCopy();
 
+    std::vector<i32> upward;
+    for (i32 d = 0; d < result.num_dirs; ++d) {
+        if (dirs[d].mu[2] > 0.0) {
+            upward.push_back(d);
+        }
+    }
+    result.emergent_dir_host = decltype(result.emergent_dir_host)("sc_emergent_dir", upward.size());
+    yakl::Array<i32, 1, yakl::memHost> index("sc_emergent_index", result.num_dirs);
+    index = -1;
+    for (i32 e = 0; e < upward.size(); ++e) {
+        result.emergent_dir_host(e) = upward[e];
+        index(upward[e]) = e;
+    }
+    result.emergent_index = index.createDeviceCopy();
+
     Fp1dHost cone_cos("sc_cone_cos", result.num_dirs);
     for (int d = 0; d < result.num_dirs; ++d) {
         // NOTE(cmo): A folded direction stands for the +-mu_y pair.

@@ -20,7 +20,7 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests/sc"))
-from sc_givenfs_tests_lib import write_atmos as write2
+from sc_givenfs_tests_lib import write_atmos as write2, emergent_dir_indices
 from sc_3d_givenfs_tests import write_atmos as write3
 
 
@@ -79,7 +79,14 @@ def main():
                 with nc.Dataset(outputs["baseline"]) as a, nc.Dataset(outputs["current"]) as b:
                     for key in ("J", "I_emergent", "sc_mu", "sc_wmu"):
                         if key in a.variables:
-                            np.testing.assert_allclose(a[key][...], b[key][...], rtol=1e-3 if key == "J" else 1e-5,
+                            x, y = np.asarray(a[key][...]), np.asarray(b[key][...])
+                            if key == "I_emergent":
+                                ai, bi = emergent_dir_indices(a), emergent_dir_indices(b)
+                                au = np.asarray(a["sc_mu"][:])[ai, 2] > 0
+                                bu = np.asarray(b["sc_mu"][:])[bi, 2] > 0
+                                np.testing.assert_array_equal(ai[au], bi[bu])
+                                x, y = x[:, au], y[:, bu]
+                            np.testing.assert_allclose(x, y, rtol=1e-3 if key == "J" else 1e-5,
                                                        atol=2**-48 if key == "J" else 1e-25, err_msg=f"{name}: {key}")
             record = {"case": name, "metric": metric,
                       "median": {key: statistics.median(values) for key, values in times.items()}, "raw": times}

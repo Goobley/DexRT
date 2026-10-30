@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 import netCDF4 as ncdf
 import yaml
+import numpy as np
 
 
 def write_atmos(path, eta, chi, voxel_scale=1.0, dx=None, dz=None, z=None):
@@ -43,3 +44,10 @@ def run_givenfs(dexrt_sc, work, name, eta, chi, sc, launcher=(), **kw):
         print(log_path.read_text()[-3000:])
         raise RuntimeError(f"{name} failed")
     return ncdf.Dataset(out)
+
+
+def emergent_dir_indices(output):
+    """Map compact emergent rows to the full quadrature, including legacy files."""
+    if "sc_emergent_dir" in output.variables:
+        return np.asarray(output["sc_emergent_dir"][:], dtype=np.int64)
+    return np.arange(output["I_emergent"].shape[1])

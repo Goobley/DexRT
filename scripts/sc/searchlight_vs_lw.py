@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import lightweaver as lw
 from lightweaver.rh_atoms import H_6_atom
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "sc"))
-from sc_givenfs_tests_lib import run_givenfs
+from sc_givenfs_tests_lib import run_givenfs, emergent_dir_indices
 
 dexrt_sc = Path(sys.argv[1]).resolve()
 work = Path(sys.argv[2]).resolve()
@@ -64,7 +64,7 @@ for interp, label in [("Linear", "dexrt_sc linear"), ("MonotonizedCentral", "dex
     sc = {"characteristics": "Short", "quadrature": "StepanMirrored", "quadrature_order": 7, "formal_solver": "PiecewiseLinear", "interpolation": interp}
     out = run_givenfs(dexrt_sc, work, f"slvlw_{interp}", (eta * dx)[..., None].astype(np.float32),
                       (chi * dx)[..., None].astype(np.float32), sc, voxel_scale=1.0)
-    sc_results[label] = (np.asarray(out["sc_mu"][...])[:, [0, 2]], np.asarray(out["I_emergent"][0]))
+    sc_results[label] = (np.asarray(out["sc_mu"][...])[emergent_dir_indices(out)][:, [0, 2]], np.asarray(out["I_emergent"][0]))
 
 xc = np.arange(nx) + 0.5
 # NOTE: The +-mu_x directions are mirror images: show mu_x > 0, by obliquity.

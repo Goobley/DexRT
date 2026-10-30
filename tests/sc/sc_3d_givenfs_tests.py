@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import netCDF4 as ncdf
 import yaml
+from sc_givenfs_tests_lib import emergent_dir_indices
 
 # NOTE: J is stored in 16 bits (2^-11 relative), re-rounded per direction batch.
 RAD_RTOL = 2e-3
@@ -171,9 +172,9 @@ def test_box(
     kw = dict(dx=dx, dy=dy, dz=dz, z=z)
     out = run(binary, work, name, eta, chi, {"quadrature_order": quad_order}, launcher, output={"sc_emergent": True}, **kw)
     I = np.asarray(out["I_emergent"][0])
-    mu = np.asarray(out["sc_mu"][...])
-    px = np.asarray(out.getncattr("sc_longer_phase_top"))
-    py = np.asarray(out.getncattr("sc_longer_phase_top_y"))
+    mu = np.asarray(out["sc_mu"][...])[emergent_dir_indices(out)]
+    px = np.asarray(out.getncattr("sc_longer_phase_top"))[emergent_dir_indices(out)]
+    py = np.asarray(out.getncattr("sc_longer_phase_top_y"))[emergent_dir_indices(out)]
     worst = 0.0
     for d in range(mu.shape[0]):
         if mu[d, 2] <= 0:
@@ -225,7 +226,7 @@ def test_box_flux(binary, work, launcher):
     CHARACTERISTICS = "LongerCharacteristics"
     ref = run(binary, work, "flux_longer", eta, chi, sc, launcher, output={"sc_emergent": True})
     I_ref = np.asarray(ref["I_emergent"][0])
-    mu = np.asarray(ref["sc_mu"][...])
+    mu = np.asarray(ref["sc_mu"][...])[emergent_dir_indices(ref)]
     CHARACTERISTICS = "Short"
     for interp in ("Linear", "VanLeer", "MonotonizedCentral"):
         out = run(binary, work, f"flux_{interp}", eta, chi, {**sc, "interpolation": interp}, launcher, output={"sc_emergent": True})

@@ -39,7 +39,7 @@ void sc_accumulate_J(
     i32 wave_batch
 );
 
-/// Store I in the top row for upward directions: emergent [la, dir, x].
+/// Store upward I at the top boundary: emergent [la, compact upward direction, plane].
 void sc_store_emergent(
     const ScGrid& grid,
     const ScDirectionSet& dirs,

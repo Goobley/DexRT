@@ -23,6 +23,7 @@ import lightweaver.collisional_rates as lw_cr
 from lightweaver.fal import Falc82
 
 sys.path.insert(0, str(Path(__file__).parent))
+from sc_givenfs_tests_lib import emergent_dir_indices
 from lw_models import crtaf_h6  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dexrt_py"))
 from dexrt.background_tables import _disable_debye  # noqa: E402
@@ -116,7 +117,7 @@ def run_dexrt(name, prd):
         for kr, start, count, _ in table:
             rho[int(kr)] = rho_all[start:start + count]
     return dict(pops=pops, n_fs=n_fs, rho=rho, wl=np.asarray(out["wavelength"][...]),
-                I=np.asarray(out["I_emergent"][...]).mean(axis=2), mu=np.asarray(out["sc_mu"][...]))
+                I=np.asarray(out["I_emergent"][...]).mean(axis=2), mu=np.asarray(out["sc_mu"][...])[emergent_dir_indices(out)])
 
 
 def run_lw(prd):

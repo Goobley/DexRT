@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from sc_givenfs_tests_lib import run_givenfs  # noqa: E402
+from sc_givenfs_tests_lib import run_givenfs, emergent_dir_indices  # noqa: E402
 from quadtree_ray_traversal.amr_traversal import QuadtreeForest  # noqa: E402
 from quadtree_ray_traversal.raytrace import CellMaterial  # noqa: E402
 from quadtree_ray_traversal.sweep import sweep  # noqa: E402
@@ -36,8 +36,8 @@ for periodic in [False, True]:
           "x_boundary": "Periodic" if periodic else "Fixed"}
     out = run_givenfs(dexrt_sc, work, f"longer_blob_{periodic}", eta, chi, sc, voxel_scale=dx)
     I = np.asarray(out["I_emergent"][0])
-    mu = np.asarray(out["sc_mu"][...])
-    phase = np.asarray(out.getncattr("sc_longer_phase_top"))
+    mu = np.asarray(out["sc_mu"][...])[emergent_dir_indices(out)]
+    phase = np.asarray(out.getncattr("sc_longer_phase_top"))[emergent_dir_indices(out)]
     forest = QuadtreeForest(roots, block_cells=m)
     worst = 0.0
     n_dirs = 0
