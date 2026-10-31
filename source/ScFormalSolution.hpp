@@ -9,6 +9,7 @@
 #include <optional>
 
 enum class ScJPath { None, InGamma, Active, Dense };
+enum class ScSolveMode { Formal, Prd, Diagnostic };
 
 /// Optional synchronous wall times for disjoint numerical phases of one solve.
 struct ScTaskTimings {
@@ -30,6 +31,7 @@ struct ScSolveEpoch {
     bool given;
     ScJPath J_path;
     ScBoundary boundary;
+    ScSolveMode mode;
     ScTaskTimings timings;
 };
 
@@ -60,7 +62,8 @@ ScFormalSolution sc_make_formal_solution(
     ScPreparedGeometry geometry,
     const ScOptions& opts,
     i32 wave_batch,
-    ThermalisedBc thermalised = {}
+    ThermalisedBc thermalised = {},
+    ScSolveMode mode = ScSolveMode::Formal
 );
 /// Bind solve policy and request the scheduler's task plan, including PRD clipping.
 ScTaskPlan sc_begin_solve(
@@ -69,7 +72,7 @@ ScTaskPlan sc_begin_solve(
     const Fp3d& emergent,
     bool compute_gamma,
     bool lambda_iterate,
-    bool prd_only = false
+    ScSolveMode mode = ScSolveMode::Formal
 );
 /// Reserve wavelength payloads across every direction of an admitted batch.
 void sc_open_wavelength_batch(ScFormalSolution& fs, const ScScheduledTask& task, i32 slot);

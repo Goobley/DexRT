@@ -31,14 +31,21 @@ ScFormalSolution sc_make_formal_solution(
     ScPreparedGeometry geometry,
     const ScOptions& opts,
     i32 wave_batch,
-    ThermalisedBc thermalised
+    ThermalisedBc thermalised,
+    ScSolveMode mode
 ) {
     auto work = sc_make_buffers(geometry, wave_batch);
     Fp1d staging(
         "sc_task_row_staging",
         i64(sc_max_batch_dirs(geometry.batches)) * wave_batch * geometry.grid.plane_size()
     );
-    auto wavelengths = sc_make_wavelength_storage(state, geometry.slab.num_ranks, opts, wave_batch);
+    auto wavelengths = sc_make_wavelength_storage(
+        state,
+        geometry.slab.num_ranks,
+        opts,
+        wave_batch,
+        mode == ScSolveMode::Diagnostic
+    );
     auto cache = sc_make_coefficient_cache(state, opts.base_slots, wave_batch);
     return {
         .geometry = std::move(geometry),
@@ -60,13 +67,14 @@ ScTaskPlan sc_begin_solve(
     const Fp3d& emergent_,
     bool compute_gamma_,
     bool lambda_iterate_,
-    bool prd_only
+    ScSolveMode mode
 ) {
     JasUnpack(fs, epoch, wavelengths, medium_coefficient_cache, geometry, wave_batch, thermalised);
     if (epoch) {
         throw std::logic_error("SC begin_solve called before finish_solve");
     }
-    sc_begin_wavelength_solve(wavelengths, prd_only);
+    const bool prd_only = mode == ScSolveMode::Prd;
+    sc_begin_wavelength_solve(wavelengths, mode != ScSolveMode::Formal);
     sc_reset_coefficient_cache(medium_coefficient_cache);
     const bool given = state.config.mode == DexrtMode::GivenFs;
     ScJPath J_path = ScJPath::None;
@@ -80,11 +88,12 @@ ScTaskPlan sc_begin_solve(
     epoch.emplace(ScSolveEpoch{
         .state = state,
         .emergent = emergent_,
-        .compute_gamma = compute_gamma_,
+        .compute_gamma = mode != ScSolveMode::Diagnostic && compute_gamma_,
         .lambda_iterate = lambda_iterate_,
         .given = given,
         .J_path = J_path,
         .boundary = sc_resolve_boundary(state.boundary, state.pw_bc, thermalised),
+        .mode = mode,
         .timings = {},
     });
     if (wavelengths.store_loss) {
@@ -251,7 +260,7 @@ void sc_accumulate(ScFormalSolution& fs, const ScScheduledTask& t, i32 slot) {
         }
         yakl::timer_stop("SC J");
     }
-    if (prd.enabled() && t.end > prd.reach_lo && t.la < prd.reach_hi) {
+    if (solve.mode != ScSolveMode::Diagnostic && prd.enabled() && t.end > prd.reach_lo && t.la < prd.reach_hi) {
         yakl::timer_start("SC PRD J*");
         sc_prd_accumulate_J_rest(
             state,

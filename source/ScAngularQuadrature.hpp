@@ -44,5 +44,8 @@ void sc_gauss_legendre_unit(int n, std::vector<f64>* nodes, std::vector<f64>* we
 
 ScDirectionSet build_sc_direction_set(const ScOptions& opts, bool fold_y, i32 dim = 2);
 
+/// Explicit final directions have zero quadrature weight and are never folded.
+ScDirectionSet build_sc_final_direction_set(const ScOptions& opts);
+
 #else
 #endif

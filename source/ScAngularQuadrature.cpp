@@ -198,12 +198,13 @@ std::vector<ScHostDir> sc_fold_y(const std::vector<ScHostDir>& dirs) {
     return result;
 }
 
-ScDirectionSet build_sc_direction_set(const ScOptions& opts, bool fold_y, i32 dim) {
-    std::vector<ScHostDir> dirs = sc_full_sphere_quadrature(opts, dim);
-    if (fold_y) {
-        dirs = sc_fold_y(dirs);
-    }
-
+namespace {
+/// Upload directions, output indices and boundary-cone geometry for either solve type.
+ScDirectionSet sc_upload_direction_set(
+    const ScOptions& opts,
+    const std::vector<ScHostDir>& dirs,
+    bool fold_y
+) {
     ScDirectionSet result;
     result.num_dirs = dirs.size();
     result.folded_y = fold_y;
@@ -254,6 +255,23 @@ ScDirectionSet build_sc_direction_set(const ScOptions& opts, bool fold_y, i32 di
     result.cone_u = cone_u.createDeviceCopy();
     result.cone_w = cone_w.createDeviceCopy();
     return result;
+}
+} // namespace
+
+ScDirectionSet build_sc_direction_set(const ScOptions& opts, bool fold_y, i32 dim) {
+    auto dirs = sc_full_sphere_quadrature(opts, dim);
+    if (fold_y) {
+        dirs = sc_fold_y(dirs);
+    }
+    return sc_upload_direction_set(opts, dirs, fold_y);
+}
+
+ScDirectionSet build_sc_final_direction_set(const ScOptions& opts) {
+    std::vector<ScHostDir> dirs;
+    for (const auto& mu : opts.final_mus) {
+        dirs.push_back({.mu = mu, .weight = 0.0});
+    }
+    return sc_upload_direction_set(opts, dirs, false);
 }
 
 void sc_gauss_legendre_unit(int n, std::vector<f64>* nodes, std::vector<f64>* weights) {

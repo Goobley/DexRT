@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <bit>
 #include <fmt/core.h>
 #include <limits>
 
@@ -66,6 +67,13 @@ ScTaskPlan sc_make_task_plan(
         nwave,
         wavelength_range.has_value(),
     };
+    // Explicit diagnostic rays must agree in value, not only in batch membership.
+    for (i32 d = 0; d < geometry.dirs.num_dirs; ++d) {
+        for (i32 axis = 0; axis < 3; ++axis) {
+            plan.layout.push_back(std::bit_cast<i64>(f64(geometry.dirs.mu_host(d, axis))));
+        }
+        plan.layout.push_back(std::bit_cast<i64>(f64(geometry.dirs.wmu_host(d))));
+    }
     for (const auto& batch : geometry.batches) {
         plan.layout.push_back(i32(batch.mode));
         plan.layout.push_back(batch.flip_z);

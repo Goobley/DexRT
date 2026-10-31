@@ -64,6 +64,9 @@ struct ScContext {
     std::unique_ptr<ScDynamicScheduler> scheduler;
     i32 wave_batch; /// wavelengths solved together
     Fp3d emergent; /// [la, upward direction, plane], allocated only on the top slab
+    Fp3d emergent_final; /// [la, configured direction, plane], top slab only
+    Fp2dHost final_mu; /// normalized directions in configuration order
+    i32 final_wave_batch = 0;
 };
 
 /// Optional anisotropic voxel sizes, falling back to voxel_scale.
@@ -222,11 +225,17 @@ i32 sc_num_wave(const ScState& state) {
 /// Wavelengths per batch (collective): at most what memory allows, aiming for
 /// SC_PIPELINE_TASKS_PER_RANK tasks per remote stream per rank, but with
 /// enough (direction x wavelength x cell) work per launch.
-i32 sc_choose_wave_batch(const ScState& state, const ScPreparedGeometry& geometry,
-                         const ScOptions& opts, i32 num_wave) {
+i32 sc_choose_wave_batch(
+    const ScState& state,
+    const ScPreparedGeometry& geometry,
+    const ScOptions& opts,
+    i32 num_wave,
+    ScSolveMode mode = ScSolveMode::Formal
+) {
     const auto& grid = geometry.grid;
     const auto& batches = geometry.batches;
     const bool given = state.config.mode == DexrtMode::GivenFs;
+    const bool diagnostic = mode == ScSolveMode::Diagnostic;
     const i32 num_ranks = state.mpi_state.num_ranks;
     const i32 max_dirs = sc_max_batch_dirs(batches);
     const f64 plane = grid.plane_size();
@@ -239,7 +248,8 @@ i32 sc_choose_wave_batch(const ScState& state, const ScPreparedGeometry& geometr
 
     // Fixed: everything allocated so far, the emergent intensity and the
     // bases' per-cell line coefficients.
-    const bool store_emergent = (!SC_3D || state.config.output.sc_emergent) && !geometry.slab.has_upper();
+    const bool store_emergent =
+        (diagnostic || !SC_3D || state.config.output.sc_emergent) && !geometry.slab.has_upper();
     const i64 emergent_dirs = geometry.dirs.emergent_dir_host.extent(0);
     f64 fixed = store_emergent ? f64(num_wave) * emergent_dirs * plane * sizeof(fp_t) : 0.0;
     fixed += given ? 0 : M * (base_cells * (4 * lines + levels) * sizeof(fp_t) + 3 * lines * (sizeof(fp_t) + sizeof(i32)));
@@ -259,12 +269,14 @@ i32 sc_choose_wave_batch(const ScState& state, const ScPreparedGeometry& geometr
     const f64 rows = (1 + 4.0 * opts.receive_window) * plane;
     // NOTE(cmo): J slots (and the 16-bit staging), and their previous-J
     // companions for background scattering.
-    const f64 J_slots = state.J_cpu.initialized() ? (opts.j_slots ? opts.j_slots : num_ranks + opts.receive_window) : 0;
-    const f64 loss_slots = state.rad_loss_integrated.initialized() ? (opts.j_slots ? opts.j_slots : num_ranks + opts.receive_window) : 0;
+    const i32 slot_count = opts.j_slots ? opts.j_slots : num_ranks + opts.receive_window;
+    const f64 J_slots = !diagnostic && state.J_cpu.initialized() ? slot_count : 0;
+    const f64 loss_slots = !diagnostic && state.rad_loss_integrated.initialized() ? slot_count : 0;
+    const f64 background_slots = state.background.enabled ? slot_count : 0;
     const f64 per_wave = sizeof(fp_t) * (max_dirs * (numerical_buffers + rows) +
                                             (given ? 0 : 2 * M * base_cells) + (J_slots + loss_slots) * cells) +
                          (J_slots ? sizeof(Rad16Array::Storage) * cells : 0) +
-                         (state.background.enabled ? J_slots * sizeof(Rad16Array::Storage) * halo_cells : 0) +
+                         background_slots * sizeof(Rad16Array::Storage) * halo_cells +
                          (given ? 0 : 3 * M * (lines + 1) * sizeof(i32));
     const f64 budget = SC_WAVE_BATCH_MEM_FRACTION * state.config.mem_pool_gb * f64(1LL << 30) - fixed;
     i32 memory_upper = budget >= per_wave ? i32(std::min(f64(num_wave), std::floor(budget / per_wave))) : 0;
@@ -458,13 +470,84 @@ void sc_formal_solution(ScState& state, ScContext& ctx, bool compute_gamma, bool
         ctx.emergent,
         compute_gamma,
         lambda_iterate,
-        prd_only
+        prd_only ? ScSolveMode::Prd : ScSolveMode::Formal
     );
     ctx.scheduler->run(plan, *ctx.formal_solution);
     yakl::fence();
     if (!prd_only) {
         state.background.have_J = true;
     }
+}
+
+/// Trace configured viewing directions through the final medium without changing
+/// radiation sums, populations or rates. Retain the quadrature metadata and images.
+void sc_final_emergent_pass(ScState& state, ScContext& ctx) {
+    if (ctx.opts.final_mus.empty()) {
+        return;
+    }
+    state.println("Final emergent pass: {} configured directions", ctx.opts.final_mus.size());
+    // Only output images survive the main solve; release its large numerical payloads first.
+    ctx.scheduler.reset();
+    ctx.formal_solution.reset();
+    yakl::timer_start("SC final emergent");
+    if (state.config.mode != DexrtMode::GivenFs) {
+        compute_nh0(state);
+    }
+    update_background(&state);
+    ctx.halo.exchange_inputs(&state);
+
+    auto opts = ctx.opts;
+    // One upstream FIFO completes each wavelength before admitting the next.
+    opts.base_slots = 1;
+    opts.j_slots = 1;
+    opts.boundary_cone_mu = 0;
+    auto dirs = build_sc_final_direction_set(opts);
+    ctx.final_mu = dirs.mu_host;
+    ScPreparedGeometry geometry(
+        ctx.grid,
+        ctx.slab,
+        dirs,
+        opts,
+        ctx.z_centres,
+        ctx.row_steps,
+        sc_max_global_step(ctx)
+    );
+    const i32 waves = sc_num_wave(state);
+    ctx.final_wave_batch = sc_choose_wave_batch(
+        state,
+        geometry,
+        opts,
+        waves,
+        ScSolveMode::Diagnostic
+    );
+    if (!ctx.slab.has_upper()) {
+        ctx.emergent_final = Fp3d(
+            "sc_emergent_final",
+            waves,
+            dirs.num_dirs,
+            ctx.grid.plane_size()
+        );
+    }
+    auto formal = sc_make_formal_solution(
+        state,
+        std::move(geometry),
+        opts,
+        ctx.final_wave_batch,
+        ctx.th_bc,
+        ScSolveMode::Diagnostic
+    );
+    const auto plan = sc_begin_solve(
+        formal,
+        state,
+        ctx.emergent_final,
+        false,
+        false,
+        ScSolveMode::Diagnostic
+    );
+    ScDynamicScheduler scheduler(state.mpi_state, opts.receive_window);
+    scheduler.run(plan, formal);
+    Kokkos::fence();
+    yakl::timer_stop("SC final emergent");
 }
 
 /// The PRD lines (non-LTE, sc.prd: Hybrid), with the radiative rates they need.
@@ -496,6 +579,33 @@ void sc_setup_prd(ScState* state, const ScOptions& opts) {
         prd.num_lines, prd.num_rows, prd.reach_lo, prd.reach_hi, prd.max_speed * FP(1e-3));
 }
 
+/// Longer intensities sit on the exit lattice; record its offsets for each ray set.
+void sc_write_longer_phases(
+    const ScContext& ctx,
+    const Fp2dHost& mu,
+    ScOutFile& file,
+    const std::string& name
+) {
+    const std::vector<f64> faces = sc_canonical_faces(ctx.z_centres, false);
+    std::vector<f64> phase(mu.extent(0), 0.0);
+    std::vector<f64> phase_y(mu.extent(0), 0.0);
+    for (int d = 0; d < mu.extent(0); ++d) {
+        const f64 az = std::abs(mu(d, 2));
+        if (az > 0.0) {
+            const f64 A = faces.back() * std::abs(mu(d, 0)) / (az * ctx.grid.dx);
+            phase[d] = A - std::floor(A);
+            if (SC_3D) {
+                const f64 Ay = faces.back() * std::abs(mu(d, 1)) / (az * ctx.grid.dy);
+                phase_y[d] = Ay - std::floor(Ay);
+            }
+        }
+    }
+    file.put_att(name, phase);
+    if (SC_3D) {
+        file.put_att(name + "_y", phase_y);
+    }
+}
+
 void add_sc_netcdf_attributes(const ScState& state, const ScContext& ctx, ScOutFile& file, i32 num_iter) {
     file.put_att("program", std::string(SC_3D ? "dexrt_sc (3d)" : "dexrt_sc (2d)"));
 #ifdef DEXRT_SINGLE_PREC
@@ -513,25 +623,9 @@ void add_sc_netcdf_attributes(const ScState& state, const ScContext& ctx, ScOutF
     }
     file.put_att("sc_characteristics", std::string(ScCharacteristicsNames[int(ctx.opts.characteristics)]));
     if (ctx.opts.characteristics == ScCharacteristics::LongerCharacteristics) {
-        // NOTE(cmo): Emergent intensities are those of the characteristics
-        // leaving the top face, at (canonical) x = s - 1/2 + phase.
-        const std::vector<f64> faces = sc_canonical_faces(ctx.z_centres, false);
-        std::vector<f64> phase(ctx.dirs.num_dirs, 0.0);
-        std::vector<f64> phase_y(ctx.dirs.num_dirs, 0.0);
-        for (int d = 0; d < ctx.dirs.num_dirs; ++d) {
-            const f64 az = std::abs(ctx.dirs.mu_host(d, 2));
-            if (az > 0.0) {
-                const f64 A = faces.back() * std::abs(ctx.dirs.mu_host(d, 0)) / (az * ctx.grid.dx);
-                phase[d] = A - std::floor(A);
-                if (SC_3D) {
-                    const f64 Ay = faces.back() * std::abs(ctx.dirs.mu_host(d, 1)) / (az * ctx.grid.dy);
-                    phase_y[d] = Ay - std::floor(Ay);
-                }
-            }
-        }
-        file.put_att("sc_longer_phase_top", phase);
-        if (SC_3D) {
-            file.put_att("sc_longer_phase_top_y", phase_y);
+        sc_write_longer_phases(ctx, ctx.dirs.mu_host, file, "sc_longer_phase_top");
+        if (!ctx.opts.final_mus.empty()) {
+            sc_write_longer_phases(ctx, ctx.final_mu, file, "sc_longer_phase_final");
         }
     }
     file.put_att("sc_folded_y", i32(ctx.dirs.folded_y));
@@ -639,6 +733,36 @@ void save_results_sc(ScState& state, const ScContext& ctx, i32 num_iter) {
             );
         }
         file.write(ctx.dirs.emergent_dir_host, "sc_emergent_dir", {"sc_emergent_dir"});
+    }
+    if (!ctx.opts.final_mus.empty()) {
+        Fp3dHost image;
+        if (ctx.emergent_final.initialized()) {
+            image = ctx.emergent_final.createHostCopy();
+        }
+        const fp_t unused = FP(0.0);
+        const fp_t* data = ctx.emergent_final.initialized() ? image.data() : &unused;
+        const i64 waves = sc_num_wave(state);
+        const i64 directions = ctx.final_mu.extent(0);
+        const i32 top = mpi.num_ranks - 1;
+        if (SC_3D) {
+            file.write_whole(
+                "I_emergent_final",
+                {"wavelength", "sc_final_dir", "y_emergent", "x_emergent"},
+                {waves, directions, ctx.grid.num_y, ctx.grid.num_x},
+                data,
+                top
+            );
+        } else {
+            file.write_whole(
+                "I_emergent_final",
+                {"wavelength", "sc_final_dir", "x_emergent"},
+                {waves, directions, ctx.grid.num_x},
+                data,
+                top
+            );
+        }
+        file.write(ctx.final_mu, "sc_mu_final", {"sc_final_dir", "three"});
+        file.put_att("sc_final_wave_batch", ctx.final_wave_batch);
     }
     file.write(ctx.dirs.mu_host, "sc_mu", {"sc_dir", "three"});
     file.write(ctx.dirs.wmu_host, "sc_wmu", {"sc_dir"});
@@ -757,6 +881,7 @@ int main(int argc, char** argv) {
 
         if (config.mode == DexrtMode::GivenFs) {
             sc_formal_solution(state, ctx, false, true);
+            sc_final_emergent_pass(state, ctx);
             yakl::timer_stop("DexRT SC");
             save_results_sc(state, ctx, 1);
         } else {
@@ -932,6 +1057,7 @@ int main(int argc, char** argv) {
                 compute_nh0(state);
                 sc_formal_solution(state, ctx, false, true);
             }
+            sc_final_emergent_pass(state, ctx);
             yakl::timer_stop("DexRT SC");
             save_results_sc(state, ctx, num_iter);
         }

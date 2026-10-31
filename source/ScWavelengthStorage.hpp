@@ -38,11 +38,12 @@ inline ScWavelengthStorage sc_make_wavelength_storage(
     const ScState& state,
     i32 num_ranks,
     const ScOptions& opts,
-    i32 wave_batch
+    i32 wave_batch,
+    bool diagnostic = false
 ) {
     ScWavelengthStorage storage{
-        .has_J = state.J_cpu.initialized(),
-        .has_loss = state.rad_loss_integrated.initialized(),
+        .has_J = !diagnostic && state.J_cpu.initialized(),
+        .has_loss = !diagnostic && state.rad_loss_integrated.initialized(),
         .background_enabled = state.background.enabled,
     };
     if (!storage.has_J && !storage.has_loss && !storage.background_enabled) {

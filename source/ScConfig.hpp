@@ -3,6 +3,8 @@
 
 #include "Types.hpp"
 #include <string>
+#include <array>
+#include <vector>
 #include <stdexcept>
 #include <cmath>
 #include <fmt/core.h>
@@ -86,6 +88,8 @@ constexpr const char* ScPrdModeNames[] = {
 };
 
 struct ScOptions {
+    /// Optional final top-emergent propagation directions, normalized by the parser.
+    std::vector<std::array<f64, 3>> final_mus;
     /// Per-rank scheduler diagnostics; GPU phase timing synchronizes between phases.
     bool scheduler_stats = false;
     /// Independent medium-coefficient cache entries: these large payloads have
@@ -208,6 +212,25 @@ inline ScOptions parse_sc_options(const YAML::Node& file) {
         return opts;
     }
     const auto& sc = file["sc"];
+    if (sc["final_mus"]) {
+        if (!sc["final_mus"].IsSequence()) {
+            throw std::runtime_error("sc.final_mus must be a sequence of [mux, muy, muz] vectors");
+        }
+        for (const auto& entry : sc["final_mus"]) {
+            if (!entry.IsSequence() || entry.size() != 3) {
+                throw std::runtime_error("Each sc.final_mus entry must contain three components");
+            }
+            std::array<f64, 3> mu{entry[0].as<f64>(), entry[1].as<f64>(), entry[2].as<f64>()};
+            const f64 length = std::hypot(mu[0], mu[1], mu[2]);
+            if (!std::isfinite(length) || length == 0.0 || mu[2] <= 0.0) {
+                throw std::runtime_error("sc.final_mus requires finite nonzero vectors with muz > 0 (top-emergent)");
+            }
+            for (auto& component : mu) {
+                component /= length;
+            }
+            opts.final_mus.push_back(mu);
+        }
+    }
     if (sc["scheduler_stats"]) {
         opts.scheduler_stats = sc["scheduler_stats"].as<bool>();
     }
