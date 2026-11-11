@@ -662,11 +662,11 @@ YAKL_INLINE RadianceInterval<Alo, Loss> multi_level_dda_raymarch_2d(
         return result;
     }
 
-    // NOTE(cmo): one_m_edt is also the ALO -- divide by chi_s for PsiStar_lambda_omegahat
-    fp_t eta_s = FP(0.0), chi_s = FP(1e-20), one_m_edt = FP(0.0), edt = FP(1.0);
+    // NOTE(cmo): Transmission through the last sampled (probe) cell, 1 - ALO for this solver.
+    fp_t edt = FP(1.0);
     constexpr bool compute_loss = (RcMode & RC_COMPUTE_LOSS) && !std::is_same_v<Loss, DexEmpty>;
     // NOTE(cmo): Probe cell terms for loss, I_f is its incoming face intensity.
-    fp_t loss_I_f = FP(0.0), loss_S = FP(0.0), loss_tau = FP(0.0);
+    fp_t loss_I_f = FP(0.0), loss_eta = FP(0.0), loss_chi = FP(0.0), loss_tau = FP(0.0);
     // NOTE(cmo): implicit assumption muy != 1.0
     const fp_t inv_sin_theta = FP(1.0) / std::sqrt(FP(1.0) - square(incl));
     fp_t lambda;
@@ -674,7 +674,6 @@ YAKL_INLINE RadianceInterval<Alo, Loss> multi_level_dda_raymarch_2d(
         lambda = dyn_state.adata.wavelength(la);
     }
     do {
-        one_m_edt = FP(0.0);
         edt = FP(1.0);
         if constexpr (compute_alo) {
             result.I_ext = result.I;
@@ -693,25 +692,27 @@ YAKL_INLINE RadianceInterval<Alo, Loss> multi_level_dda_raymarch_2d(
                 .mip_chain=mip_chain,
                 .dyn_state=dyn_state
             });
-            eta_s = emis_opac.eta;
-            chi_s = emis_opac.chi + FP(1e-15);
-
+            const fp_t eta_s = emis_opac.eta;
+            fp_t chi_s = emis_opac.chi + FP(1e-15);
             if constexpr (EXTRA_SAFE_SOURCE_FN) {
                 chi_s += (std::abs(chi_s) < FP(1e-15)) * FP(1e-15);
             }
+
             fp_t tau = chi_s * s.dt * distance_scale;
             fp_t source_fn = eta_s / chi_s;
 
             fp_t tau_mu = tau * inv_sin_theta;
             edt = std::exp(-tau_mu);
-            one_m_edt = -std::expm1(-tau_mu);
+            // NOTE(cmo): one_m_edt is also the ALO -- divide by chi_s for PsiStar_lambda_omegahat
+            const fp_t one_m_edt = -std::expm1(-tau_mu);
             result.tau += tau_mu;
             if constexpr (compute_alo) {
                 result.I_ext = result.I * edt;
             }
             if constexpr (compute_loss) {
                 loss_I_f = result.I;
-                loss_S = source_fn;
+                loss_eta = emis_opac.eta;
+                loss_chi = emis_opac.chi;
                 loss_tau = tau_mu;
             }
             result.I = result.I * edt + source_fn * one_m_edt;
@@ -722,7 +723,7 @@ YAKL_INLINE RadianceInterval<Alo, Loss> multi_level_dda_raymarch_2d(
         result.one_minus_alo = edt;
     }
     if constexpr (compute_loss) {
-        result.loss = chi_s * chord_mean_transmission(loss_tau) * (loss_S - loss_I_f);
+        result.loss = chord_mean_transmission(loss_tau) * (loss_eta - loss_chi * loss_I_f);
     }
     return result;
 }
