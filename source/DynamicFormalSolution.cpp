@@ -252,6 +252,9 @@ void dynamic_formal_sol_rc(
         } else {
             cascade_i_25d<RcModeNoBc>(state, casc_state, 0, subset, mip_chain);
         }
+        if (lambda_iterate) {
+            set_lambda_iteration_alo(casc_state);
+        }
         if (opts.compute_gamma && casc_state.I_ext.initialized()) {
             // NOTE(cmo): Add terms to Gamma
             dynamic_compute_gamma(

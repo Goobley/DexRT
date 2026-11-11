@@ -795,6 +795,9 @@ void dynamic_formal_sol_rc_3d_subset(
             subset_idx,
             0
         );
+        if (lambda_iterate) {
+            set_lambda_iteration_alo(casc_state);
+        }
     }
 }
 

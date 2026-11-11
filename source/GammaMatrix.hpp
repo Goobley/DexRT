@@ -53,6 +53,28 @@ inline void zero_precon_R(const PreconRMat& precon_R) {
     yakl::fence();
 }
 
+/// For a lambda iteration (psi* = 0), C0 is marched without the ALO, so set
+/// I_ext to the full C0 intensity and one_minus_alo = 1 (i.e. ALO = 0) for the
+/// Gamma accumulation. Otherwise these are left zeroed, giving I = S locally.
+template <typename CascadeState>
+inline void set_lambda_iteration_alo(const CascadeState& casc_state) {
+    if (!casc_state.I_ext.initialized()) {
+        return;
+    }
+    const auto& I_c0 = casc_state.i_cascades[cascade_indices(casc_state, 0).i];
+    const auto& I_ext = casc_state.I_ext;
+    const auto& one_minus_alo = casc_state.one_minus_alo;
+    dex_parallel_for(
+        "Lambda iteration ALO",
+        FlatLoop<1>(I_ext.extent(0)),
+        YAKL_LAMBDA (i64 i) {
+            I_ext(i) = I_c0(i);
+            one_minus_alo(i) = FP(1.0);
+        }
+    );
+    yakl::fence();
+}
+
 struct GammaAccumState {
     fp_t eta;
     fp_t chi;

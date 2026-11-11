@@ -5,8 +5,13 @@
 #include "Types.hpp"
 #include "State.hpp"
 
+struct ConserveEnergyOptions {
+    /// Under-relaxation of the temperature correction, in (0, 1].
+    fp_t relaxation = FP(0.5);
+};
+
 template <typename State>
-inline fp_t simple_conserve_energy(State* state) {
+inline fp_t simple_conserve_energy(State* state, const ConserveEnergyOptions& opts = ConserveEnergyOptions()) {
     fp_t max_change;
     if (!state->atmos.e_int.initialized()) {
         throw std::runtime_error("Calling conserve_energy without providing e_int at launch!");
@@ -28,6 +33,7 @@ inline fp_t simple_conserve_energy(State* state) {
         constexpr fp_t damping = FP(2.0);
         constexpr fp_t damping_T_ref = FP(1e4);
         constexpr fp_t max_frac_change = FP(0.2);
+        const fp_t relaxation = opts.relaxation;
 
         auto flatmos = flatten<fp_t>(state->atmos);
         Fp1d rel_change("temperature_rel_change", flatmos.nh_tot.extent(0));
@@ -57,7 +63,7 @@ inline fp_t simple_conserve_energy(State* state) {
                 const fp_t de_ion_dT = (
                     damping * e_ion / temperature * std::sqrt(damping_T_ref / temperature)
                 );
-                fp_t delta_temp = e_th_error / (de_th_dT + de_ion_dT);
+                fp_t delta_temp = relaxation * e_th_error / (de_th_dT + de_ion_dT);
 
                 i32 was_limited = 0;
                 if (max_frac_change > FP(0.0)) {

@@ -47,8 +47,11 @@ typedef f64 StatEqPrecision;
 // Set the precision used in the accumulation of the Gamma matrix (the
 // per-transition precon_R; Gamma itself is assembled in StatEqPrecision).
 // Single precision is usually fine.
+#if defined(DEXRT_GAMMA_F64)
+typedef f64 GammaFp;
+#else
 typedef fp_t GammaFp;
-// typedef f64 GammaFp;
+#endif
 
 // Set the precision used in the accumulation of the radiative losses
 typedef fp_t RadLossFp;
