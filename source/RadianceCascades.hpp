@@ -20,6 +20,7 @@ struct RaymarchParams {
     const MultiResBlockMap<BLOCK_SIZE, ENTRY_SIZE>& mr_block_map;
     const MultiResMipChain& mip_chain;
     const DynamicState& dyn_state;
+    Fp1d trac_scale = Fp1d(); //  Path-length scale in coupled MHD mode for MIP 0 samples
 };
 
 template <
@@ -56,7 +57,8 @@ YAKL_INLINE RadianceInterval<Alo, Loss> march_and_merge_average_interval(
                 .mr_block_map = params.mr_block_map,
                 .mip_chain = params.mip_chain,
                 .dyn_state = params.dyn_state,
-                .I_start = I_start
+                .I_start = I_start,
+                .trac_scale = params.trac_scale
             }
         );
     };
@@ -179,7 +181,8 @@ YAKL_INLINE RadianceInterval<Alo, Loss> march_and_merge_bilinear_fix(
                     .mr_block_map = params.mr_block_map,
                     .mip_chain = params.mip_chain,
                     .dyn_state = params.dyn_state,
-                    .I_start = upper_interp.I
+                    .I_start = upper_interp.I,
+                    .trac_scale = params.trac_scale
                 }
             );
             if constexpr (STORE_TAU_CASCADES) {
@@ -203,7 +206,8 @@ YAKL_INLINE RadianceInterval<Alo, Loss> march_and_merge_bilinear_fix(
                 .block_map = params.block_map,
                 .mr_block_map = params.mr_block_map,
                 .mip_chain = params.mip_chain,
-                .dyn_state = params.dyn_state
+                .dyn_state = params.dyn_state,
+                .trac_scale = params.trac_scale
             }
         );
     }
@@ -353,7 +357,8 @@ YAKL_INLINE RadianceInterval<Alo, Loss> march_and_merge_parallax_fix(
             .mr_block_map = params.mr_block_map,
             .mip_chain = params.mip_chain,
             .dyn_state = params.dyn_state,
-            .I_start = interp.I
+            .I_start = interp.I,
+            .trac_scale = params.trac_scale
         }
     );
     if constexpr (STORE_TAU_CASCADES) {
@@ -391,7 +396,8 @@ YAKL_INLINE RadianceInterval<Alo, Loss> march_parallax_fix_inner(
             .block_map = params.block_map,
             .mr_block_map = params.mr_block_map,
             .mip_chain = params.mip_chain,
-            .dyn_state = params.dyn_state
+            .dyn_state = params.dyn_state,
+            .trac_scale = params.trac_scale
         }
     );
 
@@ -760,7 +766,8 @@ void cascade_i_25d(
                         .block_map = block_map,
                         .mr_block_map = mr_block_map,
                         .mip_chain = mip_chain,
-                        .dyn_state = dyn_state
+                        .dyn_state = dyn_state,
+                        .trac_scale = atmos.trac_scale
                     };
 
 

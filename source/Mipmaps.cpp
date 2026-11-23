@@ -157,6 +157,9 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
     constexpr i32 mip_block = 4;
     const fp_t vox_scale = state.atmos.voxel_scale;
     const i32 wave_batch = la_end - la_start;
+    // NOTE(cmo): TRAC path-length scaling is considered from MIP 1 so it affects the variance.
+    const Fp1d level0_scale = state.atmos.trac_scale;
+    const bool have_scale = level0_scale.initialized();
 
     // NOTE(cmo): mippable entries is used as an accumulator during each round
     // of mipping, and then divided by the number of sub blocks and placed into
@@ -277,6 +280,11 @@ void MultiResMipChain::compute_mips(const State& state, int la_start, int la_end
                     i64 idx = idxs[i];
                     fp_t eta_s = emis(idx, wave);
                     fp_t chi_s = opac(idx, wave);
+                    if (have_scale && level_m_1 == 0) {
+                        const fp_t sc = level0_scale(idx);
+                        eta_s *= sc;
+                        chi_s *= sc;
+                    }
                     emis_mip += eta_s;
                     opac_mip += chi_s;
 

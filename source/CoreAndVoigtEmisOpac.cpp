@@ -120,6 +120,9 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
     const i32 level_m_1 = level - 1;
     const i32 vox_size = (1 << level);
     auto bounds = block_map.loop_bounds(vox_size);
+    // NOTE(cmo): When computing MIPs by averaging (i.e. MIP 1 and above), roll in the trac_scale to each voxle..
+    const Fp1d level0_scale = state.atmos.trac_scale;
+    const bool scale_children = level0_scale.initialized() && level_m_1 == 0;
     dex_parallel_for(
         "Compute mip n (CoreAndVoigt)",
         FlatLoop<3>(bounds.dim(0), bounds.dim(1), wave_batch),
@@ -165,8 +168,9 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
 
             for (int i = 0; i < mip_block; ++i) {
                 i64 idx = idxs[i];
-                fp_t tot_emis = emis(idx, wave) + FP(1e-15);
-                fp_t tot_opac = opac(idx, wave) + FP(1e-15);
+                const fp_t trac_scale = scale_children ? level0_scale(idx) : FP(1.0);
+                fp_t tot_emis = emis(idx, wave) * trac_scale + FP(1e-15);
+                fp_t tot_opac = opac(idx, wave) * trac_scale + FP(1e-15);
                 const fp_t max_vel = std::sqrt(
                     square(vx(idx))
                     + square(vy(idx))
@@ -199,12 +203,12 @@ void CoreAndVoigtData::compute_mip_n(const State& state, const MipmapComputeStat
                         .vel = FP(0.0),
                         .phi = phi
                     });
-                    tot_emis += line.eta;
-                    tot_opac += line.chi;
+                    tot_emis += line.eta * trac_scale;
+                    tot_opac += line.chi * trac_scale;
 
                     if (wave == 0) {
-                        eta_star_mip(kri) += eta_star(idx, kri);
-                        chi_star_mip(kri) += chi_star(idx, kri);
+                        eta_star_mip(kri) += eta_star(idx, kri) * trac_scale;
+                        chi_star_mip(kri) += chi_star(idx, kri) * trac_scale;
                         a_damp_mip(kri) += a_damp(idx, kri);
                         inv_dop_width_mip(kri) += inv_dop_width(idx, kri);
                     }

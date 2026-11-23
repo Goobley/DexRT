@@ -162,7 +162,8 @@ inline void compute_line_sweep_samples(
                         .block_map = block_map,
                         .mr_block_map = mr_block_map,
                         .mip_chain = mip_chain,
-                        .dyn_state = dyn_state
+                        .dyn_state = dyn_state,
+                        .trac_scale = atmos.trac_scale
                     }
                 );
             };

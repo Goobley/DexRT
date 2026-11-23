@@ -481,6 +481,10 @@ struct SparseAtmosphere {
     Fp1d vy;
     Fp1d vz;
     Fp1d e_int;
+    /// Per-voxel path-length scaling factor from the coupled MHD's TRAC, s =
+    /// kappa_sp / kappa_eff. Used to scale the path length in cells that can't
+    /// be resolved by energy gain/loss/conduction terms. Only valid in 2D.
+    Fp1d trac_scale;
 };
 
 template <typename T=fp_t>

@@ -460,6 +460,8 @@ struct Raymarch2dArgs {
     const DynamicState& dyn_state;
     /// Initial intensity (far end), i.e. the interpolated upper cascade -- this can avoid a merge call
     fp_t I_start = FP(0.0);
+    /// Per-voxel path-length factor from TRAC to multiply MIP 0 terms by. Already folded into higher MIPs.
+    Fp1d trac_scale = Fp1d();
 };
 
 /// Mean transmission exp(-chi s) over the full chord through a cell, given the
@@ -698,7 +700,14 @@ YAKL_INLINE RadianceInterval<Alo, Loss> multi_level_dda_raymarch_2d(
                 chi_s += (std::abs(chi_s) < FP(1e-15)) * FP(1e-15);
             }
 
-            fp_t tau = chi_s * s.dt * distance_scale;
+            // NOTE(cmo): On MIP 0 we use an explicit TRAC scale (the data
+            // stored in MIP 0 is unmodified). On higher MIPs it's folded in
+            // already.
+            fp_t path_scale = FP(1.0);
+            if (s.current_mip_level == 0 && args.trac_scale.initialized()) {
+                path_scale = args.trac_scale(ks);
+            }
+            fp_t tau = chi_s * s.dt * distance_scale * path_scale;
             fp_t source_fn = eta_s / chi_s;
 
             fp_t tau_mu = tau * inv_sin_theta;
@@ -711,8 +720,8 @@ YAKL_INLINE RadianceInterval<Alo, Loss> multi_level_dda_raymarch_2d(
             }
             if constexpr (compute_loss) {
                 loss_I_f = result.I;
-                loss_eta = emis_opac.eta;
-                loss_chi = emis_opac.chi;
+                loss_eta = emis_opac.eta * path_scale;
+                loss_chi = emis_opac.chi * path_scale;
                 loss_tau = tau_mu;
             }
             result.I = result.I * edt + source_fn * one_m_edt;
