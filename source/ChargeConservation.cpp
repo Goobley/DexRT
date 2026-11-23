@@ -405,7 +405,9 @@ fp_t nr_post_update(State* state, const NrPostUpdateOptions& args) {
     if (state->mpi_state.rank == 0) {
         max_rel_change = nr_post_update_impl<StatEqPrecision>(state, args);
     }
-    MPI_Bcast(&max_rel_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    if (args.broadcast_change) {
+        MPI_Bcast(&max_rel_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
+    }
     return max_rel_change;
 #else
     return nr_post_update_impl<StatEqPrecision>(state, args);

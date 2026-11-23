@@ -8,6 +8,8 @@
 struct ConserveEnergyOptions {
     /// Under-relaxation of the temperature correction, in (0, 1].
     fp_t relaxation = FP(0.5);
+    /// Broadcast the max change from rank 0 (non-distributed MPI) -- for frozen steps.
+    bool broadcast_change = true;
 };
 
 template <typename State>
@@ -126,7 +128,7 @@ inline fp_t simple_conserve_energy(State* state, const ConserveEnergyOptions& op
         yakl::timer_stop("e_int conservation");
 #ifdef HAVE_MPI
     }
-    if (!state->mpi_state.distributed) {
+    if (!state->mpi_state.distributed && opts.broadcast_change) {
         MPI_Bcast(&max_change, 1, get_FpMpi(), 0, state->mpi_state.comm);
     }
 #endif

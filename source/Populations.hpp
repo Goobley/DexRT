@@ -995,6 +995,8 @@ struct StatEqOptions {
     fp_t ignore_change_below_ntot_frac = FP(0.0);
     /// If only solving one atom, its index in adata. A negative number implies all atoms.
     int only_atom = -1;
+    /// Broadcast the max change from rank 0 (non-distributed MPI) -- for frozen steps.
+    bool broadcast_change = true;
 };
 
 template <typename State>

@@ -11,6 +11,8 @@ struct NrPostUpdateOptions {
     /// starting fraction lower than this
     fp_t ignore_change_below_ntot_frac = FP(0.0);
     bool conserve_pressure = false;
+    /// Broadcast the max change from rank 0 (non-distributed MPI) -- for frozen steps.
+    bool broadcast_change = true;
 };
 
 
